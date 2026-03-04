@@ -1,5 +1,6 @@
-"""SQLite persistence for Strava activities, conversation history, and memories."""
+"""SQLite persistence for Strava activities, conversation history, memories, and profile."""
 
+import json
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -44,7 +45,6 @@ CREATE TABLE IF NOT EXISTS memories (
 )
 """
 
-
 def _connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
@@ -87,8 +87,6 @@ def upsert_activity(activity: dict[str, Any]) -> None:
     # multiply by 2 for total (running cadence convention).
     raw_cadence = activity.get("average_cadence")
     avg_cadence = raw_cadence * 2 if raw_cadence is not None else None
-
-    import json
 
     with _connect() as conn:
         conn.execute(

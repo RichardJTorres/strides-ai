@@ -29,14 +29,16 @@ persist across sessions.\
 """
 
 
-def build_system(memories: list[dict]) -> str:
+def build_system(profile: str, memories: list[dict]) -> str:
     prompt = BASE_SYSTEM_PROMPT
+
+    if profile:
+        prompt += f"\n\n{profile}"
+
     if memories:
         lines = [f"  [{m['category']}] {m['content']}" for m in memories]
-        prompt += (
-            "\n\n## Athlete Profile (remembered from previous sessions)\n"
-            + "\n".join(lines)
-        )
+        prompt += "\n\n## Coaching Notes (remembered from previous sessions)\n" + "\n".join(lines)
+
     return prompt
 
 
@@ -107,7 +109,7 @@ def build_initial_history(activities, prior_messages: list[dict]) -> list[dict]:
     ]
 
 
-def chat(backend: BaseBackend) -> None:
+def chat(backend: BaseBackend, profile: dict) -> None:
     """Interactive coaching chat loop."""
     from rich.console import Console
     from rich.panel import Panel
@@ -116,7 +118,7 @@ def chat(backend: BaseBackend) -> None:
     console = Console()
 
     memories = get_all_memories()
-    system = build_system(memories)
+    system = build_system(profile, memories)
 
     prior_messages = get_recent_messages(RECALL_MESSAGES)
     mem_summary = f"{len(memories)} memor{'y' if len(memories) == 1 else 'ies'}" if memories else "no memories yet"
