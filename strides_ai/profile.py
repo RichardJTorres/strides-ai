@@ -104,7 +104,7 @@ def _strip_comments(s: str) -> str:
 
 def _get_bullet(section_text: str, field_name: str) -> str:
     """Extract the value from a '- **FieldName:** value' bullet line."""
-    pattern = rf'^\s*-\s+\*\*{re.escape(field_name)}:\*\*\s*(.*?)$'
+    pattern = rf'^\s*-\s+\*\*{re.escape(field_name)}:\*\*[ \t]*(.*?)$'
     m = re.search(pattern, section_text, re.MULTILINE | re.IGNORECASE)
     if not m:
         return ""
