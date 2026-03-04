@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from .. import db
 from ..coach import build_initial_history, build_system, RECALL_MESSAGES
-from ..profile import load_profile
+from ..profile import load_profile, parse_profile, serialize_profile
 
 
 app = FastAPI(title="Strides AI")
@@ -120,19 +120,20 @@ def memories():
 # ── Profile ───────────────────────────────────────────────────────────────────
 
 class ProfileBody(BaseModel):
-    content: str
+    fields: dict
 
 
 @app.get("/api/profile")
 def get_profile():
-    return {"content": load_profile()}
+    raw = load_profile()
+    return {"fields": parse_profile(raw) if raw else parse_profile("")}
 
 
 @app.put("/api/profile")
 def put_profile(body: ProfileBody):
     from ..profile import PROFILE_PATH
     PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    PROFILE_PATH.write_text(body.content, encoding="utf-8")
+    PROFILE_PATH.write_text(serialize_profile(body.fields), encoding="utf-8")
     return {"status": "ok"}
 
 
