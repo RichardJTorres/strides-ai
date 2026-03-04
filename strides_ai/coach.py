@@ -148,7 +148,11 @@ def chat(backend: BaseBackend, profile: dict) -> None:
             continue
 
         console.print("\n[bold magenta]Coach[/bold magenta]")
-        response_text, memories_saved = backend.stream_turn(system, user_input, console)
+
+        def on_token(chunk: str) -> None:
+            console.print(chunk, end="", markup=False)
+
+        response_text, memories_saved = backend.stream_turn(system, user_input, on_token)
         console.print()
 
         if memories_saved:

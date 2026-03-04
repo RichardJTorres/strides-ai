@@ -51,7 +51,7 @@ class ClaudeBackend(BaseBackend):
     def label(self) -> str:
         return self._model
 
-    def stream_turn(self, system, user_input, console):
+    def stream_turn(self, system, user_input, on_token):
         self._history.append({"role": "user", "content": user_input})
         response_text = ""
         memories_saved: list[tuple[str, str]] = []
@@ -65,7 +65,7 @@ class ClaudeBackend(BaseBackend):
                 tools=[SAVE_MEMORY_TOOL],
             ) as stream:
                 for chunk in stream.text_stream:
-                    console.print(chunk, end="", markup=False)
+                    on_token(chunk)
                     response_text += chunk
                 final = stream.get_final_message()
 

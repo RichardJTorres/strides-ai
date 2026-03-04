@@ -1,0 +1,263 @@
+import { useEffect, useMemo, useState } from "react";
+
+interface Activity {
+  id: number;
+  name: string;
+  date: string;
+  distance_m: number;
+  moving_time_s: number;
+  avg_pace_s_per_km: number | null;
+  avg_hr: number | null;
+  max_hr: number | null;
+  elevation_gain_m: number | null;
+  sport_type: string | null;
+}
+
+type SortKey = "date" | "name" | "distance_m" | "moving_time_s" | "avg_pace_s_per_km" | "avg_hr" | "elevation_gain_m";
+type SortDir = "asc" | "desc";
+
+function formatPace(s: number | null): string {
+  if (!s) return "—";
+  const mins = Math.floor(s / 60);
+  const secs = Math.floor(s % 60);
+  return `${mins}:${String(secs).padStart(2, "0")}/km`;
+}
+
+function formatDuration(s: number): string {
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h) return `${h}h${String(m).padStart(2, "0")}m`;
+  return `${m}m${String(sec).padStart(2, "0")}s`;
+}
+
+function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
+  return (
+    <span className={`ml-1 inline-block transition-opacity ${active ? "opacity-100" : "opacity-0 group-hover:opacity-40"}`}>
+      {active && dir === "desc" ? "↓" : "↑"}
+    </span>
+  );
+}
+
+export default function Activities() {
+  const [activities, setActivities] = useState<Activity[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState("");
+
+  // Sorting
+  const [sortKey, setSortKey] = useState<SortKey>("date");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+
+  // Filtering
+  const [search, setSearch] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [minDist, setMinDist] = useState("");
+
+  useEffect(() => {
+    fetch("/api/activities")
+      .then((r) => r.json())
+      .then(setActivities)
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function handleSync() {
+    setSyncing(true);
+    setSyncMsg("");
+    try {
+      const res = await fetch("/api/sync", { method: "POST" });
+      const data = await res.json();
+      setSyncMsg(
+        data.new_activities > 0
+          ? `${data.new_activities} new run(s) synced.`
+          : "Already up to date."
+      );
+      const rows = await fetch("/api/activities").then((r) => r.json());
+      setActivities(rows);
+    } catch {
+      setSyncMsg("Sync failed.");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  function handleSort(key: SortKey) {
+    if (key === sortKey) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir(key === "date" ? "desc" : "asc");
+    }
+  }
+
+  const filtered = useMemo(() => {
+    let rows = activities;
+
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      rows = rows.filter((a) => (a.name ?? "").toLowerCase().includes(q));
+    }
+    if (dateFrom) rows = rows.filter((a) => a.date >= dateFrom);
+    if (dateTo)   rows = rows.filter((a) => a.date <= dateTo);
+    if (minDist)  rows = rows.filter((a) => (a.distance_m ?? 0) / 1000 >= parseFloat(minDist));
+
+    return [...rows].sort((a, b) => {
+      const av = a[sortKey] ?? (sortKey === "name" ? "" : -Infinity);
+      const bv = b[sortKey] ?? (sortKey === "name" ? "" : -Infinity);
+      if (av < bv) return sortDir === "asc" ? -1 : 1;
+      if (av > bv) return sortDir === "asc" ? 1 : -1;
+      return 0;
+    });
+  }, [activities, search, dateFrom, dateTo, minDist, sortKey, sortDir]);
+
+  function Th({
+    label,
+    col,
+    right = false,
+  }: {
+    label: string;
+    col: SortKey;
+    right?: boolean;
+  }) {
+    return (
+      <th
+        onClick={() => handleSort(col)}
+        className={`group px-4 py-2 font-medium cursor-pointer select-none whitespace-nowrap hover:text-gray-200 transition-colors ${right ? "text-right" : ""}`}
+      >
+        {label}
+        <SortIcon active={sortKey === col} dir={sortDir} />
+      </th>
+    );
+  }
+
+  const filtersActive = search || dateFrom || dateTo || minDist;
+
+  return (
+    <div className="flex flex-col h-full p-6 gap-3">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-gray-100">
+          Activities{" "}
+          <span className="text-sm font-normal text-gray-400">
+            ({filtered.length}{filtersActive ? ` of ${activities.length}` : ""})
+          </span>
+        </h2>
+        <div className="flex items-center gap-3">
+          {syncMsg && <span className="text-sm text-green-400">{syncMsg}</span>}
+          <button
+            onClick={handleSync}
+            disabled={syncing}
+            className="px-3 py-1.5 rounded-md bg-green-600 hover:bg-green-500 text-white text-sm disabled:opacity-50 transition-colors"
+          >
+            {syncing ? "Syncing…" : "Sync Strava"}
+          </button>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-wrap gap-2 items-center">
+        <input
+          type="text"
+          placeholder="Search by name…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="rounded-md bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-green-500 w-48"
+        />
+        <input
+          type="date"
+          value={dateFrom}
+          onChange={(e) => setDateFrom(e.target.value)}
+          title="From date"
+          className="rounded-md bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-green-500"
+        />
+        <span className="text-gray-600 text-sm">–</span>
+        <input
+          type="date"
+          value={dateTo}
+          onChange={(e) => setDateTo(e.target.value)}
+          title="To date"
+          className="rounded-md bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-green-500"
+        />
+        <input
+          type="number"
+          placeholder="Min km"
+          value={minDist}
+          onChange={(e) => setMinDist(e.target.value)}
+          min="0"
+          step="1"
+          className="rounded-md bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-green-500 w-24"
+        />
+        {filtersActive && (
+          <button
+            onClick={() => { setSearch(""); setDateFrom(""); setDateTo(""); setMinDist(""); }}
+            className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+
+      {/* Table */}
+      {loading ? (
+        <p className="text-gray-500 text-sm">Loading…</p>
+      ) : (
+        <div className="overflow-auto flex-1 rounded-lg border border-gray-800">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-900 text-gray-400 text-left sticky top-0">
+                <Th label="Date"     col="date" />
+                <Th label="Name"     col="name" />
+                <Th label="Dist (km)" col="distance_m"       right />
+                <Th label="Time"     col="moving_time_s"     right />
+                <Th label="Pace"     col="avg_pace_s_per_km" right />
+                <Th label="Avg HR"   col="avg_hr"            right />
+                <Th label="Elev (m)" col="elevation_gain_m"  right />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-800">
+              {filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
+                    No activities match your filters.
+                  </td>
+                </tr>
+              ) : (
+                filtered.map((a) => (
+                  <tr key={a.id} className="hover:bg-gray-800/50 transition-colors">
+                    <td className="px-4 py-2 text-gray-400 whitespace-nowrap">{a.date}</td>
+                    <td className="px-4 py-2">
+                      <a
+                        href={`https://www.strava.com/activities/${a.id}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-gray-100 hover:text-orange-400 transition-colors"
+                      >
+                        {a.name || "—"}
+                      </a>
+                    </td>
+                    <td className="px-4 py-2 text-right text-gray-100">
+                      {((a.distance_m || 0) / 1000).toFixed(2)}
+                    </td>
+                    <td className="px-4 py-2 text-right text-gray-400">
+                      {formatDuration(a.moving_time_s)}
+                    </td>
+                    <td className="px-4 py-2 text-right text-gray-400">
+                      {formatPace(a.avg_pace_s_per_km)}
+                    </td>
+                    <td className="px-4 py-2 text-right text-gray-400">
+                      {a.avg_hr ?? "—"}
+                    </td>
+                    <td className="px-4 py-2 text-right text-gray-400">
+                      {a.elevation_gain_m != null ? Math.round(a.elevation_gain_m) : "—"}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}

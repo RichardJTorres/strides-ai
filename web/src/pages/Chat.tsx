@@ -1,0 +1,161 @@
+import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+
+interface Message {
+  role: "user" | "assistant";
+  content: string;
+}
+
+interface Memory {
+  category: string;
+  content: string;
+}
+
+export default function Chat() {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState("");
+  const [streaming, setStreaming] = useState(false);
+  const [savedMemories, setSavedMemories] = useState<Memory[]>([]);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  async function send() {
+    const text = input.trim();
+    if (!text || streaming) return;
+
+    setInput("");
+    setSavedMemories([]);
+    setMessages((prev) => [...prev, { role: "user", content: text }]);
+    setStreaming(true);
+
+    const assistantIndex = messages.length + 1;
+    setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text }),
+      });
+
+      if (!res.ok || !res.body) throw new Error("Request failed");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const payload = line.slice(6);
+          if (payload === "[DONE]") break;
+
+          if (payload.startsWith("\n\n[MEMORIES]")) {
+            try {
+              const mems: Memory[] = JSON.parse(payload.slice(12));
+              setSavedMemories(mems);
+            } catch {
+              // ignore parse errors
+            }
+            continue;
+          }
+
+          setMessages((prev) =>
+            prev.map((m, i) =>
+              i === assistantIndex ? { ...m, content: m.content + payload } : m
+            )
+          );
+        }
+      }
+    } catch (err) {
+      setMessages((prev) =>
+        prev.map((m, i) =>
+          i === assistantIndex
+            ? { ...m, content: "_Error: could not reach the server._" }
+            : m
+        )
+      );
+    } finally {
+      setStreaming(false);
+    }
+  }
+
+  function onKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  }
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Message list */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {messages.length === 0 && (
+          <div className="text-center text-gray-500 mt-20 text-sm">
+            Ask your coach anything about your training.
+          </div>
+        )}
+        {messages.map((m, i) => (
+          <div
+            key={i}
+            className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+          >
+            <div
+              className={`max-w-2xl rounded-xl px-4 py-3 text-sm leading-relaxed ${
+                m.role === "user"
+                  ? "bg-green-600 text-white"
+                  : "bg-gray-800 text-gray-100"
+              }`}
+            >
+              {m.role === "assistant" ? (
+                <ReactMarkdown>{m.content || "…"}</ReactMarkdown>
+              ) : (
+                m.content
+              )}
+            </div>
+          </div>
+        ))}
+        {savedMemories.length > 0 && (
+          <div className="text-xs text-gray-500 italic text-center">
+            Remembered:{" "}
+            {savedMemories.map((m) => `[${m.category}] ${m.content}`).join(" · ")}
+          </div>
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Input */}
+      <div className="border-t border-gray-800 p-4">
+        <div className="flex gap-2 max-w-3xl mx-auto">
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Ask your coach…"
+            rows={1}
+            disabled={streaming}
+            className="flex-1 resize-none rounded-lg bg-gray-800 border border-gray-700 px-4 py-2.5 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-green-500 disabled:opacity-50"
+          />
+          <button
+            onClick={send}
+            disabled={streaming || !input.trim()}
+            className="px-4 py-2 rounded-lg bg-green-600 hover:bg-green-500 text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {streaming ? "…" : "Send"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
