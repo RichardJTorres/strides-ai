@@ -56,7 +56,7 @@ class OllamaBackend(BaseBackend):
     def label(self) -> str:
         return f"ollama:{self._model}"
 
-    def stream_turn(self, system, user_input, console):
+    def stream_turn(self, system, user_input, on_token):
         self._history.append({"role": "user", "content": user_input})
         response_text = ""
         memories_saved: list[tuple[str, str]] = []
@@ -88,7 +88,7 @@ class OllamaBackend(BaseBackend):
 
                         text = msg.get("content", "")
                         if text:
-                            console.print(text, end="", markup=False)
+                            on_token(text)
                             full_content += text
                             response_text += text
 
