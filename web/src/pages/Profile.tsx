@@ -110,16 +110,29 @@ export default function Profile() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [unparseable, setUnparseable] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
 
-  useEffect(() => {
+  function loadProfile() {
+    setLoading(true);
     fetch("/api/profile")
       .then((r) => r.json())
       .then((data) => {
-        const merged = deepMerge(EMPTY, data.fields ?? {});
-        setFields(merged);
-        setOriginal(merged);
+        if (!data.parseable) {
+          setUnparseable(true);
+        } else {
+          setUnparseable(false);
+          const merged = deepMerge(EMPTY, data.fields ?? {});
+          setFields(merged);
+          setOriginal(merged);
+        }
       })
       .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    loadProfile();
   }, []);
 
   async function handleSave() {
@@ -157,6 +170,20 @@ export default function Profile() {
     }));
   }
 
+  async function handleReset() {
+    setResetting(true);
+    try {
+      const data = await fetch("/api/profile/reset", { method: "POST" }).then((r) => r.json());
+      const merged = deepMerge(EMPTY, data.fields ?? {});
+      setFields(merged);
+      setOriginal(merged);
+      setUnparseable(false);
+      setConfirmReset(false);
+    } finally {
+      setResetting(false);
+    }
+  }
+
   const dirty = JSON.stringify(fields) !== JSON.stringify(original);
 
   return (
@@ -169,22 +196,69 @@ export default function Profile() {
             Loaded fresh every session — tell your coach who you are.
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          {saved && <span className="text-sm text-green-400">Saved!</span>}
-          <button
-            onClick={handleSave}
-            disabled={saving || !dirty}
-            className="px-4 py-1.5 rounded-md bg-green-600 hover:bg-green-500 text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {saving ? "Saving…" : "Save"}
-          </button>
-        </div>
+        {!unparseable && (
+          <div className="flex items-center gap-3">
+            {saved && <span className="text-sm text-green-400">Saved!</span>}
+            <button
+              onClick={handleSave}
+              disabled={saving || !dirty}
+              className="px-4 py-1.5 rounded-md bg-green-600 hover:bg-green-500 text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Form */}
       {loading ? (
         <div className="flex-1 flex items-center justify-center text-gray-500 text-sm">
           Loading…
+        </div>
+      ) : unparseable ? (
+        <div className="flex-1 flex items-center justify-center p-8">
+          <div className="max-w-md w-full rounded-lg border border-amber-800/60 bg-amber-950/30 p-6 text-center space-y-4">
+            <p className="text-2xl">⚠️</p>
+            <h3 className="text-base font-semibold text-amber-300">
+              Profile file cannot be edited in the UI
+            </h3>
+            <p className="text-sm text-gray-400 leading-relaxed">
+              The profile file at{" "}
+              <code className="text-amber-400 text-xs bg-gray-900 px-1.5 py-0.5 rounded">
+                ~/.strides_ai/profile.md
+              </code>{" "}
+              has been modified in a way the UI can't parse. It will still be sent to
+              your coach as-is.
+            </p>
+            <p className="text-sm text-gray-400 leading-relaxed">
+              To use the structured editor, regenerate the file from the default template.{" "}
+              <span className="text-red-400 font-medium">This will erase your current profile.</span>
+            </p>
+            {confirmReset ? (
+              <div className="flex gap-3 justify-center pt-1">
+                <button
+                  onClick={() => setConfirmReset(false)}
+                  className="px-4 py-2 rounded-md border border-gray-700 text-gray-300 text-sm hover:bg-gray-800 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleReset}
+                  disabled={resetting}
+                  className="px-4 py-2 rounded-md bg-red-700 hover:bg-red-600 text-white text-sm font-medium disabled:opacity-50 transition-colors"
+                >
+                  {resetting ? "Resetting…" : "Yes, reset to template"}
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmReset(true)}
+                className="px-4 py-2 rounded-md border border-amber-700 text-amber-300 text-sm hover:bg-amber-900/40 transition-colors"
+              >
+                Reset to template
+              </button>
+            )}
+          </div>
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto p-6 space-y-4">

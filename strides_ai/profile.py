@@ -121,6 +121,24 @@ def _get_pb(pbs_text: str, label: str) -> str:
     return ""
 
 
+_REQUIRED_SECTIONS = [
+    "Personal",
+    "Running Background",
+    "Personal Bests",
+    "Goals",
+    "Injuries & Health",
+    "Other Notes",
+]
+
+
+def is_parseable(text: str) -> bool:
+    """Return True only if all expected section headers are present."""
+    return all(
+        re.search(rf'##\s+{re.escape(s)}', text, re.IGNORECASE)
+        for s in _REQUIRED_SECTIONS
+    )
+
+
 def parse_profile(text: str) -> dict:
     """Parse profile Markdown into a structured fields dict."""
     personal = _get_section(text, "Personal")
