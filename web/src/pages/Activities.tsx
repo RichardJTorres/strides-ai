@@ -106,7 +106,16 @@ export default function Activities() {
                   className="hover:bg-gray-800/50 transition-colors"
                 >
                   <td className="px-4 py-2 text-gray-400">{a.date}</td>
-                  <td className="px-4 py-2 text-gray-100">{a.name || "—"}</td>
+                  <td className="px-4 py-2">
+                    <a
+                      href={`https://www.strava.com/activities/${a.id}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-gray-100 hover:text-orange-400 transition-colors"
+                    >
+                      {a.name || "—"}
+                    </a>
+                  </td>
                   <td className="px-4 py-2 text-right text-gray-100">
                     {((a.distance_m || 0) / 1000).toFixed(2)}
                   </td>
