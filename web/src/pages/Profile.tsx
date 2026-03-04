@@ -114,20 +114,22 @@ export default function Profile() {
   const [resetting, setResetting] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
 
+  async function applyProfileResponse(data: { parseable: boolean; fields: unknown }) {
+    if (!data.parseable) {
+      setUnparseable(true);
+    } else {
+      setUnparseable(false);
+      const merged = deepMerge(EMPTY, (data.fields ?? {}) as Partial<ProfileFields>);
+      setFields(merged);
+      setOriginal(merged);
+    }
+  }
+
   function loadProfile() {
     setLoading(true);
     fetch("/api/profile")
       .then((r) => r.json())
-      .then((data) => {
-        if (!data.parseable) {
-          setUnparseable(true);
-        } else {
-          setUnparseable(false);
-          const merged = deepMerge(EMPTY, data.fields ?? {});
-          setFields(merged);
-          setOriginal(merged);
-        }
-      })
+      .then(applyProfileResponse)
       .finally(() => setLoading(false));
   }
 
@@ -173,11 +175,10 @@ export default function Profile() {
   async function handleReset() {
     setResetting(true);
     try {
-      const data = await fetch("/api/profile/reset", { method: "POST" }).then((r) => r.json());
-      const merged = deepMerge(EMPTY, data.fields ?? {});
-      setFields(merged);
-      setOriginal(merged);
-      setUnparseable(false);
+      await fetch("/api/profile/reset", { method: "POST" });
+      // Re-fetch from GET so parseability is checked by the same path as initial load.
+      const data = await fetch("/api/profile").then((r) => r.json());
+      await applyProfileResponse(data);
       setConfirmReset(false);
     } finally {
       setResetting(false);
