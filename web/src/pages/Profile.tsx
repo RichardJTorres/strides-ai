@@ -21,6 +21,7 @@ interface ProfileFields {
   };
   goals: string;
   injuries_and_health: string;
+  gear: string;
   other_notes: string;
 }
 
@@ -30,6 +31,7 @@ const EMPTY: ProfileFields = {
   personal_bests: { "5k": "", "10k": "", half_marathon: "", marathon: "" },
   goals: "",
   injuries_and_health: "",
+  gear: "",
   other_notes: "",
 };
 
@@ -374,6 +376,17 @@ export default function Profile() {
                 setFields((f) => ({ ...f, injuries_and_health: v }))
               }
               placeholder="e.g. Left IT band niggle when mileage exceeds 60 km/week…"
+              rows={3}
+            />
+          </Section>
+
+          {/* Gear */}
+          <Section title="Gear">
+            <TextArea
+              label="Shoes, hydration vest, poles, watch, other kit"
+              value={fields.gear}
+              onChange={(v) => setFields((f) => ({ ...f, gear: v }))}
+              placeholder="e.g. Nike Vaporfly 5% (~400 km), Salomon vest, Garmin Forerunner 955…"
               rows={3}
             />
           </Section>

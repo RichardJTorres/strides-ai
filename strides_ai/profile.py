@@ -60,6 +60,13 @@ the more personalised your coaching will be.
 
 ---
 
+## Gear
+
+<!-- Shoes (model + km on them), hydration vest, poles, GPS watch,
+     anything else your coach should know about your kit -->
+
+---
+
 ## Other Notes
 
 <!-- Preferred training times, coaching style preferences, recent life
@@ -127,6 +134,7 @@ _REQUIRED_SECTIONS = [
     "Personal Bests",
     "Goals",
     "Injuries & Health",
+    "Gear",
     "Other Notes",
 ]
 
@@ -166,6 +174,7 @@ def parse_profile(text: str) -> dict:
         },
         "goals": _strip_comments(_get_section(text, "Goals")),
         "injuries_and_health": _strip_comments(_get_section(text, "Injuries & Health")),
+        "gear": _strip_comments(_get_section(text, "Gear")),
         "other_notes": _strip_comments(_get_section(text, "Other Notes")),
     }
 
@@ -210,6 +219,9 @@ def serialize_profile(fields: dict) -> str:
         "---\n\n"
         "## Injuries & Health\n\n"
         f"{v(fields.get('injuries_and_health'))}\n\n"
+        "---\n\n"
+        "## Gear\n\n"
+        f"{v(fields.get('gear'))}\n\n"
         "---\n\n"
         "## Other Notes\n\n"
         f"{v(fields.get('other_notes'))}\n"
