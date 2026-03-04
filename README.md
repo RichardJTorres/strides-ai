@@ -6,6 +6,7 @@ A local AI running coach that connects to your Strava account and lets you have 
 
 - **Strava sync** — authenticates via OAuth2 and pulls your full run history into a local SQLite database. Incremental sync on every startup keeps it current.
 - **Terminal chat** — ask your coach anything about your training: pacing, volume trends, race prep, recovery, injury prevention. Your complete activity log is included as context on every message.
+- **Athlete profile** — a plain Markdown file you edit freely to tell your coach who you are: background, PBs, goals, injuries, anything relevant. Loaded fresh every session.
 - **Persistent memory** — the coach proactively saves key facts (goals, injuries, preferences, upcoming races) and recalls them at the start of every session.
 - **Conversation history** — the last 40 messages from previous sessions are reloaded so coaching advice stays consistent across conversations.
 - **Swappable backends** — run Claude in the cloud or a local model via Ollama, configured with a single env var.
@@ -50,7 +51,34 @@ ANTHROPIC_API_KEY=sk-ant-...
 strides-ai
 ```
 
-On first run, a browser window opens to Strava's authorization page. After you approve, the token is saved locally and all subsequent runs skip this step.
+On first run:
+1. A browser window opens to Strava's authorization page — approve it and the token is saved locally for all future runs.
+2. Your athlete profile file is created at `~/.strides_ai/profile.md` and opened in your `$EDITOR`. Fill it in and save — see [Athlete Profile](#athlete-profile) below.
+
+---
+
+## Athlete Profile
+
+Your profile lives at `~/.strides_ai/profile.md`. It's plain Markdown — edit it in any text editor whenever your situation changes.
+
+```bash
+strides-ai --setup-profile   # open it in your $EDITOR directly
+```
+
+The file is read at the start of every session and sent verbatim to your coach as context. The more detail you fill in, the more tailored the coaching advice will be.
+
+The template includes sections for:
+
+| Section | What to fill in |
+|---|---|
+| Personal | Name, gender, date of birth, height, weight |
+| Running background | Years running, athletic history, typical weekly volume |
+| Personal bests | 5K, 10K, half marathon, marathon times |
+| Goals | Upcoming races, time targets, non-race goals |
+| Injuries & health | Current/recurring injuries, medical conditions |
+| Other notes | Training preferences, coaching style, anything else |
+
+There's no required format — write in whatever way feels natural. You can add or remove sections freely.
 
 ---
 
@@ -112,11 +140,13 @@ strides-ai/
     ├── auth.py        # Strava OAuth2 — token exchange, storage, auto-refresh
     ├── db.py          # SQLite — activities, conversation history, memories
     ├── sync.py        # Strava API pagination, incremental sync
+    ├── profile.py     # Profile file template, loader
     ├── coach.py       # Backend-agnostic chat loop
     └── cli.py         # Entry point: auth → sync → backend selection → chat
 ```
 
 **Data stored locally** in `~/.strides_ai/`:
+- `profile.md` — your athlete profile (edit freely)
 - `activities.db` — SQLite database (activities, conversation history, memories)
 - `token.json` — Strava OAuth token (auto-refreshed when expired)
 
