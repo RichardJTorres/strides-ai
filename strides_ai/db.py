@@ -65,7 +65,28 @@ CREATE TABLE IF NOT EXISTS profiles (
 )
 """
 
+CREATE_CALENDAR_PREFS = """
+CREATE TABLE IF NOT EXISTS calendar_prefs (
+    id            INTEGER PRIMARY KEY CHECK (id = 1),
+    rest_days     TEXT NOT NULL DEFAULT '[]',
+    long_run_days TEXT NOT NULL DEFAULT '[]',
+    frequency     INTEGER NOT NULL DEFAULT 4,
+    blocked_days  TEXT NOT NULL DEFAULT '[]',
+    races         TEXT NOT NULL DEFAULT '[]'
+)
+"""
 
+CREATE_TRAINING_PLAN = """
+CREATE TABLE IF NOT EXISTS training_plan (
+    date         TEXT PRIMARY KEY,
+    workout_type TEXT,
+    description  TEXT,
+    distance_km  REAL,
+    duration_min INTEGER,
+    intensity    TEXT,
+    generated_at TEXT NOT NULL DEFAULT (datetime('now'))
+)
+"""
 def _connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
@@ -88,6 +109,8 @@ def init_db() -> None:
         conn.execute(CREATE_MEMORIES)
         conn.execute(CREATE_SETTINGS)
         conn.execute(CREATE_PROFILES)
+        conn.execute(CREATE_CALENDAR_PREFS)
+        conn.execute(CREATE_TRAINING_PLAN)
         _migrate_conversations(conn)
 
 
@@ -313,3 +336,60 @@ def get_all_memories() -> list[dict]:
             "SELECT id, category, content, created_at FROM memories ORDER BY created_at"
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── Calendar ─────────────────────────────────────────────────────────────────
+
+def get_calendar_prefs() -> dict:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM calendar_prefs WHERE id = 1").fetchone()
+    if row is None:
+        return {"rest_days": [], "long_run_days": [], "frequency": 4, "blocked_days": [], "races": []}
+    return {
+        "rest_days": json.loads(row["rest_days"]),
+        "long_run_days": json.loads(row["long_run_days"]),
+        "frequency": row["frequency"],
+        "blocked_days": json.loads(row["blocked_days"]),
+        "races": json.loads(row["races"]),
+    }
+
+
+def save_calendar_prefs(rest_days: list, long_run_days: list, frequency: int, blocked_days: list, races: list) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO calendar_prefs (id, rest_days, long_run_days, frequency, blocked_days, races)
+            VALUES (1, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                rest_days = excluded.rest_days,
+                long_run_days = excluded.long_run_days,
+                frequency = excluded.frequency,
+                blocked_days = excluded.blocked_days,
+                races = excluded.races
+            """,
+            (json.dumps(rest_days), json.dumps(long_run_days), frequency, json.dumps(blocked_days), json.dumps(races)),
+        )
+
+
+def get_training_plan(start_date: str | None = None, end_date: str | None = None) -> list[dict]:
+    with _connect() as conn:
+        if start_date and end_date:
+            rows = conn.execute(
+                "SELECT * FROM training_plan WHERE date BETWEEN ? AND ? ORDER BY date",
+                (start_date, end_date),
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM training_plan ORDER BY date").fetchall()
+    return [dict(r) for r in rows]
+
+
+def save_training_plan(workouts: list[dict]) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM training_plan")
+        conn.executemany(
+            """
+            INSERT INTO training_plan (date, workout_type, description, distance_km, duration_min, intensity)
+            VALUES (:date, :workout_type, :description, :distance_km, :duration_min, :intensity)
+            """,
+            workouts,
+        )

@@ -298,6 +298,89 @@ def history_search(q: str, limit: int = 20, mode: str | None = None):
     return {"results": db.search_messages(q.strip(), limit, mode=mode)}
 
 
+# ── Calendar ──────────────────────────────────────────────────────────────────
+
+class CalendarPrefsBody(BaseModel):
+    rest_days: list[str] = []
+    long_run_days: list[str] = []
+    frequency: int = 4
+    blocked_days: list[str] = []
+    races: list[dict] = []
+
+
+class FeedbackBody(BaseModel):
+    feedback: str
+
+
+@app.get("/api/calendar/prefs")
+def get_calendar_prefs():
+    return db.get_calendar_prefs()
+
+
+@app.put("/api/calendar/prefs")
+def put_calendar_prefs(body: CalendarPrefsBody):
+    db.save_calendar_prefs(
+        body.rest_days, body.long_run_days, body.frequency, body.blocked_days, body.races
+    )
+    return {"status": "ok"}
+
+
+@app.get("/api/calendar/plan")
+def get_calendar_plan():
+    return db.get_training_plan()
+
+
+@app.post("/api/calendar/generate")
+def generate_calendar(body: CalendarPrefsBody):
+    from ..schedule import generate_schedule
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not set")
+
+    # Save prefs first
+    db.save_calendar_prefs(
+        body.rest_days, body.long_run_days, body.frequency, body.blocked_days, body.races
+    )
+
+    profile_text = load_profile()
+    activities = [dict(a) for a in db.get_all_activities()]
+    # Last 8 weeks of activities
+    from datetime import date, timedelta
+    cutoff = (date.today() - timedelta(weeks=8)).isoformat()
+    recent = [a for a in activities if a.get("date", "") >= cutoff]
+
+    prefs = {
+        "rest_days": body.rest_days,
+        "long_run_days": body.long_run_days,
+        "frequency": body.frequency,
+        "blocked_days": body.blocked_days,
+        "races": body.races,
+    }
+
+    workouts = generate_schedule(prefs, profile_text, recent, api_key)
+    db.save_training_plan(workouts)
+    return workouts
+
+
+@app.post("/api/calendar/feedback")
+def revise_calendar(body: FeedbackBody):
+    from ..schedule import revise_schedule
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not set")
+
+    current_plan = db.get_training_plan()
+    if not current_plan:
+        raise HTTPException(status_code=400, detail="No plan to revise — generate one first")
+
+    prefs = db.get_calendar_prefs()
+    profile_text = load_profile()
+
+    workouts = revise_schedule(current_plan, body.feedback, prefs, profile_text, api_key)
+    db.save_training_plan(workouts)
+    return workouts
+
+
 # ── Status ────────────────────────────────────────────────────────────────────
 
 @app.get("/api/status")

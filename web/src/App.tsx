@@ -2,10 +2,11 @@ import { useEffect, useState } from "react";
 import Chat from "./pages/Chat";
 import Activities from "./pages/Activities";
 import Charts from "./pages/Charts";
+import Calendar from "./pages/Calendar";
 import Profile from "./pages/Profile";
 import Settings from "./pages/Settings";
 
-type Tab = "chat" | "activities" | "charts" | "profile" | "settings";
+type Tab = "chat" | "activities" | "charts" | "calendar" | "profile" | "settings";
 export type Mode = "running" | "cycling" | "hybrid";
 
 export interface ThemeConfig {
@@ -65,6 +66,14 @@ const ICONS: Record<Tab, JSX.Element> = {
       <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
     </svg>
   ),
+  calendar: (
+    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+      <line x1="16" y1="2" x2="16" y2="6"/>
+      <line x1="8" y1="2" x2="8" y2="6"/>
+      <line x1="3" y1="10" x2="21" y2="10"/>
+    </svg>
+  ),
   profile: (
     <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
@@ -83,6 +92,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "chat", label: "Coach" },
   { id: "activities", label: "Activities" },
   { id: "charts", label: "Charts" },
+  { id: "calendar", label: "Calendar" },
   { id: "profile", label: "Profile" },
 ];
 
@@ -185,6 +195,7 @@ export default function App() {
         {tab === "chat" && <Chat mode={mode} theme={theme} supportsAttachments={supportsAttachments} />}
         {tab === "activities" && <Activities mode={mode} theme={theme} />}
         {tab === "charts" && <Charts mode={mode} theme={theme} />}
+        {tab === "calendar" && <Calendar />}
         {tab === "profile" && <Profile mode={mode} theme={theme} />}
         {tab === "settings" && <Settings mode={mode} setMode={setMode} theme={theme} />}
       </main>
