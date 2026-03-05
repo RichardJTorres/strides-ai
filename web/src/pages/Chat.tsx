@@ -57,12 +57,12 @@ export default function Chat() {
 
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
-          const payload = line.slice(6);
+          const payload = line.slice(6).replace(/\\n/g, "\n");
           if (payload === "[DONE]") break;
 
-          if (payload.startsWith("\n\n[MEMORIES]")) {
+          if (payload.startsWith("[MEMORIES]")) {
             try {
-              const mems: Memory[] = JSON.parse(payload.slice(12));
+              const mems: Memory[] = JSON.parse(payload.slice(10));
               setSavedMemories(mems);
             } catch {
               // ignore parse errors
