@@ -5,7 +5,7 @@ A local AI running coach that connects to your Strava account and lets you have 
 ## What it does
 
 - **Strava sync** — authenticates via OAuth2 and pulls your full run history into a local SQLite database. Incremental sync on every startup keeps it current.
-- **Web UI** — a browser-based interface with a chat page, activity table, and an athlete profile editor.
+- **Web UI** — a browser-based interface with a sidebar nav (icons included) for chat, activities, training charts, profile editing, and settings.
 - **Terminal chat** — a CLI alternative for coaching conversations directly in the terminal.
 - **Athlete profile** — fill in your background, PBs, goals, injuries, and gear via the web UI or by editing `~/.strides_ai/profile.md` directly. Loaded fresh every session.
 - **Persistent memory** — the coach proactively saves key facts (goals, injuries, preferences, upcoming races) and recalls them at the start of every session.
@@ -62,12 +62,13 @@ On first run, a browser window opens to Strava's authorization page — approve 
 
 | Tab | What it does |
 |---|---|
-| Coach | Streaming chat with your AI running coach |
+| Coach | Streaming chat with your AI running coach; conversation persists across tab switches and page refreshes |
 | Activities | Your full Strava history — sortable, filterable, links to each activity on Strava |
-| Charts | Training visualisations (coming soon) |
+| Charts | Training visualisations: weekly mileage with 4-week rolling average, ATL/CTL fitness & fatigue curves, and aerobic efficiency scatter plot |
 | Profile | Structured editor for your athlete profile |
+| Settings | App settings (in progress) |
 
-The URL uses hash-based navigation (`#coach`, `#activities`, etc.), so refreshing the page keeps you on the same tab.
+The URL uses hash-based navigation (`#chat`, `#activities`, `#charts`, `#profile`, `#settings`), so refreshing the page keeps you on the same tab.
 
 To run only the backend: `make api`. To run only the frontend: `make web`.
 
@@ -151,6 +152,12 @@ strides_ai/
 ├── coach.py       # Backend-agnostic chat loop (CLI)
 └── cli.py         # CLI entry point: auth → sync → backend → chat
 web/               # React + TypeScript + Tailwind (Vite)
+│   ├── pages/
+│   │   ├── Chat.tsx       # Streaming chat UI with session-persisted history
+│   │   ├── Activities.tsx # Strava activity table
+│   │   ├── Charts.tsx     # Weekly mileage, ATL/CTL, aerobic efficiency
+│   │   ├── Profile.tsx    # Athlete profile editor
+│   │   └── Settings.tsx   # Settings page (scaffold)
 ```
 
 **Data stored locally** in `~/.strides_ai/`:
@@ -172,3 +179,4 @@ web/               # React + TypeScript + Tailwind (Vite)
 | Terminal UI | `rich` |
 | Config | `python-dotenv` |
 | Frontend | React 18, TypeScript, Tailwind CSS, Vite |
+| Charts | Recharts |
