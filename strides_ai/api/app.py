@@ -173,6 +173,13 @@ def sync():
     return {"new_activities": new_count}
 
 
+# ── History ───────────────────────────────────────────────────────────────────
+
+@app.get("/api/history")
+def history():
+    return db.get_recent_messages(RECALL_MESSAGES)
+
+
 # ── Status ────────────────────────────────────────────────────────────────────
 
 @app.get("/api/status")

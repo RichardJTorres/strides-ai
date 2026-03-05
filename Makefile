@@ -58,6 +58,11 @@ cli: _check_env $(VENV)/bin/strides-ai
 profile: $(VENV)/bin/strides-ai
 	$(VENV)/bin/strides-ai --setup-profile
 
+# ── Test ──────────────────────────────────────────────────────────────────────
+.PHONY: test
+test: $(VENV)/bin/activate
+	$(PY) -m pytest tests/ -v
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 .PHONY: _check_env
 _check_env:
