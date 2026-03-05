@@ -21,5 +21,8 @@ dependencies = [
 strides-ai = "strides_ai.cli:main"
 strides-ai-web = "strides_ai.api.server:main"
 
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-mock>=3.12"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["strides_ai"]
