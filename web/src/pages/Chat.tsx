@@ -11,12 +11,27 @@ interface Memory {
   content: string;
 }
 
+const SESSION_KEY = "chat_messages";
+
+function loadMessages(): Message[] {
+  try {
+    const stored = sessionStorage.getItem(SESSION_KEY);
+    return stored ? JSON.parse(stored) : [];
+  } catch {
+    return [];
+  }
+}
+
 export default function Chat() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>(loadMessages);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [savedMemories, setSavedMemories] = useState<Memory[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(messages));
+  }, [messages]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
