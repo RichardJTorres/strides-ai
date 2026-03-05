@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface Message {
   role: "user" | "assistant";
@@ -16,7 +17,24 @@ export default function Chat() {
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [savedMemories, setSavedMemories] = useState<Memory[]>([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    fetch("/api/history")
+      .then((r) => r.json())
+      .then((data: Message[]) => {
+        if (Array.isArray(data) && data.length > 0) setMessages(data);
+      })
+      .catch(() => {})
+      .finally(() => setHistoryLoaded(true));
+  }, []);
+
+  useEffect(() => {
+    if (historyLoaded) {
+      bottomRef.current?.scrollIntoView({ behavior: "instant" });
+    }
+  }, [historyLoaded]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -100,34 +118,27 @@ export default function Chat() {
   return (
     <div className="flex flex-col h-full">
       {/* Message list */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.length === 0 && (
-          <div className="text-center text-gray-500 mt-20 text-sm">
+      <div className="flex-1 overflow-y-auto">
+        {historyLoaded && messages.length === 0 && (
+          <div className="text-center text-gray-500 mt-24 text-base">
             Ask your coach anything about your training.
           </div>
         )}
         {messages.map((m, i) => (
-          <div
-            key={i}
-            className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
-          >
-            <div
-              className={`max-w-2xl rounded-xl px-4 py-3 text-sm leading-relaxed ${
-                m.role === "user"
-                  ? "bg-green-600 text-white"
-                  : "bg-gray-800 text-gray-100"
-              }`}
-            >
-              {m.role === "assistant" ? (
-                <ReactMarkdown>{m.content || "…"}</ReactMarkdown>
-              ) : (
-                m.content
-              )}
+          m.role === "user" ? (
+            <div key={i} className="flex justify-end px-16 py-3">
+              <div className="max-w-xl rounded-2xl px-5 py-3 text-[15px] leading-relaxed bg-green-700 text-white">
+                {m.content}
+              </div>
             </div>
-          </div>
+          ) : (
+            <div key={i} className="px-16 py-6 text-[15px] leading-relaxed text-gray-100 coach-message">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content || "…"}</ReactMarkdown>
+            </div>
+          )
         ))}
         {savedMemories.length > 0 && (
-          <div className="text-xs text-gray-500 italic text-center">
+          <div className="text-xs text-gray-500 italic text-center py-2">
             Remembered:{" "}
             {savedMemories.map((m) => `[${m.category}] ${m.content}`).join(" · ")}
           </div>
@@ -145,12 +156,12 @@ export default function Chat() {
             placeholder="Ask your coach…"
             rows={1}
             disabled={streaming}
-            className="flex-1 resize-none rounded-lg bg-gray-800 border border-gray-700 px-4 py-2.5 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-green-500 disabled:opacity-50"
+            className="flex-1 resize-none rounded-lg bg-gray-800 border border-gray-700 px-4 py-3 text-base text-gray-100 placeholder-gray-500 focus:outline-none focus:border-green-500 disabled:opacity-50"
           />
           <button
             onClick={send}
             disabled={streaming || !input.trim()}
-            className="px-4 py-2 rounded-lg bg-green-600 hover:bg-green-500 text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="px-5 py-3 rounded-lg bg-green-600 hover:bg-green-500 text-white text-base font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {streaming ? "…" : "Send"}
           </button>
