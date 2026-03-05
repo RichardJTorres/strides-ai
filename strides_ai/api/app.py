@@ -81,7 +81,7 @@ async def chat(req: ChatRequest) -> StreamingResponse:
             if memories_saved:
                 import json
                 token_queue.put(
-                    "\n\n[MEMORIES]"
+                    "[MEMORIES]"
                     + json.dumps([{"category": c, "content": t} for c, t in memories_saved])
                 )
             db.save_message("user", req.message)
@@ -96,7 +96,7 @@ async def chat(req: ChatRequest) -> StreamingResponse:
             chunk = token_queue.get()
             if chunk is None:
                 break
-            yield f"data: {chunk}\n\n"
+            yield f"data: {chunk.replace(chr(10), '\\n')}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -108,6 +108,16 @@ async def chat(req: ChatRequest) -> StreamingResponse:
 def activities():
     rows = db.get_all_activities()
     return [dict(r) for r in rows]
+
+
+# ── Charts ────────────────────────────────────────────────────────────────────
+
+@app.get("/api/charts")
+def charts(unit: str = "miles"):
+    if unit not in ("miles", "km"):
+        raise HTTPException(status_code=400, detail="unit must be 'miles' or 'km'")
+    from ..charts_data import get_chart_data
+    return get_chart_data(db.get_all_activities(), unit)
 
 
 # ── Memories ──────────────────────────────────────────────────────────────────

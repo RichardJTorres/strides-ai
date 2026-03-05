@@ -11,12 +11,27 @@ interface Memory {
   content: string;
 }
 
+const SESSION_KEY = "chat_messages";
+
+function loadMessages(): Message[] {
+  try {
+    const stored = sessionStorage.getItem(SESSION_KEY);
+    return stored ? JSON.parse(stored) : [];
+  } catch {
+    return [];
+  }
+}
+
 export default function Chat() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>(loadMessages);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [savedMemories, setSavedMemories] = useState<Memory[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(messages));
+  }, [messages]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -57,12 +72,12 @@ export default function Chat() {
 
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
-          const payload = line.slice(6);
+          const payload = line.slice(6).replace(/\\n/g, "\n");
           if (payload === "[DONE]") break;
 
-          if (payload.startsWith("\n\n[MEMORIES]")) {
+          if (payload.startsWith("[MEMORIES]")) {
             try {
-              const mems: Memory[] = JSON.parse(payload.slice(12));
+              const mems: Memory[] = JSON.parse(payload.slice(10));
               setSavedMemories(mems);
             } catch {
               // ignore parse errors
