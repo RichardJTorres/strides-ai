@@ -56,7 +56,13 @@ class OllamaBackend(BaseBackend):
     def label(self) -> str:
         return f"ollama:{self._model}"
 
-    def stream_turn(self, system, user_input, on_token):
+    @property
+    def supports_attachments(self) -> bool:
+        return False
+
+    def stream_turn(self, system, user_input, on_token, attachments=None):
+        if attachments:
+            raise NotImplementedError("Ollama backend does not support file attachments")
         self._history.append({"role": "user", "content": user_input})
         response_text = ""
         memories_saved: list[tuple[str, str]] = []

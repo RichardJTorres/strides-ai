@@ -51,8 +51,16 @@ class ClaudeBackend(BaseBackend):
     def label(self) -> str:
         return self._model
 
-    def stream_turn(self, system, user_input, on_token):
-        self._history.append({"role": "user", "content": user_input})
+    @property
+    def supports_attachments(self) -> bool:
+        return True
+
+    def stream_turn(self, system, user_input, on_token, attachments=None):
+        if attachments:
+            content = [*attachments, {"type": "text", "text": user_input}]
+        else:
+            content = user_input
+        self._history.append({"role": "user", "content": content})
         response_text = ""
         memories_saved: list[tuple[str, str]] = []
 

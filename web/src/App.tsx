@@ -97,6 +97,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>(tabFromHash);
   const [mode, setMode] = useState<Mode>("running");
   const [modeLoaded, setModeLoaded] = useState(false);
+  const [supportsAttachments, setSupportsAttachments] = useState(false);
 
   useEffect(() => {
     const onHashChange = () => setTab(tabFromHash());
@@ -113,6 +114,16 @@ export default function App() {
       })
       .catch(() => {})
       .finally(() => setModeLoaded(true));
+  }, []);
+
+  // Load backend capabilities on mount
+  useEffect(() => {
+    fetch("/api/status")
+      .then((r) => r.json())
+      .then((data: { supports_attachments?: boolean }) => {
+        setSupportsAttachments(data.supports_attachments ?? false);
+      })
+      .catch(() => {});
   }, []);
 
   function navigate(t: Tab) {
@@ -171,7 +182,7 @@ export default function App() {
 
       {/* Main content */}
       <main className="flex-1 overflow-hidden">
-        {tab === "chat" && <Chat mode={mode} theme={theme} />}
+        {tab === "chat" && <Chat mode={mode} theme={theme} supportsAttachments={supportsAttachments} />}
         {tab === "activities" && <Activities mode={mode} theme={theme} />}
         {tab === "charts" && <Charts mode={mode} theme={theme} />}
         {tab === "profile" && <Profile mode={mode} theme={theme} />}

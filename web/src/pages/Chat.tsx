@@ -18,6 +18,7 @@ interface Memory {
 interface Props {
   mode: Mode;
   theme: ThemeConfig;
+  supportsAttachments: boolean;
 }
 
 const SCROLL_KEY = "chat_scroll";
@@ -109,7 +110,9 @@ const MessageList = memo(function MessageList({
                       : "bg-gray-800 text-gray-100 border-gray-700/50"
                   }`}
                 >
-                  {m.content}
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {m.content}
+                  </ReactMarkdown>
                 </div>
               </div>
             ) : (
@@ -166,7 +169,7 @@ function formatDate(created_at: string): string {
   }
 }
 
-export default function Chat({ mode, theme }: Props) {
+export default function Chat({ mode, theme, supportsAttachments }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [oldestLoadedId, setOldestLoadedId] = useState<number | null>(null);
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
@@ -177,6 +180,10 @@ export default function Chat({ mode, theme }: Props) {
   const [input, setInput] = useState("");
   const [streamingIndex, setStreamingIndex] = useState<number | null>(null);
   const [savedMemories, setSavedMemories] = useState<Memory[]>([]);
+
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const [previewUrls, setPreviewUrls] = useState<string[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -189,10 +196,14 @@ export default function Chat({ mode, theme }: Props) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const blobUrlsInMessagesRef = useRef<string[]>([]);
 
   // Abort any in-flight request on unmount (e.g. page refresh mid-stream)
   useEffect(() => {
-    return () => { abortControllerRef.current?.abort(); };
+    return () => {
+      abortControllerRef.current?.abort();
+      blobUrlsInMessagesRef.current.forEach((u) => URL.revokeObjectURL(u));
+    };
   }, []);
 
   // Reset and reload history whenever mode changes
@@ -354,6 +365,24 @@ export default function Chat({ mode, theme }: Props) {
     }, 50);
   }
 
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const newFiles = Array.from(e.target.files ?? []);
+    if (newFiles.length === 0) return;
+    setAttachedFiles((prev) => [...prev, ...newFiles]);
+    setPreviewUrls((prev) => [
+      ...prev,
+      ...newFiles.map((f) => (f.type.startsWith("image/") ? URL.createObjectURL(f) : "")),
+    ]);
+    e.target.value = ""; // allow re-selecting the same file
+  }
+
+  function removeAttachment(index: number) {
+    const url = previewUrls[index];
+    if (url) URL.revokeObjectURL(url);
+    setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
+    setPreviewUrls((prev) => prev.filter((_, i) => i !== index));
+  }
+
   function autoResize() {
     const el = textareaRef.current;
     if (!el) return;
@@ -376,9 +405,27 @@ export default function Chat({ mode, theme }: Props) {
 
   async function send() {
     const text = input.trim();
-    if (!text || streamingIndex !== null) return;
+    if ((!text && attachedFiles.length === 0) || streamingIndex !== null) return;
+
+    // Snapshot files before clearing state
+    const filesToSend = attachedFiles;
+    const snapshotUrls = previewUrls;
+
+    // Build the optimistic user message — use blob URLs for images so they
+    // render immediately; text files fall back to a paperclip note
+    const attachmentNote = filesToSend.length > 0
+      ? "\n\n" + filesToSend.map((f, i) =>
+          snapshotUrls[i] ? `![${f.name}](${snapshotUrls[i]})` : `📎 ${f.name}`
+        ).join("\n")
+      : "";
+    const optimisticContent = text + attachmentNote;
+
+    // Track blob URLs embedded in the message; revoke on unmount
+    snapshotUrls.forEach((u) => { if (u) blobUrlsInMessagesRef.current.push(u); });
 
     setInput("");
+    setAttachedFiles([]);
+    setPreviewUrls([]);
     if (textareaRef.current) {
       textareaRef.current.style.height = "52px";
       textareaRef.current.style.overflowY = "hidden";
@@ -389,7 +436,7 @@ export default function Chat({ mode, theme }: Props) {
 
     setMessages((prev) => [
       ...prev,
-      { role: "user", content: text },
+      { role: "user", content: optimisticContent },
       { role: "assistant", content: "" },
     ]);
     setStreamingIndex(assistantIndex);
@@ -401,10 +448,16 @@ export default function Chat({ mode, theme }: Props) {
     abortControllerRef.current = controller;
 
     try {
+      const formData = new FormData();
+      formData.append("message", text);
+      formData.append("mode", mode);
+      for (const file of filesToSend) {
+        formData.append("files", file);
+      }
+
       const res = await fetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, mode }),
+        body: formData,
         signal: controller.signal,
       });
 
@@ -434,6 +487,15 @@ export default function Chat({ mode, theme }: Props) {
             } catch {
               // ignore
             }
+            continue;
+          }
+
+          if (payload.startsWith("[ERROR]")) {
+            setMessages((prev) =>
+              prev.map((m, i) =>
+                i === assistantIndex ? { ...m, content: `_${payload.slice(7)}_` } : m
+              )
+            );
             continue;
           }
 
@@ -574,42 +636,106 @@ export default function Chat({ mode, theme }: Props) {
 
       {/* Input */}
       <div className="px-4 pb-6 pt-5 border-t border-gray-800/60">
-        <div className="max-w-3xl mx-auto relative">
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(e) => {
-              setInput(e.target.value);
-              autoResize();
-            }}
-            onKeyDown={onKeyDown}
-            placeholder="Message your coach…"
-            disabled={streamingIndex !== null}
-            className={`w-full resize-none rounded-2xl bg-gray-800 border border-gray-700/60 px-4 py-3.5 pr-14 text-[15px] text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 ${theme.accentFocus} disabled:opacity-50 transition-colors leading-relaxed`}
-            style={{ minHeight: "52px", height: "52px", overflowY: "hidden" }}
-          />
-          <button
-            onClick={send}
-            disabled={streamingIndex !== null || !input.trim()}
-            className={`absolute right-2.5 bottom-2.5 w-8 h-8 rounded-xl ${theme.accentButton} text-white flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed transition-all`}
-          >
-            {streamingIndex !== null ? (
-              <span className="text-xs leading-none">●</span>
-            ) : (
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <path
-                  d="M7 12V2M7 2L3 6M7 2L11 6"
-                  stroke="currentColor"
-                  strokeWidth="1.75"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
+        <div className="max-w-3xl mx-auto">
+          {/* File preview strip */}
+          {attachedFiles.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-2">
+              {attachedFiles.map((file, i) => (
+                <div key={i} className="relative flex items-center gap-1.5 bg-gray-800 border border-gray-700/60 rounded-xl px-2.5 py-1.5 text-xs text-gray-300">
+                  {previewUrls[i] ? (
+                    <img src={previewUrls[i]} alt={file.name} className="w-8 h-8 object-cover rounded-lg" />
+                  ) : (
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="text-gray-400 shrink-0">
+                      <path d="M8 1H3a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5L8 1Z" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round"/>
+                      <path d="M8 1v4h4" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  )}
+                  <span className="max-w-[120px] truncate">{file.name}</span>
+                  <button
+                    onClick={() => removeAttachment(i)}
+                    className="ml-0.5 text-gray-500 hover:text-gray-200 transition-colors"
+                    aria-label="Remove attachment"
+                  >
+                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                      <path d="M1 1l8 8M9 1L1 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                    </svg>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="relative">
+            {/* Hidden file input */}
+            {supportsAttachments && (
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept="image/*,.txt,.csv,.gpx"
+                className="hidden"
+                onChange={handleFileChange}
+              />
             )}
-          </button>
+
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => {
+                setInput(e.target.value);
+                autoResize();
+              }}
+              onKeyDown={onKeyDown}
+              placeholder="Message your coach…"
+              disabled={streamingIndex !== null}
+              className={`w-full resize-none rounded-2xl bg-gray-800 border border-gray-700/60 py-3.5 pr-14 text-[15px] text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 ${theme.accentFocus} disabled:opacity-50 transition-colors leading-relaxed ${supportsAttachments ? "pl-10" : "px-4"}`}
+              style={{ minHeight: "52px", height: "52px", overflowY: "hidden" }}
+            />
+
+            {/* Paperclip button */}
+            {supportsAttachments && (
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={streamingIndex !== null}
+                title="Attach image or file"
+                className="absolute left-2.5 bottom-2.5 w-8 h-8 rounded-xl text-gray-500 hover:text-gray-300 hover:bg-gray-700 flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+              >
+                <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+                  <path
+                    d="M13.5 7.5 7.5 13.5A4.5 4.5 0 0 1 1 7L7.5 1A3 3 0 0 1 12 5.5L5.5 12A1.5 1.5 0 0 1 3.5 10L9 4.5"
+                    stroke="currentColor"
+                    strokeWidth="1.4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            )}
+
+            {/* Send button */}
+            <button
+              onClick={send}
+              disabled={streamingIndex !== null || (!input.trim() && attachedFiles.length === 0)}
+              className={`absolute right-2.5 bottom-2.5 w-8 h-8 rounded-xl ${theme.accentButton} text-white flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed transition-all`}
+            >
+              {streamingIndex !== null ? (
+                <span className="text-xs leading-none">●</span>
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path
+                    d="M7 12V2M7 2L3 6M7 2L11 6"
+                    stroke="currentColor"
+                    strokeWidth="1.75"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              )}
+            </button>
+          </div>
         </div>
         <p className="text-center text-xs text-gray-700 mt-2">
-          Enter to send · Shift+Enter for new line
+          Enter to send · Shift+Enter for new line{supportsAttachments ? " · Attach images & files" : ""}
         </p>
       </div>
     </div>

@@ -2,6 +2,10 @@
 
 import sqlite3
 
+from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Prompt
+
 from .backends.base import BaseBackend
 from .db import get_all_activities, get_all_memories, get_recent_messages, RUN_TYPES
 from . import db
@@ -207,18 +211,14 @@ def build_initial_history(activities, prior_messages: list[dict], mode: str = "r
     ]
 
 
-def chat(backend: BaseBackend, profile: dict) -> None:
+def chat(backend: BaseBackend, profile: str, mode: str = "running") -> None:
     """Interactive coaching chat loop."""
-    from rich.console import Console
-    from rich.panel import Panel
-    from rich.prompt import Prompt
-
     console = Console()
 
     memories = get_all_memories()
-    system = build_system(profile, memories)
+    system = build_system(profile, memories, mode=mode)
 
-    prior_messages = get_recent_messages(RECALL_MESSAGES)
+    prior_messages = get_recent_messages(RECALL_MESSAGES, mode=mode)
     mem_summary = f"{len(memories)} memor{'y' if len(memories) == 1 else 'ies'}" if memories else "no memories yet"
     hist_summary = f"{len(prior_messages)} messages recalled" if prior_messages else "new session"
 
@@ -257,5 +257,5 @@ def chat(backend: BaseBackend, profile: dict) -> None:
             tags = " · ".join(f"[{cat}] {content}" for cat, content in memories_saved)
             console.print(f"[dim italic]Remembered: {tags}[/dim italic]")
 
-        db.save_message("user", user_input)
-        db.save_message("assistant", response_text)
+        db.save_message("user", user_input, mode=mode)
+        db.save_message("assistant", response_text, mode=mode)

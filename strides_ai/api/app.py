@@ -1,22 +1,111 @@
 """FastAPI application factory."""
 
+import base64
+import json
 import os
 import queue
 import threading
+from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
+from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import db
+from ..auth import get_access_token
+from ..backends.claude import ClaudeBackend
+from ..backends.ollama import OllamaBackend, DEFAULT_HOST
+from ..charts_data import get_chart_data
 from ..coach import build_initial_history, build_system, RECALL_MESSAGES
 from ..profile import profile_to_text, get_default_fields
+from ..sync import sync_activities
 
 
-app = FastAPI(title="Strides AI")
+VALID_MODES = {"running", "cycling", "hybrid"}
+UPLOADS_DIR = Path.home() / ".strides_ai" / "uploads"
+SUPPORTED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+MAX_FILE_BYTES = 20 * 1024 * 1024  # 20 MB
+
+
+def init_backend(app: FastAPI, mode: str | None = None) -> None:
+    """Called at server startup (and on mode/profile changes) to build the LLM backend."""
+    if mode is not None:
+        app.state.mode = mode
+    current_mode = getattr(app.state, "mode", "running")
+
+    activities = db.get_activities_for_mode(current_mode)
+    prior_messages = db.get_recent_messages(RECALL_MESSAGES, mode=current_mode)
+    initial_history = build_initial_history(activities, prior_messages, mode=current_mode)
+
+    provider = os.environ.get("PROVIDER", "claude").lower()
+    if provider == "ollama":
+        model = os.environ.get("OLLAMA_MODEL", "llama3.1")
+        host = os.environ.get("OLLAMA_HOST", DEFAULT_HOST)
+        app.state.backend = OllamaBackend(model, initial_history, host)
+    else:
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        model = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
+        app.state.backend = ClaudeBackend(api_key, initial_history, model)
+
+
+def get_backend(request: Request):
+    backend = getattr(request.app.state, "backend", None)
+    if backend is None:
+        raise HTTPException(status_code=503, detail="Backend not initialised")
+    return backend
+
+
+async def _process_attachment(file: UploadFile) -> tuple[dict, str]:
+    """Read an uploaded file and return (llm_content_block, db_display_string)."""
+    data = await file.read()
+    if len(data) > MAX_FILE_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{file.filename}: file too large (max 20 MB)",
+        )
+
+    content_type = (file.content_type or "").split(";")[0].strip()
+    if content_type in SUPPORTED_IMAGE_TYPES:
+        suffix = Path(file.filename or "upload").suffix or ".jpg"
+        filename = f"{uuid4()}{suffix}"
+        (UPLOADS_DIR / filename).write_bytes(data)
+        llm_block = {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": content_type,
+                "data": base64.standard_b64encode(data).decode(),
+            },
+        }
+        db_display = f"![{file.filename}](/uploads/{filename})"
+    else:
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{file.filename}: unsupported binary file format; only images and UTF-8 text files are accepted",
+            )
+        llm_block = {"type": "text", "text": f"--- File: {file.filename} ---\n{text}"}
+        db_display = f"📎 {file.filename}"
+
+    return llm_block, db_display
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    saved_mode = db.get_setting("mode", "running")
+    init_backend(app, mode=saved_mode)
+    yield
+
+
+app = FastAPI(title="Strides AI", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,41 +114,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Backend is created once and shared across requests
-_backend = None
-_current_mode: str = "running"
-
-VALID_MODES = {"running", "cycling", "hybrid"}
-
-
-def get_backend():
-    global _backend
-    if _backend is None:
-        raise HTTPException(status_code=503, detail="Backend not initialised")
-    return _backend
-
-
-def init_backend(mode: str | None = None) -> None:
-    """Called at server startup (and on mode/profile changes) to build the LLM backend."""
-    global _backend, _current_mode
-    if mode is not None:
-        _current_mode = mode
-
-    activities = db.get_activities_for_mode(_current_mode)
-    prior_messages = db.get_recent_messages(RECALL_MESSAGES, mode=_current_mode)
-    initial_history = build_initial_history(activities, prior_messages, mode=_current_mode)
-
-    provider = os.environ.get("PROVIDER", "claude").lower()
-    if provider == "ollama":
-        from ..backends.ollama import OllamaBackend, DEFAULT_HOST
-        model = os.environ.get("OLLAMA_MODEL", "llama3.1")
-        host = os.environ.get("OLLAMA_HOST", DEFAULT_HOST)
-        _backend = OllamaBackend(model, initial_history, host)
-    else:
-        from ..backends.claude import ClaudeBackend
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        model = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
-        _backend = ClaudeBackend(api_key, initial_history, model)
+app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR), check_dir=False), name="uploads")
 
 
 # ── Settings ──────────────────────────────────────────────────────────────────
@@ -74,28 +129,41 @@ def get_settings():
 
 
 @app.put("/api/settings")
-def put_settings(body: SettingsBody):
+def put_settings(request: Request, body: SettingsBody):
     if body.mode not in VALID_MODES:
         raise HTTPException(status_code=400, detail=f"mode must be one of {sorted(VALID_MODES)}")
     db.set_setting("mode", body.mode)
-    init_backend(mode=body.mode)
+    init_backend(request.app, mode=body.mode)
     return {"mode": body.mode}
 
 
 # ── Chat ─────────────────────────────────────────────────────────────────────
 
-class ChatRequest(BaseModel):
-    message: str
-    mode: str = "running"
-
-
 @app.post("/api/chat")
-async def chat(req: ChatRequest) -> StreamingResponse:
-    backend = get_backend()
+async def chat(
+    request: Request,
+    message: str = Form(...),
+    mode: str = Form("running"),
+    files: list[UploadFile] = File(default=[]),
+    backend=Depends(get_backend),
+) -> StreamingResponse:
+    llm_blocks: list[dict] = []
+    db_parts: list[str] = []
+    for file in files:
+        if not file.filename:
+            continue
+        block, display = await _process_attachment(file)
+        llm_blocks.append(block)
+        db_parts.append(display)
+
+    saved_message = message
+    if db_parts:
+        saved_message += "\n\n" + "\n".join(db_parts)
+
     memories = db.get_all_memories()
-    profile_fields = db.get_profile_fields(req.mode)
-    profile = profile_to_text(profile_fields, req.mode)
-    system = build_system(profile, memories, mode=req.mode)
+    profile_fields = db.get_profile_fields(mode)
+    profile = profile_to_text(profile_fields, mode)
+    system = build_system(profile, memories, mode=mode)
 
     token_queue: queue.SimpleQueue[str | None] = queue.SimpleQueue()
 
@@ -104,16 +172,18 @@ async def chat(req: ChatRequest) -> StreamingResponse:
 
     def run_turn():
         try:
-            response_text, memories_saved = backend.stream_turn(system, req.message, on_token)
-            # Signal memories in a special SSE event
+            response_text, memories_saved = backend.stream_turn(
+                system, message, on_token, attachments=llm_blocks or None
+            )
             if memories_saved:
-                import json as _json
                 token_queue.put(
                     "[MEMORIES]"
-                    + _json.dumps([{"category": c, "content": t} for c, t in memories_saved])
+                    + json.dumps([{"category": c, "content": t} for c, t in memories_saved])
                 )
-            db.save_message("user", req.message, mode=req.mode)
-            db.save_message("assistant", response_text, mode=req.mode)
+            db.save_message("user", saved_message, mode=mode)
+            db.save_message("assistant", response_text, mode=mode)
+        except NotImplementedError as exc:
+            token_queue.put(f"[ERROR]{exc}")
         finally:
             token_queue.put(None)  # sentinel
 
@@ -149,7 +219,6 @@ def charts(unit: str = "miles", mode: str = "running"):
         raise HTTPException(status_code=400, detail="unit must be 'miles' or 'km'")
     if mode not in VALID_MODES:
         mode = "running"
-    from ..charts_data import get_chart_data
     rows = db.get_activities_for_mode(mode)
     return get_chart_data(rows, unit)
 
@@ -168,37 +237,33 @@ class ProfileBody(BaseModel):
 
 
 @app.get("/api/profile")
-def get_profile(mode: str | None = None):
-    m = mode or _current_mode
+def get_profile(request: Request, mode: str | None = None):
+    m = mode or request.app.state.mode
     fields = db.get_profile_fields(m) or get_default_fields(m)
     return {"fields": fields}
 
 
 @app.put("/api/profile")
-def put_profile(body: ProfileBody, mode: str | None = None):
-    m = mode or _current_mode
+def put_profile(request: Request, body: ProfileBody, mode: str | None = None):
+    m = mode or request.app.state.mode
     db.save_profile_fields(m, body.fields)
-    init_backend()
+    init_backend(request.app)
     return {"status": "ok"}
 
 
 @app.post("/api/profile/reset")
-def reset_profile(mode: str | None = None):
-    m = mode or _current_mode
+def reset_profile(request: Request, mode: str | None = None):
+    m = mode or request.app.state.mode
     fields = get_default_fields(m)
     db.save_profile_fields(m, fields)
-    init_backend()
+    init_backend(request.app)
     return {"fields": fields}
 
 
 # ── Sync ──────────────────────────────────────────────────────────────────────
 
 @app.post("/api/sync")
-def sync(full: bool = False):
-    import os
-    from ..auth import get_access_token
-    from ..sync import sync_activities
-
+def sync(request: Request, full: bool = False):
     client_id = os.environ.get("STRAVA_CLIENT_ID", "")
     client_secret = os.environ.get("STRAVA_CLIENT_SECRET", "")
     if not client_id or not client_secret:
@@ -207,7 +272,7 @@ def sync(full: bool = False):
     access_token = get_access_token(client_id, client_secret)
     new_count = sync_activities(access_token, full=full)
     if new_count > 0:
-        init_backend()
+        init_backend(request.app)
     return {"new_activities": new_count}
 
 
@@ -236,11 +301,11 @@ def history_search(q: str, limit: int = 20, mode: str | None = None):
 # ── Status ────────────────────────────────────────────────────────────────────
 
 @app.get("/api/status")
-def status():
-    backend = get_backend()
+def status(request: Request, backend=Depends(get_backend)):
     return {
         "backend": backend.label,
         "activities": len(db.get_all_activities()),
         "memories": len(db.get_all_memories()),
-        "mode": _current_mode,
+        "mode": request.app.state.mode,
+        "supports_attachments": backend.supports_attachments,
     }
