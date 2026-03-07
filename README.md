@@ -86,7 +86,7 @@ Switch between modes from the **Settings** tab. The active mode affects:
 - **Conversation history** — each mode has its own separate history so advice stays contextually relevant
 - **Athlete profile** — running and cycling profiles can be filled in independently
 
-After switching modes, sync your activities with `POST /api/sync?full=true` if you haven't done a full sync before, to ensure all sport types are in the database.
+After switching modes for the first time, use the **Full Sync** button in the **Settings** tab to fetch your complete Strava history and ensure all sport types are in the database.
 
 ---
 
