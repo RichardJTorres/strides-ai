@@ -104,6 +104,7 @@ def get_default_fields(mode: str) -> dict:
 
 # ── Text formatting for LLM system prompt ─────────────────────────────────────
 
+
 def _v(val: object) -> str:
     return str(val).strip() if val else ""
 
@@ -140,7 +141,11 @@ def profile_to_text(fields: dict | None, mode: str) -> str:
         rb = fields.get("running_background", {})
         rb_lines = [
             f"Running since: {_v(rb.get('running_since'))}" if _v(rb.get("running_since")) else "",
-            f"Weekly volume: {_v(rb.get('weekly_volume') or rb.get('weekly_run_volume'))}" if _v(rb.get("weekly_volume") or rb.get("weekly_run_volume")) else "",
+            (
+                f"Weekly volume: {_v(rb.get('weekly_volume') or rb.get('weekly_run_volume'))}"
+                if _v(rb.get("weekly_volume") or rb.get("weekly_run_volume"))
+                else ""
+            ),
             f"Background: {_v(rb.get('background'))}" if _v(rb.get("background")) else "",
         ]
         s = _section("Running Background", rb_lines)
@@ -151,7 +156,11 @@ def profile_to_text(fields: dict | None, mode: str) -> str:
         pb_lines = [
             f"5K: {_v(pbs.get('5k'))}" if _v(pbs.get("5k")) else "",
             f"10K: {_v(pbs.get('10k'))}" if _v(pbs.get("10k")) else "",
-            f"Half marathon: {_v(pbs.get('half_marathon'))}" if _v(pbs.get("half_marathon")) else "",
+            (
+                f"Half marathon: {_v(pbs.get('half_marathon'))}"
+                if _v(pbs.get("half_marathon"))
+                else ""
+            ),
             f"Marathon: {_v(pbs.get('marathon'))}" if _v(pbs.get("marathon")) else "",
         ]
         s = _section("Running Personal Bests", pb_lines)
@@ -162,7 +171,11 @@ def profile_to_text(fields: dict | None, mode: str) -> str:
         cb = fields.get("cycling_background", {})
         cb_lines = [
             f"Cycling since: {_v(cb.get('cycling_since'))}" if _v(cb.get("cycling_since")) else "",
-            f"Weekly distance: {_v(cb.get('weekly_distance') or cb.get('weekly_ride_distance'))}" if _v(cb.get("weekly_distance") or cb.get("weekly_ride_distance")) else "",
+            (
+                f"Weekly distance: {_v(cb.get('weekly_distance') or cb.get('weekly_ride_distance'))}"
+                if _v(cb.get("weekly_distance") or cb.get("weekly_ride_distance"))
+                else ""
+            ),
             f"Background: {_v(cb.get('background'))}" if _v(cb.get("background")) else "",
         ]
         s = _section("Cycling Background", cb_lines)
@@ -172,8 +185,16 @@ def profile_to_text(fields: dict | None, mode: str) -> str:
         cyb = fields.get("cycling_bests", {})
         cyb_lines = [
             f"FTP: {_v(cyb.get('ftp'))}" if _v(cyb.get("ftp")) else "",
-            f"Fastest century: {_v(cyb.get('fastest_century'))}" if _v(cyb.get("fastest_century")) else "",
-            f"Fastest gran fondo: {_v(cyb.get('fastest_gran_fondo'))}" if _v(cyb.get("fastest_gran_fondo")) else "",
+            (
+                f"Fastest century: {_v(cyb.get('fastest_century'))}"
+                if _v(cyb.get("fastest_century"))
+                else ""
+            ),
+            (
+                f"Fastest gran fondo: {_v(cyb.get('fastest_gran_fondo'))}"
+                if _v(cyb.get("fastest_gran_fondo"))
+                else ""
+            ),
             f"Other: {_v(cyb.get('other'))}" if _v(cyb.get("other")) else "",
         ]
         s = _section("Cycling Bests", cyb_lines)
@@ -199,18 +220,19 @@ def profile_to_text(fields: dict | None, mode: str) -> str:
 # ── Legacy migration helper ───────────────────────────────────────────────────
 # Used once on server startup to import an existing profile.md into the DB.
 
+
 def _get_section(text: str, name: str) -> str:
-    pattern = rf'##\s+{re.escape(name)}\s*\n(.*?)(?=\n---|\n##|\Z)'
+    pattern = rf"##\s+{re.escape(name)}\s*\n(.*?)(?=\n---|\n##|\Z)"
     m = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
     return m.group(1).strip() if m else ""
 
 
 def _strip_comments(s: str) -> str:
-    return re.sub(r'<!--.*?-->', '', s, flags=re.DOTALL).strip()
+    return re.sub(r"<!--.*?-->", "", s, flags=re.DOTALL).strip()
 
 
 def _get_bullet(section_text: str, field_name: str) -> str:
-    pattern = rf'^\s*-\s+\*\*{re.escape(field_name)}:\*\*[ \t]*(.*?)$'
+    pattern = rf"^\s*-\s+\*\*{re.escape(field_name)}:\*\*[ \t]*(.*?)$"
     m = re.search(pattern, section_text, re.MULTILINE | re.IGNORECASE)
     if not m:
         return ""
@@ -218,10 +240,10 @@ def _get_bullet(section_text: str, field_name: str) -> str:
 
 
 def _get_pb(pbs_text: str, label: str) -> str:
-    pattern = rf'\|\s*{re.escape(label)}\s*\|\s*(.*?)\s*\|'
+    pattern = rf"\|\s*{re.escape(label)}\s*\|\s*(.*?)\s*\|"
     for m in re.finditer(pattern, pbs_text, re.IGNORECASE):
         val = m.group(1).strip()
-        if not re.fullmatch(r'[-:]+', val):
+        if not re.fullmatch(r"[-:]+", val):
             return val
     return ""
 

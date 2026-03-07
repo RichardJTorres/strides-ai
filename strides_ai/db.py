@@ -89,6 +89,8 @@ CREATE TABLE IF NOT EXISTS training_plan (
     created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 )
 """
+
+
 def _connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
@@ -195,9 +197,7 @@ def upsert_activity(activity: dict[str, Any]) -> None:
 def get_all_activities() -> list[sqlite3.Row]:
     """Return all activities ordered newest-first."""
     with _connect() as conn:
-        return conn.execute(
-            "SELECT * FROM activities ORDER BY date DESC"
-        ).fetchall()
+        return conn.execute("SELECT * FROM activities ORDER BY date DESC").fetchall()
 
 
 def get_activities_for_mode(mode: str) -> list[sqlite3.Row]:
@@ -216,19 +216,16 @@ def get_activities_for_mode(mode: str) -> list[sqlite3.Row]:
                 tuple(CYCLE_TYPES),
             ).fetchall()
         else:  # hybrid
-            return conn.execute(
-                "SELECT * FROM activities ORDER BY date DESC"
-            ).fetchall()
+            return conn.execute("SELECT * FROM activities ORDER BY date DESC").fetchall()
 
 
 # ── Profiles ─────────────────────────────────────────────────────────────────
 
+
 def get_profile_fields(mode: str) -> dict | None:
     """Return the profile fields dict for the given mode, or None if not saved."""
     with _connect() as conn:
-        row = conn.execute(
-            "SELECT fields_json FROM profiles WHERE mode = ?", (mode,)
-        ).fetchone()
+        row = conn.execute("SELECT fields_json FROM profiles WHERE mode = ?", (mode,)).fetchone()
     return json.loads(row["fields_json"]) if row else None
 
 
@@ -242,11 +239,10 @@ def save_profile_fields(mode: str, fields: dict) -> None:
 
 # ── Settings ─────────────────────────────────────────────────────────────────
 
+
 def get_setting(key: str, default: str | None = None) -> str | None:
     with _connect() as conn:
-        row = conn.execute(
-            "SELECT value FROM settings WHERE key = ?", (key,)
-        ).fetchone()
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
     return row["value"] if row else default
 
 
@@ -259,6 +255,7 @@ def set_setting(key: str, value: str) -> None:
 
 
 # ── Conversation history ────────────────────────────────────────────────────
+
 
 def save_message(role: str, content: str, mode: str = "running") -> None:
     with _connect() as conn:
@@ -328,6 +325,7 @@ def search_messages(query: str, limit: int = 20, mode: str | None = None) -> lis
 
 # ── Memories ────────────────────────────────────────────────────────────────
 
+
 def save_memory(category: str, content: str) -> str:
     """Persist a memory. Returns a status string for the tool result."""
     try:
@@ -350,6 +348,7 @@ def get_all_memories() -> list[dict]:
 
 
 # ── Calendar ─────────────────────────────────────────────────────────────────
+
 
 def get_calendar_prefs() -> dict:
     with _connect() as conn:
@@ -433,6 +432,7 @@ def save_workout_nutrition(date: str, nutrition: dict) -> None:
 def get_upcoming_planned_workouts(days: int = 14) -> list[dict]:
     """Return planned workouts from today through the next `days` days."""
     from datetime import date as date_cls, timedelta
+
     today = date_cls.today().isoformat()
     end = (date_cls.today() + timedelta(days=days)).isoformat()
     with _connect() as conn:

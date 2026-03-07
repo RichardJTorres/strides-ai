@@ -1,7 +1,10 @@
 """Unit tests for strides_ai.coach — pure formatting and assembly functions."""
 
+from datetime import date, timedelta
+
 import pytest
 
+from strides_ai import db
 from strides_ai.coach import (
     CYCLING_SYSTEM_PROMPT,
     HYBRID_SYSTEM_PROMPT,
@@ -14,8 +17,8 @@ from strides_ai.coach import (
     build_training_log,
 )
 
-
 # ── _format_pace ──────────────────────────────────────────────────────────────
+
 
 def test_format_pace_none():
     assert _format_pace(None) == "—"
@@ -43,6 +46,7 @@ def test_format_pace_rounds_down():
 
 
 # ── _format_duration ──────────────────────────────────────────────────────────
+
 
 def test_format_duration_none():
     assert _format_duration(None) == "—"
@@ -74,18 +78,19 @@ def test_format_duration_full():
 
 # ── build_system ──────────────────────────────────────────────────────────────
 
-def test_build_system_no_profile_no_memories():
+
+def test_build_system_no_profile_no_memories(tmp_db):
     result = build_system("", [])
     assert result == RUNNING_SYSTEM_PROMPT
 
 
-def test_build_system_with_profile():
+def test_build_system_with_profile(tmp_db):
     result = build_system("Athlete profile text", [])
     assert "Athlete profile text" in result
     assert RUNNING_SYSTEM_PROMPT in result
 
 
-def test_build_system_with_memories():
+def test_build_system_with_memories(tmp_db):
     memories = [
         {"category": "goal", "content": "BQ in fall 2025"},
         {"category": "injury", "content": "Right knee tendinitis"},
@@ -96,30 +101,62 @@ def test_build_system_with_memories():
     assert "[injury] Right knee tendinitis" in result
 
 
-def test_build_system_with_profile_and_memories():
+def test_build_system_with_profile_and_memories(tmp_db):
     result = build_system("Profile here", [{"category": "pref", "content": "no speed work"}])
     assert "Profile here" in result
     assert "[pref] no speed work" in result
 
 
-def test_build_system_empty_memories_list():
+def test_build_system_empty_memories_list(tmp_db):
     result = build_system("profile", [])
     assert "Coaching Notes" not in result
 
 
+def test_build_system_injects_upcoming_workouts(tmp_db):
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    db.save_planned_workout(tomorrow, "Long Run", None, 20.0, None, 120, "easy")
+    result = build_system("", [])
+    assert "Upcoming Planned Workouts" in result
+    assert "Long Run" in result
+    assert tomorrow in result
+
+
+def test_build_system_no_upcoming_workouts_section_when_empty(tmp_db):
+    result = build_system("", [])
+    assert "Upcoming Planned Workouts" not in result
+
+
 # ── build_training_log ────────────────────────────────────────────────────────
 
-def _make_row(date="2025-06-15", name="Morning Run", distance_m=10000,
-              moving_time_s=3600, avg_pace_s_per_km=360.0, avg_hr=145,
-              max_hr=165, avg_cadence=174, elevation_gain_m=50,
-              suffer_score=42, perceived_exertion=5.0, sport_type="Run"):
+
+def _make_row(
+    date="2025-06-15",
+    name="Morning Run",
+    distance_m=10000,
+    moving_time_s=3600,
+    avg_pace_s_per_km=360.0,
+    avg_hr=145,
+    max_hr=165,
+    avg_cadence=174,
+    elevation_gain_m=50,
+    suffer_score=42,
+    perceived_exertion=5.0,
+    sport_type="Run",
+):
     """Return a dict that behaves like sqlite3.Row for build_training_log."""
     return {
-        "date": date, "name": name, "distance_m": distance_m,
-        "moving_time_s": moving_time_s, "avg_pace_s_per_km": avg_pace_s_per_km,
-        "avg_hr": avg_hr, "max_hr": max_hr, "avg_cadence": avg_cadence,
-        "elevation_gain_m": elevation_gain_m, "suffer_score": suffer_score,
-        "perceived_exertion": perceived_exertion, "sport_type": sport_type,
+        "date": date,
+        "name": name,
+        "distance_m": distance_m,
+        "moving_time_s": moving_time_s,
+        "avg_pace_s_per_km": avg_pace_s_per_km,
+        "avg_hr": avg_hr,
+        "max_hr": max_hr,
+        "avg_cadence": avg_cadence,
+        "elevation_gain_m": elevation_gain_m,
+        "suffer_score": suffer_score,
+        "perceived_exertion": perceived_exertion,
+        "sport_type": sport_type,
     }
 
 
@@ -160,13 +197,20 @@ def test_build_training_log_totals_line():
 
 
 def test_build_training_log_none_fields_show_dash():
-    row = _make_row(avg_hr=None, max_hr=None, avg_cadence=None,
-                    elevation_gain_m=None, suffer_score=None, perceived_exertion=None)
+    row = _make_row(
+        avg_hr=None,
+        max_hr=None,
+        avg_cadence=None,
+        elevation_gain_m=None,
+        suffer_score=None,
+        perceived_exertion=None,
+    )
     log = build_training_log([row])
     assert "—" in log
 
 
 # ── build_initial_history ─────────────────────────────────────────────────────
+
 
 def test_build_initial_history_structure():
     rows = [_make_row()]
@@ -201,6 +245,7 @@ def test_build_initial_history_empty_activities():
 
 # ── _format_speed ─────────────────────────────────────────────────────────────
 
+
 def test_format_speed_none():
     assert _format_speed(None) == "—"
 
@@ -225,22 +270,24 @@ def test_format_speed_fast():
 
 # ── build_system mode variants ────────────────────────────────────────────────
 
-def test_build_system_cycling_mode():
+
+def test_build_system_cycling_mode(tmp_db):
     result = build_system("", [], mode="cycling")
     assert result == CYCLING_SYSTEM_PROMPT
 
 
-def test_build_system_hybrid_mode():
+def test_build_system_hybrid_mode(tmp_db):
     result = build_system("", [], mode="hybrid")
     assert result == HYBRID_SYSTEM_PROMPT
 
 
-def test_build_system_invalid_mode_falls_back_to_running():
+def test_build_system_invalid_mode_falls_back_to_running(tmp_db):
     result = build_system("", [], mode="triathlon")
     assert result == RUNNING_SYSTEM_PROMPT
 
 
 # ── build_training_log cycling and hybrid modes ───────────────────────────────
+
 
 def test_build_training_log_cycling_header():
     log = build_training_log([_make_row(sport_type="Ride")], mode="cycling")
@@ -269,6 +316,7 @@ def test_build_training_log_hybrid_header_has_type_column():
 
 
 # ── build_initial_history mode labels ─────────────────────────────────────────
+
 
 def test_build_initial_history_cycling_label():
     history = build_initial_history([_make_row(sport_type="Ride")], [], mode="cycling")

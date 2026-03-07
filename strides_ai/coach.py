@@ -100,7 +100,14 @@ def build_system(profile: str, memories: list[dict], mode: str = "running") -> s
             rows.append(
                 f"{w['date']:10s} | {(w['workout_type'] or '')[:16]:16s} | {dist:8s} | {dur:8s} | {w.get('intensity') or '—'}"
             )
-        prompt += "\n\n## Upcoming Planned Workouts (next 14 days)\n" + header + "\n" + sep + "\n" + "\n".join(rows)
+        prompt += (
+            "\n\n## Upcoming Planned Workouts (next 14 days)\n"
+            + header
+            + "\n"
+            + sep
+            + "\n"
+            + "\n".join(rows)
+        )
 
     return prompt
 
@@ -152,7 +159,11 @@ def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
         is_run = sport in RUN_TYPES
 
         if mode == "hybrid":
-            pace_speed = _format_pace(r["avg_pace_s_per_km"]) if is_run else _format_speed(r["avg_pace_s_per_km"])
+            pace_speed = (
+                _format_pace(r["avg_pace_s_per_km"])
+                if is_run
+                else _format_speed(r["avg_pace_s_per_km"])
+            )
             lines.append(
                 f"{r['date'] or '?':10s} | "
                 f"{sport[:10]:10s} | "
@@ -203,7 +214,9 @@ def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
     return "\n".join(lines)
 
 
-def build_initial_history(activities, prior_messages: list[dict], mode: str = "running") -> list[dict]:
+def build_initial_history(
+    activities, prior_messages: list[dict], mode: str = "running"
+) -> list[dict]:
     """
     Build the seed history passed to each backend on construction:
     training-log injection followed by any recalled prior messages.
@@ -232,7 +245,11 @@ def chat(backend: BaseBackend, profile: str, mode: str = "running") -> None:
     system = build_system(profile, memories, mode=mode)
 
     prior_messages = get_recent_messages(RECALL_MESSAGES, mode=mode)
-    mem_summary = f"{len(memories)} memor{'y' if len(memories) == 1 else 'ies'}" if memories else "no memories yet"
+    mem_summary = (
+        f"{len(memories)} memor{'y' if len(memories) == 1 else 'ies'}"
+        if memories
+        else "no memories yet"
+    )
     hist_summary = f"{len(prior_messages)} messages recalled" if prior_messages else "new session"
 
     console.print(
