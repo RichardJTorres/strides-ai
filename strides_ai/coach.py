@@ -89,6 +89,19 @@ def build_system(profile: str, memories: list[dict], mode: str = "running") -> s
         lines = [f"  [{m['category']}] {m['content']}" for m in memories]
         prompt += "\n\n## Coaching Notes (remembered from previous sessions)\n" + "\n".join(lines)
 
+    upcoming = db.get_upcoming_planned_workouts()
+    if upcoming:
+        header = "Date       | Type             | Distance | Duration | Intensity"
+        sep = "-" * 65
+        rows = []
+        for w in upcoming:
+            dist = f"{w['distance_km']} km" if w.get("distance_km") else "—"
+            dur = f"{w['duration_min']} min" if w.get("duration_min") else "—"
+            rows.append(
+                f"{w['date']:10s} | {(w['workout_type'] or '')[:16]:16s} | {dist:8s} | {dur:8s} | {w.get('intensity') or '—'}"
+            )
+        prompt += "\n\n## Upcoming Planned Workouts (next 14 days)\n" + header + "\n" + sep + "\n" + "\n".join(rows)
+
     return prompt
 
 

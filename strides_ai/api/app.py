@@ -301,15 +301,17 @@ def history_search(q: str, limit: int = 20, mode: str | None = None):
 # ── Calendar ──────────────────────────────────────────────────────────────────
 
 class CalendarPrefsBody(BaseModel):
-    rest_days: list[str] = []
-    long_run_days: list[str] = []
-    frequency: int = 4
     blocked_days: list[str] = []
     races: list[dict] = []
 
 
-class FeedbackBody(BaseModel):
-    feedback: str
+class WorkoutBody(BaseModel):
+    workout_type: str
+    description: str | None = None
+    distance_km: float | None = None
+    elevation_m: float | None = None
+    duration_min: int | None = None
+    intensity: str | None = None
 
 
 @app.get("/api/calendar/prefs")
@@ -319,9 +321,7 @@ def get_calendar_prefs():
 
 @app.put("/api/calendar/prefs")
 def put_calendar_prefs(body: CalendarPrefsBody):
-    db.save_calendar_prefs(
-        body.rest_days, body.long_run_days, body.frequency, body.blocked_days, body.races
-    )
+    db.save_calendar_prefs(body.blocked_days, body.races)
     return {"status": "ok"}
 
 
@@ -330,55 +330,40 @@ def get_calendar_plan():
     return db.get_training_plan()
 
 
-@app.post("/api/calendar/generate")
-def generate_calendar(body: CalendarPrefsBody):
-    from ..schedule import generate_schedule
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not set")
-
-    # Save prefs first
-    db.save_calendar_prefs(
-        body.rest_days, body.long_run_days, body.frequency, body.blocked_days, body.races
+@app.put("/api/calendar/plan/{date}")
+def put_planned_workout(date: str, body: WorkoutBody):
+    db.save_planned_workout(
+        date, body.workout_type, body.description,
+        body.distance_km, body.elevation_m, body.duration_min, body.intensity,
     )
-
-    profile_text = load_profile()
-    activities = [dict(a) for a in db.get_all_activities()]
-    # Last 8 weeks of activities
-    from datetime import date, timedelta
-    cutoff = (date.today() - timedelta(weeks=8)).isoformat()
-    recent = [a for a in activities if a.get("date", "") >= cutoff]
-
-    prefs = {
-        "rest_days": body.rest_days,
-        "long_run_days": body.long_run_days,
-        "frequency": body.frequency,
-        "blocked_days": body.blocked_days,
-        "races": body.races,
-    }
-
-    workouts = generate_schedule(prefs, profile_text, recent, api_key)
-    db.save_training_plan(workouts)
-    return workouts
+    return {"status": "ok", "date": date}
 
 
-@app.post("/api/calendar/feedback")
-def revise_calendar(body: FeedbackBody):
-    from ..schedule import revise_schedule
+@app.delete("/api/calendar/plan/{date}")
+def delete_planned_workout(date: str):
+    db.delete_planned_workout(date)
+    return {"status": "ok"}
+
+
+@app.post("/api/calendar/plan/{date}/nutrition")
+def analyze_workout_nutrition(date: str, request: Request):
+    from ..schedule import analyze_nutrition
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not set")
 
-    current_plan = db.get_training_plan()
-    if not current_plan:
-        raise HTTPException(status_code=400, detail="No plan to revise — generate one first")
+    plan = db.get_training_plan()
+    workout = next((w for w in plan if w["date"] == date), None)
+    if not workout:
+        raise HTTPException(status_code=404, detail="No planned workout found for this date")
 
-    prefs = db.get_calendar_prefs()
-    profile_text = load_profile()
+    mode = getattr(request.app.state, "mode", "running")
+    profile_fields = db.get_profile_fields(mode)
+    profile_text = profile_to_text(profile_fields, mode)
 
-    workouts = revise_schedule(current_plan, body.feedback, prefs, profile_text, api_key)
-    db.save_training_plan(workouts)
-    return workouts
+    nutrition = analyze_nutrition(workout, profile_text, api_key)
+    db.save_workout_nutrition(date, nutrition)
+    return nutrition
 
 
 # ── Status ────────────────────────────────────────────────────────────────────

@@ -1,6 +1,57 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-// ── Types ──────────────────────────────────────────────────────────────────
+const DAYS_OF_WEEK = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+const WORKOUT_TYPES = [
+  "Easy Run", "Long Run", "Tempo Run", "Intervals",
+  "Race", "Cross-Training", "Rest",
+];
+
+const INTENSITIES = ["easy", "moderate", "hard", "rest"];
+
+const WORKOUT_COLORS: Record<string, string> = {
+  "Easy Run":       "bg-green-500/20 text-green-300 border-green-500/30",
+  "Long Run":       "bg-purple-500/20 text-purple-300 border-purple-500/30",
+  "Tempo Run":      "bg-orange-500/20 text-orange-300 border-orange-500/30",
+  "Intervals":      "bg-red-500/20 text-red-300 border-red-500/30",
+  "Race":           "bg-amber-500/20 text-amber-300 border-amber-500/30",
+  "Cross-Training": "bg-blue-500/20 text-blue-300 border-blue-500/30",
+  "Rest":           "bg-zinc-700/50 text-zinc-400 border-zinc-600/30",
+};
+
+interface Workout {
+  date: string;
+  workout_type: string;
+  description?: string | null;
+  distance_km?: number | null;
+  elevation_m?: number | null;
+  duration_min?: number | null;
+  intensity?: string | null;
+  nutrition_json?: string | null;
+}
+
+interface Activity {
+  id: number;
+  name: string;
+  date: string;
+  distance_m: number;
+  moving_time_s: number;
+  elevation_gain_m: number | null;
+  avg_pace_s_per_km: number | null;
+  avg_hr: number | null;
+  sport_type: string;
+}
+
+interface NutritionData {
+  calories_pre: number;
+  calories_during: number;
+  calories_post: number;
+  hydration_pre_ml: number;
+  hydration_during_ml: number;
+  hydration_post_ml: number;
+  notes: string;
+}
 
 interface Race {
   date: string;
@@ -8,565 +59,615 @@ interface Race {
   target_time?: string;
 }
 
-interface CalendarPrefs {
-  rest_days: string[];
-  long_run_days: string[];
-  frequency: number;
+interface Prefs {
   blocked_days: string[];
   races: Race[];
 }
 
-interface Workout {
-  date: string;
-  workout_type: string;
-  description: string;
-  distance_km: number | null;
-  duration_min: number | null;
-  intensity: string;
-}
-
-const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-const MONTHS = ["January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December"];
-
-const WORKOUT_COLORS: Record<string, string> = {
-  "Easy Run":      "bg-green-500/20 text-green-300 border-green-500/30",
-  "Long Run":      "bg-purple-500/20 text-purple-300 border-purple-500/30",
-  "Tempo Run":     "bg-orange-500/20 text-orange-300 border-orange-500/30",
-  "Interval":      "bg-red-500/20 text-red-300 border-red-500/30",
-  "Race":          "bg-amber-500/20 text-amber-300 border-amber-500/30",
-  "Cross-Training":"bg-blue-500/20 text-blue-300 border-blue-500/30",
-  "Rest":          "",
+const EMPTY_FORM = {
+  workout_type: "Easy Run",
+  description: "",
+  distance_km: "",
+  elevation_m: "",
+  duration_min: "",
+  intensity: "easy",
 };
 
-function toDateStr(y: number, m: number, d: number): string {
-  return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+function fmtDuration(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h > 0) return `${h}h ${m.toString().padStart(2, "0")}m`;
+  return `${m}m ${s.toString().padStart(2, "0")}s`;
 }
 
-function todayStr(): string {
-  return new Date().toISOString().slice(0, 10);
+function fmtPace(sPerKm: number | null): string {
+  if (!sPerKm) return "—";
+  const m = Math.floor(sPerKm / 60);
+  const s = Math.round(sPerKm % 60);
+  return `${m}:${s.toString().padStart(2, "0")}/km`;
 }
 
-// ── Pref save helpers ──────────────────────────────────────────────────────
-
-async function savePrefs(prefs: CalendarPrefs) {
-  await fetch("/api/calendar/prefs", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(prefs),
-  });
-}
-
-// ── Day Cell ──────────────────────────────────────────────────────────────
-
-function DayCell({
-  dateStr,
-  prefs,
-  workout,
-  isToday,
-  isSelected,
-  onClick,
-}: {
-  dateStr: string;
-  prefs: CalendarPrefs;
-  workout: Workout | undefined;
-  isToday: boolean;
-  isSelected: boolean;
-  onClick: () => void;
-}) {
-  const day = parseInt(dateStr.slice(8), 10);
-  const dowIndex = new Date(dateStr + "T12:00:00").getDay();
-  const dowName = DAY_NAMES[dowIndex];
-
-  const isBlocked = prefs.blocked_days.includes(dateStr);
-  const isRestPref = prefs.rest_days.includes(dowName);
-  const isLongRunPref = prefs.long_run_days.includes(dowName);
-  const isRace = prefs.races.some((r) => r.date === dateStr);
-
-  let bg = "bg-gray-900 hover:bg-gray-800";
-  if (isBlocked) bg = "bg-gray-950 opacity-50 cursor-pointer";
-  else if (isRestPref && !workout) bg = "bg-indigo-950/40";
-  else if (isLongRunPref && !workout) bg = "bg-purple-950/40";
-
-  const colorClass = workout ? (WORKOUT_COLORS[workout.workout_type] ?? "") : "";
-
-  return (
-    <button
-      onClick={onClick}
-      className={`relative min-h-[72px] rounded-lg border text-left p-1.5 transition-colors ${
-        isSelected ? "border-green-500/60" : "border-gray-800"
-      } ${bg}`}
-    >
-      <span
-        className={`text-xs font-medium block mb-1 ${
-          isToday
-            ? "text-green-400 font-bold"
-            : "text-gray-500"
-        }`}
-      >
-        {day}
-      </span>
-
-      {isBlocked && (
-        <span className="text-xs text-gray-600 italic">blocked</span>
-      )}
-
-      {isRace && !workout && (
-        <span className="text-[10px] px-1 py-0.5 rounded border bg-amber-500/20 text-amber-300 border-amber-500/30 block truncate">
-          Race
-        </span>
-      )}
-
-      {workout && workout.workout_type !== "Rest" && (
-        <span className={`text-[10px] px-1 py-0.5 rounded border block truncate ${colorClass}`}>
-          {workout.workout_type}
-          {workout.distance_km ? ` · ${workout.distance_km}km` : ""}
-        </span>
-      )}
-    </button>
-  );
-}
-
-// ── Main Component ─────────────────────────────────────────────────────────
+const RUN_TYPES = new Set(["Run", "TrailRun", "VirtualRun"]);
 
 export default function Calendar() {
   const today = new Date();
-  const [currentYear, setCurrentYear] = useState(today.getFullYear());
-  const [currentMonth, setCurrentMonth] = useState(today.getMonth());
+  const todayStr = today.toISOString().slice(0, 10);
 
-  const [prefs, setPrefs] = useState<CalendarPrefs>({
-    rest_days: [],
-    long_run_days: [],
-    frequency: 4,
-    blocked_days: [],
-    races: [],
-  });
+  const [currentMonth, setCurrentMonth] = useState(
+    new Date(today.getFullYear(), today.getMonth(), 1)
+  );
+  const [prefs, setPrefs] = useState<Prefs>({ blocked_days: [], races: [] });
   const [plan, setPlan] = useState<Record<string, Workout>>({});
-  const [selectedDay, setSelectedDay] = useState<string | null>(null);
-  const [generating, setGenerating] = useState(false);
-  const [revising, setRevising] = useState(false);
-  const [feedback, setFeedback] = useState("");
-  const [hasPlan, setHasPlan] = useState(false);
-
-  // Add race form
+  const [activities, setActivities] = useState<Record<string, Activity[]>>({});
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [editMode, setEditMode] = useState(false);
+  const [nutritionLoading, setNutritionLoading] = useState(false);
+  const [form, setForm] = useState(EMPTY_FORM);
   const [showRaceForm, setShowRaceForm] = useState(false);
-  const [newRace, setNewRace] = useState<Race>({ date: "", name: "", target_time: "" });
-
-  const saveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // ── Load on mount ────────────────────────────────────────────────────────
+  const [raceForm, setRaceForm] = useState({ date: "", name: "", target_time: "" });
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   useEffect(() => {
-    Promise.all([
-      fetch("/api/calendar/prefs").then((r) => r.json()),
-      fetch("/api/calendar/plan").then((r) => r.json()),
-    ]).then(([p, plan]) => {
-      setPrefs(p);
-      if (Array.isArray(plan) && plan.length > 0) {
-        const map: Record<string, Workout> = {};
-        for (const w of plan) map[w.date] = w;
-        setPlan(map);
-        setHasPlan(true);
-      }
-    });
+    fetch("/api/calendar/prefs")
+      .then(r => r.json())
+      .then(setPrefs)
+      .catch(() => {});
+    fetch("/api/calendar/plan")
+      .then(r => r.json())
+      .then((rows: Workout[]) => {
+        const byDate: Record<string, Workout> = {};
+        for (const w of rows) byDate[w.date] = w;
+        setPlan(byDate);
+      })
+      .catch(() => {});
+    fetch("/api/activities")
+      .then(r => r.json())
+      .then((rows: Activity[]) => {
+        const byDate: Record<string, Activity[]> = {};
+        for (const a of rows) {
+          if (!byDate[a.date]) byDate[a.date] = [];
+          byDate[a.date].push(a);
+        }
+        setActivities(byDate);
+      })
+      .catch(() => {});
   }, []);
 
-  // ── Debounced pref save ───────────────────────────────────────────────────
+  const savePrefs = useCallback((updated: Prefs) => {
+    fetch("/api/calendar/prefs", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updated),
+    }).catch(() => {});
+  }, []);
 
-  function updatePrefs(updated: CalendarPrefs) {
+  const toggleBlocked = (date: string) => {
+    const updated = {
+      ...prefs,
+      blocked_days: prefs.blocked_days.includes(date)
+        ? prefs.blocked_days.filter(d => d !== date)
+        : [...prefs.blocked_days, date],
+    };
     setPrefs(updated);
-    if (saveTimeout.current) clearTimeout(saveTimeout.current);
-    saveTimeout.current = setTimeout(() => savePrefs(updated), 600);
-  }
+    savePrefs(updated);
+  };
 
-  // ── Day click ────────────────────────────────────────────────────────────
+  const addRace = () => {
+    if (!raceForm.date || !raceForm.name) return;
+    const race: Race = { date: raceForm.date, name: raceForm.name };
+    if (raceForm.target_time) race.target_time = raceForm.target_time;
+    const updated = {
+      ...prefs,
+      races: [...prefs.races, race].sort((a, b) => a.date.localeCompare(b.date)),
+    };
+    setPrefs(updated);
+    savePrefs(updated);
+    setRaceForm({ date: "", name: "", target_time: "" });
+    setShowRaceForm(false);
+  };
 
-  function handleDayClick(dateStr: string) {
-    if (selectedDay === dateStr) {
-      setSelectedDay(null);
+  const removeRace = (date: string) => {
+    const updated = { ...prefs, races: prefs.races.filter(r => r.date !== date) };
+    setPrefs(updated);
+    savePrefs(updated);
+  };
+
+  const saveWorkout = async () => {
+    if (!selectedDate) return;
+    const body = {
+      workout_type: form.workout_type,
+      description: form.description || null,
+      distance_km: form.distance_km ? parseFloat(form.distance_km) : null,
+      elevation_m: form.elevation_m ? parseFloat(form.elevation_m) : null,
+      duration_min: form.duration_min ? parseInt(form.duration_min) : null,
+      intensity: form.intensity,
+    };
+    const res = await fetch(`/api/calendar/plan/${selectedDate}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) {
+      setPlan(prev => ({ ...prev, [selectedDate]: { date: selectedDate, ...body } }));
+      setEditMode(false);
+    }
+  };
+
+  const deleteWorkout = async () => {
+    if (!selectedDate) return;
+    const res = await fetch(`/api/calendar/plan/${selectedDate}`, { method: "DELETE" });
+    if (res.ok) {
+      setPlan(prev => {
+        const next = { ...prev };
+        delete next[selectedDate];
+        return next;
+      });
+      setEditMode(false);
+    }
+  };
+
+  const analyzeNutrition = async () => {
+    if (!selectedDate) return;
+    setNutritionLoading(true);
+    try {
+      const res = await fetch(`/api/calendar/plan/${selectedDate}/nutrition`, { method: "POST" });
+      if (res.ok) {
+        const nutrition = await res.json();
+        setPlan(prev => ({
+          ...prev,
+          [selectedDate]: { ...prev[selectedDate], nutrition_json: JSON.stringify(nutrition) },
+        }));
+      }
+    } finally {
+      setNutritionLoading(false);
+    }
+  };
+
+  const openDay = (date: string) => {
+    if (selectedDate === date) {
+      setSelectedDate(null);
       return;
     }
-    setSelectedDay(dateStr);
+    setSelectedDate(date);
+    setEditMode(false);
+    setConfirmingDelete(false);
+    const existing = plan[date];
+    setForm(existing ? {
+      workout_type: existing.workout_type || "Easy Run",
+      description: existing.description || "",
+      distance_km: existing.distance_km?.toString() || "",
+      elevation_m: existing.elevation_m?.toString() || "",
+      duration_min: existing.duration_min?.toString() || "",
+      intensity: existing.intensity || "easy",
+    } : EMPTY_FORM);
+  };
 
-    // Toggle blocked (only if no workout or already blocked)
-    const workout = plan[dateStr];
-    if (!workout || workout.workout_type === "Rest") {
-      const isBlocked = prefs.blocked_days.includes(dateStr);
-      const blocked = isBlocked
-        ? prefs.blocked_days.filter((d) => d !== dateStr)
-        : [...prefs.blocked_days, dateStr];
-      updatePrefs({ ...prefs, blocked_days: blocked });
-    }
-  }
+  const startEdit = () => {
+    const existing = selectedDate ? plan[selectedDate] : null;
+    setForm({
+      workout_type: existing?.workout_type || "Easy Run",
+      description: existing?.description || "",
+      distance_km: existing?.distance_km?.toString() || "",
+      elevation_m: existing?.elevation_m?.toString() || "",
+      duration_min: existing?.duration_min?.toString() || "",
+      intensity: existing?.intensity || "easy",
+    });
+    setEditMode(true);
+  };
 
-  // ── Generate ─────────────────────────────────────────────────────────────
+  // Calendar grid helpers
+  const daysInMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).getDate();
+  const firstDow = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1).getDay();
 
-  async function handleGenerate() {
-    setGenerating(true);
-    setSelectedDay(null);
-    try {
-      const res = await fetch("/api/calendar/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(prefs),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const workouts: Workout[] = await res.json();
-      const map: Record<string, Workout> = {};
-      for (const w of workouts) map[w.date] = w;
-      setPlan(map);
-      setHasPlan(true);
-    } finally {
-      setGenerating(false);
-    }
-  }
+  const cellDateStr = (day: number) =>
+    new Date(currentMonth.getFullYear(), currentMonth.getMonth(), day)
+      .toISOString().slice(0, 10);
 
-  // ── Revise ───────────────────────────────────────────────────────────────
+  const dowName = (dateStr: string) =>
+    DAY_NAMES[new Date(dateStr + "T12:00:00").getDay()];
 
-  async function handleRevise() {
-    if (!feedback.trim()) return;
-    setRevising(true);
-    try {
-      const res = await fetch("/api/calendar/feedback", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ feedback }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const workouts: Workout[] = await res.json();
-      const map: Record<string, Workout> = {};
-      for (const w of workouts) map[w.date] = w;
-      setPlan(map);
-      setFeedback("");
-    } finally {
-      setRevising(false);
-    }
-  }
+  const raceOnDate = (dateStr: string) => prefs.races.find(r => r.date === dateStr);
 
-  // ── Calendar grid helpers ─────────────────────────────────────────────────
+  const selectedWorkout = selectedDate ? plan[selectedDate] : null;
+  const selectedActivities = selectedDate ? (activities[selectedDate] ?? []) : [];
+  const selectedNutrition: NutritionData | null = selectedWorkout?.nutrition_json
+    ? JSON.parse(selectedWorkout.nutrition_json)
+    : null;
 
-  function prevMonth() {
-    if (currentMonth === 0) { setCurrentMonth(11); setCurrentYear(y => y - 1); }
-    else setCurrentMonth(m => m - 1);
-  }
-
-  function nextMonth() {
-    if (currentMonth === 11) { setCurrentMonth(0); setCurrentYear(y => y + 1); }
-    else setCurrentMonth(m => m + 1);
-  }
-
-  const firstDow = new Date(currentYear, currentMonth, 1).getDay();
-  const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
-  const cells: (string | null)[] = [
-    ...Array(firstDow).fill(null),
-    ...Array.from({ length: daysInMonth }, (_, i) => toDateStr(currentYear, currentMonth, i + 1)),
-  ];
-  // Pad to complete last row
-  while (cells.length % 7 !== 0) cells.push(null);
-
-  const selectedWorkout = selectedDay ? plan[selectedDay] : null;
-
-  // ── Day-of-week checkbox helpers ─────────────────────────────────────────
-
-  function toggleDow(field: "rest_days" | "long_run_days", day: string) {
-    const list = prefs[field];
-    const updated = list.includes(day) ? list.filter((d) => d !== day) : [...list, day];
-    updatePrefs({ ...prefs, [field]: updated });
-  }
-
-  // ── Render ────────────────────────────────────────────────────────────────
+  const showNutritionCol = selectedWorkout && !editMode && selectedWorkout.workout_type !== "Rest";
 
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="flex h-full bg-zinc-900 text-zinc-100 overflow-hidden">
 
-      {/* Left panel */}
-      <aside className="w-56 shrink-0 bg-gray-900 border-r border-gray-800 flex flex-col overflow-y-auto">
-        <div className="p-4 space-y-6">
+      {/* ── Left sidebar ── */}
+      <aside className="w-56 flex-shrink-0 border-r border-zinc-800 overflow-y-auto p-4 space-y-6">
 
-          {/* Frequency */}
-          <section>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">Weekly runs</h3>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => updatePrefs({ ...prefs, frequency: Math.max(1, prefs.frequency - 1) })}
-                className="w-7 h-7 rounded bg-gray-800 text-gray-300 hover:bg-gray-700 text-sm font-bold"
-              >−</button>
-              <span className="text-gray-100 font-semibold w-4 text-center">{prefs.frequency}</span>
-              <button
-                onClick={() => updatePrefs({ ...prefs, frequency: Math.min(7, prefs.frequency + 1) })}
-                className="w-7 h-7 rounded bg-gray-800 text-gray-300 hover:bg-gray-700 text-sm font-bold"
-              >+</button>
-              <span className="text-xs text-gray-500">days/week</span>
-            </div>
-          </section>
-
-          {/* Rest days */}
-          <section>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">Rest days</h3>
-            <div className="space-y-1">
-              {DAY_NAMES.map((d) => (
-                <label key={d} className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={prefs.rest_days.includes(d)}
-                    onChange={() => toggleDow("rest_days", d)}
-                    className="accent-indigo-500"
-                  />
-                  <span className="text-sm text-gray-300">{d}</span>
-                </label>
-              ))}
-            </div>
-          </section>
-
-          {/* Long run days */}
-          <section>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">Long run day</h3>
-            <div className="space-y-1">
-              {DAY_NAMES.map((d) => (
-                <label key={d} className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={prefs.long_run_days.includes(d)}
-                    onChange={() => toggleDow("long_run_days", d)}
-                    className="accent-purple-500"
-                  />
-                  <span className="text-sm text-gray-300">{d}</span>
-                </label>
-              ))}
-            </div>
-          </section>
-
-          {/* Races */}
-          <section>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">Races</h3>
-            <div className="space-y-1 mb-2">
-              {prefs.races.length === 0 && (
-                <p className="text-xs text-gray-600 italic">No races added</p>
-              )}
-              {prefs.races.map((r, i) => (
-                <div key={i} className="flex items-start justify-between gap-1 bg-gray-800 rounded px-2 py-1.5">
-                  <div>
-                    <p className="text-xs text-amber-300 font-medium">{r.name}</p>
-                    <p className="text-[11px] text-gray-500">{r.date}{r.target_time ? ` · ${r.target_time}` : ""}</p>
+        <div>
+          <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">Races</h3>
+          <div className="space-y-2 mb-2">
+            {prefs.races.map(race => (
+              <div key={race.date} className="flex items-start justify-between gap-1">
+                <div className="text-xs">
+                  <div className="text-amber-300 font-medium">{race.name}</div>
+                  <div className="text-zinc-500">
+                    {race.date}{race.target_time ? ` · ${race.target_time}` : ""}
                   </div>
-                  <button
-                    onClick={() => updatePrefs({ ...prefs, races: prefs.races.filter((_, j) => j !== i) })}
-                    className="text-gray-600 hover:text-red-400 text-xs mt-0.5"
-                  >✕</button>
                 </div>
-              ))}
-            </div>
-
-            {showRaceForm ? (
-              <div className="space-y-1.5">
-                <input
-                  type="text"
-                  placeholder="Race name"
-                  value={newRace.name}
-                  onChange={(e) => setNewRace({ ...newRace, name: e.target.value })}
-                  className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 placeholder-gray-600 focus:outline-none focus:border-amber-500/50"
-                />
-                <input
-                  type="date"
-                  value={newRace.date}
-                  onChange={(e) => setNewRace({ ...newRace, date: e.target.value })}
-                  className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-amber-500/50"
-                />
-                <input
-                  type="text"
-                  placeholder="Target time (optional)"
-                  value={newRace.target_time}
-                  onChange={(e) => setNewRace({ ...newRace, target_time: e.target.value })}
-                  className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 placeholder-gray-600 focus:outline-none focus:border-amber-500/50"
-                />
-                <div className="flex gap-1">
-                  <button
-                    onClick={() => {
-                      if (!newRace.date || !newRace.name) return;
-                      updatePrefs({ ...prefs, races: [...prefs.races, newRace] });
-                      setNewRace({ date: "", name: "", target_time: "" });
-                      setShowRaceForm(false);
-                    }}
-                    className="flex-1 text-xs bg-amber-600 hover:bg-amber-500 text-white rounded py-1 transition-colors"
-                  >Add</button>
-                  <button
-                    onClick={() => setShowRaceForm(false)}
-                    className="text-xs text-gray-500 hover:text-gray-300 px-2"
-                  >Cancel</button>
-                </div>
+                <button
+                  onClick={() => removeRace(race.date)}
+                  className="text-zinc-600 hover:text-zinc-300 text-xs mt-0.5 leading-none"
+                >✕</button>
               </div>
-            ) : (
-              <button
-                onClick={() => setShowRaceForm(true)}
-                className="text-xs text-amber-400 hover:text-amber-300 transition-colors"
-              >+ Add race</button>
-            )}
-          </section>
-
-          {/* Legend */}
-          <section>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">Legend</h3>
-            <div className="space-y-1 text-[11px]">
-              {Object.entries(WORKOUT_COLORS).filter(([, v]) => v).map(([type, cls]) => (
-                <div key={type} className="flex items-center gap-1.5">
-                  <span className={`px-1.5 py-0.5 rounded border text-[10px] ${cls}`}>{type}</span>
-                </div>
-              ))}
-              <div className="flex items-center gap-1.5 mt-1">
-                <span className="w-3 h-3 rounded bg-indigo-950/60 border border-indigo-800/40 inline-block" />
-                <span className="text-gray-500">Rest pref</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded bg-purple-950/60 border border-purple-800/40 inline-block" />
-                <span className="text-gray-500">Long run pref</span>
+            ))}
+          </div>
+          {showRaceForm ? (
+            <div className="space-y-1">
+              <input
+                type="date" value={raceForm.date}
+                onChange={e => setRaceForm(f => ({ ...f, date: e.target.value }))}
+                className="w-full text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-200"
+              />
+              <input
+                type="text" placeholder="Race name" value={raceForm.name}
+                onChange={e => setRaceForm(f => ({ ...f, name: e.target.value }))}
+                className="w-full text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-200"
+              />
+              <input
+                type="text" placeholder="Target time (optional)" value={raceForm.target_time}
+                onChange={e => setRaceForm(f => ({ ...f, target_time: e.target.value }))}
+                className="w-full text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-200"
+              />
+              <div className="flex gap-1">
+                <button onClick={addRace} className="flex-1 text-xs bg-amber-600 hover:bg-amber-500 text-white rounded px-2 py-1">Add</button>
+                <button onClick={() => setShowRaceForm(false)} className="flex-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded px-2 py-1">Cancel</button>
               </div>
             </div>
-          </section>
+          ) : (
+            <button onClick={() => setShowRaceForm(true)} className="text-xs text-zinc-500 hover:text-zinc-300">
+              + Add race
+            </button>
+          )}
+        </div>
+
+        <div>
+          <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">Legend</h3>
+          <div className="space-y-1 mb-3">
+            {Object.entries(WORKOUT_COLORS).map(([type, cls]) => (
+              <div key={type} className="flex items-center gap-2">
+                <span className={`w-2 h-2 rounded-full ${cls.split(" ")[0]}`} />
+                <span className="text-xs text-zinc-400">{type}</span>
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-zinc-500" />
+            <span className="text-xs text-zinc-400">Strava activity</span>
+          </div>
         </div>
       </aside>
 
-      {/* Main area */}
+      {/* ── Main column ── */}
       <div className="flex-1 flex flex-col overflow-hidden">
 
-        {/* Header */}
-        <div className="px-6 py-4 border-b border-gray-800 flex items-center justify-between shrink-0">
-          <div>
-            <h2 className="text-lg font-semibold text-gray-100">Training Calendar</h2>
-            <p className="text-xs text-gray-500 mt-0.5">
-              Click days to block them · Configure preferences on the left
-            </p>
+        {/* ── Calendar grid ── */}
+        <div className="flex-shrink-0">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+            <button
+              onClick={() => setCurrentMonth(m => new Date(m.getFullYear(), m.getMonth() - 1, 1))}
+              className="text-zinc-400 hover:text-zinc-200 px-2 text-lg"
+            >‹</button>
+            <h2 className="text-sm font-semibold text-zinc-200">
+              {currentMonth.toLocaleString("default", { month: "long", year: "numeric" })}
+            </h2>
+            <button
+              onClick={() => setCurrentMonth(m => new Date(m.getFullYear(), m.getMonth() + 1, 1))}
+              className="text-zinc-400 hover:text-zinc-200 px-2 text-lg"
+            >›</button>
           </div>
-          <button
-            onClick={handleGenerate}
-            disabled={generating}
-            className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-500 text-white text-sm font-medium rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {generating ? (
-              <>
-                <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
-                </svg>
-                Generating…
-              </>
-            ) : (
-              <>
-                <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
-                </svg>
-                {hasPlan ? "Regenerate" : "Generate Schedule"}
-              </>
-            )}
-          </button>
+
+          <div className="p-3 pr-16">
+            <div className="grid grid-cols-7 mb-1">
+              {DAYS_OF_WEEK.map(d => (
+                <div key={d} className="text-center text-xs text-zinc-500 font-medium py-1">{d}</div>
+              ))}
+            </div>
+            <div className="grid grid-cols-7 gap-1">
+              {Array.from({ length: firstDow }).map((_, i) => <div key={`pad-${i}`} />)}
+              {Array.from({ length: daysInMonth }, (_, i) => i + 1).map(dayNum => {
+                const dateStr = cellDateStr(dayNum);
+                const workout = plan[dateStr];
+                const dayActivities = activities[dateStr] ?? [];
+                const isToday = dateStr === todayStr;
+                const isSelected = selectedDate === dateStr;
+                const isBlocked = prefs.blocked_days.includes(dateStr);
+                const race = raceOnDate(dateStr);
+
+                return (
+                  <div
+                    key={dateStr}
+                    onClick={() => openDay(dateStr)}
+                    className={[
+                      "min-h-16 p-1.5 rounded cursor-pointer border transition-colors",
+                      isSelected ? "border-zinc-400 bg-zinc-700/60" : "border-zinc-800 hover:border-zinc-600",
+                      isBlocked ? "opacity-40" : "",
+                      "bg-zinc-800/20",
+                    ].join(" ")}
+                  >
+                    <div className={`text-xs font-medium mb-1 flex items-center gap-1 ${isToday ? "text-green-400" : "text-zinc-400"}`}>
+                      {dayNum}
+                      {isToday && <span className="w-1.5 h-1.5 bg-green-400 rounded-full" />}
+                    </div>
+                    {race && (
+                      <div className="text-xs px-1 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 truncate mb-0.5">
+                        🏁 {race.name}
+                      </div>
+                    )}
+                    {workout && (
+                      <div className={`text-xs px-1 py-0.5 rounded border truncate mb-0.5 ${WORKOUT_COLORS[workout.workout_type] ?? "bg-zinc-700/50 text-zinc-400 border-zinc-600/30"}`}>
+                        {workout.workout_type}
+                        {workout.distance_km && (
+                          <span className="ml-1 opacity-70">{workout.distance_km}k</span>
+                        )}
+                      </div>
+                    )}
+                    {dayActivities.map(a => (
+                      <div key={a.id} className="text-xs px-1 py-0.5 rounded bg-zinc-600/40 text-zinc-300 border border-zinc-600/40 truncate mb-0.5">
+                        ✓ {((a.distance_m ?? 0) / 1000).toFixed(1)}k {a.sport_type}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
 
-        {/* Scrollable body */}
-        <div className="flex-1 overflow-y-auto px-6 py-4">
+        {/* ── Detail panel (below calendar) ── */}
+        {selectedDate && (
+          <div className="flex-1 border-t border-zinc-800 overflow-y-auto">
+            <div className="p-4 flex gap-6 items-start">
 
-          {/* Month nav */}
-          <div className="flex items-center justify-between mb-4">
-            <button onClick={prevMonth} className="p-1.5 rounded hover:bg-gray-800 text-gray-400 hover:text-gray-100 transition-colors">
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="15 18 9 12 15 6"/>
-              </svg>
-            </button>
-            <h3 className="text-base font-semibold text-gray-100">
-              {MONTHS[currentMonth]} {currentYear}
-            </h3>
-            <button onClick={nextMonth} className="p-1.5 rounded hover:bg-gray-800 text-gray-400 hover:text-gray-100 transition-colors">
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="9 18 15 12 9 6"/>
-              </svg>
-            </button>
-          </div>
+              {/* Col 1: date info + planned workout */}
+              <div className="flex-1 min-w-0 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-zinc-200">{selectedDate}</div>
+                    <div className="text-xs text-zinc-500">{dowName(selectedDate)}</div>
+                  </div>
+                  <button
+                    onClick={() => setSelectedDate(null)}
+                    className="text-zinc-500 hover:text-zinc-300 text-xl leading-none"
+                  >×</button>
+                </div>
 
-          {/* Day headers */}
-          <div className="grid grid-cols-7 gap-1 mb-1">
-            {DAYS.map((d) => (
-              <div key={d} className="text-center text-xs font-medium text-gray-600 py-1">{d}</div>
-            ))}
-          </div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={prefs.blocked_days.includes(selectedDate)}
+                    onChange={() => toggleBlocked(selectedDate)}
+                    className="accent-zinc-500"
+                  />
+                  <span className="text-xs text-zinc-400">Mark as blocked (unavailable)</span>
+                </label>
 
-          {/* Calendar cells */}
-          <div className="grid grid-cols-7 gap-1">
-            {cells.map((dateStr, i) =>
-              dateStr === null ? (
-                <div key={`empty-${i}`} />
-              ) : (
-                <DayCell
-                  key={dateStr}
-                  dateStr={dateStr}
-                  prefs={prefs}
-                  workout={plan[dateStr]}
-                  isToday={dateStr === todayStr()}
-                  isSelected={selectedDay === dateStr}
-                  onClick={() => handleDayClick(dateStr)}
-                />
-              )
-            )}
-          </div>
-
-          {/* Workout detail */}
-          {selectedDay && (
-            <div className="mt-4 bg-gray-900 border border-gray-800 rounded-xl p-4">
-              <div className="flex items-start justify-between mb-2">
-                <div>
-                  <span className="text-xs text-gray-500">{selectedDay}</span>
-                  {selectedWorkout ? (
-                    <h4 className={`text-sm font-semibold mt-0.5 ${
-                      selectedWorkout.workout_type === "Rest" ? "text-gray-500" : "text-gray-100"
-                    }`}>
-                      {selectedWorkout.workout_type}
-                      {selectedWorkout.distance_km ? ` · ${selectedWorkout.distance_km} km` : ""}
-                      {selectedWorkout.duration_min ? ` · ${selectedWorkout.duration_min} min` : ""}
+                {/* Planned workout: view or form */}
+                {selectedWorkout && !editMode ? (
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Planned</h4>
+                    <div className={`px-3 py-2 rounded border ${WORKOUT_COLORS[selectedWorkout.workout_type] ?? "bg-zinc-700/50 text-zinc-400 border-zinc-600/30"}`}>
+                      <div className="font-medium text-sm">{selectedWorkout.workout_type}</div>
+                      {selectedWorkout.intensity && (
+                        <div className="text-xs opacity-70 capitalize mt-0.5">{selectedWorkout.intensity} intensity</div>
+                      )}
+                    </div>
+                    {(selectedWorkout.distance_km || selectedWorkout.elevation_m || selectedWorkout.duration_min) && (
+                      <div className="flex gap-2 flex-wrap">
+                        {selectedWorkout.distance_km && (
+                          <div className="bg-zinc-800 rounded p-2 text-xs">
+                            <div className="text-zinc-500">Distance</div>
+                            <div className="text-zinc-200 font-medium">{selectedWorkout.distance_km} km</div>
+                          </div>
+                        )}
+                        {selectedWorkout.duration_min && (
+                          <div className="bg-zinc-800 rounded p-2 text-xs">
+                            <div className="text-zinc-500">Duration</div>
+                            <div className="text-zinc-200 font-medium">{selectedWorkout.duration_min} min</div>
+                          </div>
+                        )}
+                        {selectedWorkout.elevation_m && (
+                          <div className="bg-zinc-800 rounded p-2 text-xs">
+                            <div className="text-zinc-500">Elevation</div>
+                            <div className="text-zinc-200 font-medium">{selectedWorkout.elevation_m} m</div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {selectedWorkout.description && (
+                      <p className="text-xs text-zinc-400 leading-relaxed">{selectedWorkout.description}</p>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <button onClick={startEdit} className="text-sm bg-zinc-700 hover:bg-zinc-600 text-zinc-200 rounded px-4 py-2">Edit</button>
+                      {confirmingDelete ? (
+                        <>
+                          <button onClick={deleteWorkout} className="text-xs bg-red-700 hover:bg-red-600 text-white rounded px-3 py-1.5">Confirm delete</button>
+                          <button onClick={() => setConfirmingDelete(false)} className="text-xs text-zinc-500 hover:text-zinc-300 px-2 py-1.5">Cancel</button>
+                        </>
+                      ) : (
+                        <button onClick={() => setConfirmingDelete(true)} className="text-xs text-red-500 hover:text-red-400 px-2 py-1.5">Delete</button>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+                      {selectedWorkout ? "Edit Planned Workout" : "Add Planned Workout"}
                     </h4>
+                    <div>
+                      <label className="text-xs text-zinc-500 mb-1 block">Type</label>
+                      <select
+                        value={form.workout_type}
+                        onChange={e => setForm(f => ({ ...f, workout_type: e.target.value }))}
+                        className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
+                      >
+                        {WORKOUT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                      </select>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-xs text-zinc-500 mb-1 block">Distance (km)</label>
+                        <input
+                          type="number" step="0.1" placeholder="—"
+                          value={form.distance_km}
+                          onChange={e => setForm(f => ({ ...f, distance_km: e.target.value }))}
+                          className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-zinc-500 mb-1 block">Elevation (m)</label>
+                        <input
+                          type="number" placeholder="—"
+                          value={form.elevation_m}
+                          onChange={e => setForm(f => ({ ...f, elevation_m: e.target.value }))}
+                          className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-zinc-500 mb-1 block">Duration (min)</label>
+                        <input
+                          type="number" placeholder="—"
+                          value={form.duration_min}
+                          onChange={e => setForm(f => ({ ...f, duration_min: e.target.value }))}
+                          className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-zinc-500 mb-1 block">Intensity</label>
+                        <select
+                          value={form.intensity}
+                          onChange={e => setForm(f => ({ ...f, intensity: e.target.value }))}
+                          className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
+                        >
+                          {INTENSITIES.map(i => (
+                            <option key={i} value={i}>{i.charAt(0).toUpperCase() + i.slice(1)}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-xs text-zinc-500 mb-1 block">Notes (optional)</label>
+                      <textarea
+                        rows={2}
+                        placeholder="What's the goal for this workout?"
+                        value={form.description}
+                        onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+                        className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200 resize-none"
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={saveWorkout}
+                        className="flex-1 text-sm bg-green-700 hover:bg-green-600 text-white rounded px-3 py-1.5"
+                      >Save</button>
+                      <button
+                        onClick={() => { setEditMode(false); if (!selectedWorkout) setSelectedDate(null); }}
+                        className="flex-1 text-sm bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded px-3 py-1.5"
+                      >Cancel</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Col 2: Strava activities */}
+              {selectedActivities.length > 0 && (
+                <div className="w-44 flex-shrink-0 space-y-2">
+                  <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Strava</h4>
+                  {selectedActivities.map(a => {
+                    const distKm = ((a.distance_m ?? 0) / 1000).toFixed(2);
+                    const isRun = RUN_TYPES.has(a.sport_type);
+                    return (
+                      <div key={a.id} className="bg-zinc-800/60 rounded p-2 border border-zinc-700/50 space-y-1">
+                        <div className="text-xs font-medium text-zinc-200 truncate">{a.name}</div>
+                        <div className="text-xs text-zinc-500">{a.sport_type}</div>
+                        <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs">
+                          <span className="text-zinc-500">Distance</span>
+                          <span className="text-zinc-300">{distKm} km</span>
+                          <span className="text-zinc-500">Duration</span>
+                          <span className="text-zinc-300">{fmtDuration(a.moving_time_s)}</span>
+                          {isRun && a.avg_pace_s_per_km && (
+                            <>
+                              <span className="text-zinc-500">Pace</span>
+                              <span className="text-zinc-300">{fmtPace(a.avg_pace_s_per_km)}</span>
+                            </>
+                          )}
+                          {a.avg_hr && (
+                            <>
+                              <span className="text-zinc-500">Avg HR</span>
+                              <span className="text-zinc-300">{Math.round(a.avg_hr)} bpm</span>
+                            </>
+                          )}
+                          {a.elevation_gain_m != null && (
+                            <>
+                              <span className="text-zinc-500">Elevation</span>
+                              <span className="text-zinc-300">{Math.round(a.elevation_gain_m)} m</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Col 3: Nutrition */}
+              {showNutritionCol && (
+                <div className="w-96 flex-shrink-0 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Nutrition</h4>
+                    <button
+                      onClick={analyzeNutrition}
+                      disabled={nutritionLoading}
+                      className="text-xs bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 text-zinc-300 rounded px-2 py-0.5"
+                    >
+                      {nutritionLoading ? "Analyzing…" : selectedNutrition ? "Refresh" : "Get advice"}
+                    </button>
+                  </div>
+                  {selectedNutrition ? (
+                    <>
+                      <div className="text-sm text-zinc-400 font-medium">Calories (kcal)</div>
+                      <div className="grid grid-cols-3 gap-2 text-center">
+                        {(["pre", "during", "post"] as const).map(phase => (
+                          <div key={phase} className="bg-zinc-800 rounded p-2">
+                            <div className="text-xs text-zinc-500 capitalize mb-1">{phase}</div>
+                            <div className="text-sm font-semibold text-zinc-200">
+                              {selectedNutrition[`calories_${phase}` as keyof NutritionData] as number}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="text-sm text-zinc-400 font-medium">Hydration (ml)</div>
+                      <div className="grid grid-cols-3 gap-2 text-center">
+                        {(["pre", "during", "post"] as const).map(phase => (
+                          <div key={phase} className="bg-zinc-800/60 rounded p-2">
+                            <div className="text-xs text-zinc-500 capitalize mb-1">{phase}</div>
+                            <div className="text-sm font-semibold text-blue-300">
+                              {selectedNutrition[`hydration_${phase}_ml` as keyof NutritionData] as number}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-sm text-zinc-400 leading-relaxed">{selectedNutrition.notes}</p>
+                    </>
                   ) : (
-                    <h4 className="text-sm font-semibold text-gray-400 mt-0.5">
-                      {prefs.blocked_days.includes(selectedDay) ? "Blocked" : "No workout planned"}
-                    </h4>
+                    <p className="text-sm text-zinc-600 italic">
+                      Click "Get advice" for personalized calorie and hydration recommendations.
+                    </p>
                   )}
                 </div>
-                <button onClick={() => setSelectedDay(null)} className="text-gray-600 hover:text-gray-400 text-sm">✕</button>
-              </div>
-              {selectedWorkout?.description && (
-                <p className="text-sm text-gray-400 leading-relaxed">{selectedWorkout.description}</p>
-              )}
-              {!prefs.blocked_days.includes(selectedDay) && !selectedWorkout && (
-                <p className="text-xs text-gray-600 italic mt-1">Click again to block this day from training.</p>
-              )}
-              {prefs.blocked_days.includes(selectedDay) && (
-                <p className="text-xs text-gray-600 italic mt-1">This day is blocked. Click again to unblock it.</p>
               )}
             </div>
-          )}
-
-          {/* Feedback panel */}
-          {hasPlan && (
-            <div className="mt-6 bg-gray-900 border border-gray-800 rounded-xl p-4">
-              <h4 className="text-sm font-semibold text-gray-200 mb-1">Adjust your schedule</h4>
-              <p className="text-xs text-gray-600 mb-3">
-                e.g. "Move the long run to Friday", "Make week 3 easier", "Add more tempo work"
-              </p>
-              <div className="flex gap-2">
-                <textarea
-                  value={feedback}
-                  onChange={(e) => setFeedback(e.target.value)}
-                  placeholder="Give feedback to your coach…"
-                  rows={2}
-                  className="flex-1 resize-none bg-gray-800 border border-gray-700/60 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-green-500/40 transition-colors"
-                />
-                <button
-                  onClick={handleRevise}
-                  disabled={revising || !feedback.trim()}
-                  className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white text-sm font-medium rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-colors self-end"
-                >
-                  {revising ? "Revising…" : "Revise"}
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );

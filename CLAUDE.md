@@ -24,6 +24,23 @@ make profile          # open profile.md in $EDITOR
 
 There are no automated tests yet.
 
+## Git Commits
+
+Use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) for all commit messages:
+
+```
+<type>[optional scope]: <description>
+
+[optional body]
+```
+
+Common types: `feat`, `fix`, `refactor`, `docs`, `style`, `test`, `chore`.
+
+Examples:
+- `feat(calendar): add nutrition advice for planned workouts`
+- `fix(db): handle missing elevation_m column on existing installs`
+- `docs: update README with calendar and cycling mode features`
+
 ## Architecture
 
 ### Two interfaces, one shared backend
