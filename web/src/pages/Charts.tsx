@@ -14,6 +14,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import type { Mode, ThemeConfig } from "../App";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -54,6 +55,11 @@ interface ChartData {
   weekly_mileage: WeeklyPoint[];
   atl_ctl: ATLCTLPoint[];
   aerobic_efficiency: AerobicEffData;
+}
+
+interface Props {
+  mode: Mode;
+  theme: ThemeConfig;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -131,12 +137,13 @@ function filterByDate<T>(items: T[], key: keyof T, since: string | null, until: 
 
 // ── Weekly Mileage ────────────────────────────────────────────────────────────
 
-function WeeklyMileageChart({ data, unit }: { data: WeeklyPoint[]; unit: Unit }) {
+function WeeklyMileageChart({ data, unit, mode }: { data: WeeklyPoint[]; unit: Unit; mode: Mode }) {
   const ul = unit === "miles" ? "mi" : "km";
+  const title = mode === "cycling" ? "Weekly Distance" : mode === "hybrid" ? "Weekly Distance (All)" : "Weekly Mileage";
 
   return (
     <section className="bg-gray-900 rounded-lg border border-gray-800 p-5">
-      <h3 className="text-gray-100 font-semibold mb-0.5">Weekly Mileage</h3>
+      <h3 className="text-gray-100 font-semibold mb-0.5">{title}</h3>
       <p className="text-gray-500 text-xs mb-4">
         Per-week totals · 4-week rolling average ·{" "}
         <span className="text-green-400">■</span> current week
@@ -328,9 +335,11 @@ function ImprovingLabel(props: Record<string, unknown>) {
   );
 }
 
-function AerobicEfficiencyChart({ data, unit }: { data: AerobicEffData; unit: Unit }) {
+function AerobicEfficiencyChart({ data, unit, mode }: { data: AerobicEffData; unit: Unit; mode: Mode }) {
   const ul = unit === "miles" ? "mi" : "km";
   const { has_enough_data, qualifying_count, scatter, rolling_avg, improving } = data;
+  const activityLabel = mode === "cycling" ? "ride" : "run";
+  const activityLabelPlural = mode === "cycling" ? "rides" : "runs";
 
   // Convert to {x: timestamp, y: value, ...} for ScatterChart
   const scatterXY = useMemo(
@@ -351,7 +360,7 @@ function AerobicEfficiencyChart({ data, unit }: { data: AerobicEffData; unit: Un
   const maxY = allY.length ? Math.max(...allY) : 1;
   const pad = (maxY - minY) * 0.12 || 0.2;
 
-  // Not enough qualifying runs overall
+  // Not enough qualifying activities overall
   if (!has_enough_data) {
     const needed = 10 - qualifying_count;
     return (
@@ -361,17 +370,17 @@ function AerobicEfficiencyChart({ data, unit }: { data: AerobicEffData; unit: Un
           <span className="text-3xl">🫀</span>
           <div>
             <p className="text-gray-300 text-sm font-medium mb-1">
-              {needed} more qualifying {needed === 1 ? "run" : "runs"} needed
+              {needed} more qualifying {needed === 1 ? activityLabel : activityLabelPlural} needed
             </p>
             <p className="text-gray-500 text-xs leading-relaxed max-w-lg">
-              Aerobic efficiency tracks your running speed relative to heart rate — higher means
+              Aerobic efficiency tracks your speed relative to heart rate — higher means
               you&apos;re covering more ground per heartbeat, a reliable signal of improving fitness.
-              It will appear once you have 10 runs logged with average HR between 120–155 bpm
+              It will appear once you have 10 {activityLabelPlural} logged with average HR between 120–155 bpm
               (easy to moderate effort, excluding warm-ups, races, and sensor dropouts).
             </p>
             {qualifying_count > 0 && (
               <p className="text-green-500/80 text-xs mt-2">
-                {qualifying_count} qualifying {qualifying_count === 1 ? "run" : "runs"} recorded so far.
+                {qualifying_count} qualifying {qualifying_count === 1 ? activityLabel : activityLabelPlural} recorded so far.
               </p>
             )}
           </div>
@@ -386,7 +395,7 @@ function AerobicEfficiencyChart({ data, unit }: { data: AerobicEffData; unit: Un
       <section className="bg-gray-900 rounded-lg border border-gray-800 p-5">
         <h3 className="text-gray-100 font-semibold mb-1">Aerobic Efficiency</h3>
         <p className="text-gray-500 text-sm text-center py-10">
-          No qualifying runs (120–155 bpm) in this date range.
+          No qualifying {activityLabelPlural} (120–155 bpm) in this date range.
         </p>
       </section>
     );
@@ -403,7 +412,7 @@ function AerobicEfficiencyChart({ data, unit }: { data: AerobicEffData; unit: Un
         )}
       </div>
       <p className="text-gray-500 text-xs mb-4">
-        Speed / HR for easy efforts (120–155 bpm) · 4-week rolling average · higher = fitter
+        Speed / HR for moderate efforts (120–155 bpm) · 4-week rolling average · higher = fitter
       </p>
       <ResponsiveContainer width="100%" height={280}>
         <ScatterChart margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
@@ -437,8 +446,8 @@ function AerobicEfficiencyChart({ data, unit }: { data: AerobicEffData; unit: Un
           />
           <Legend wrapperStyle={LEGEND_STYLE} />
 
-          {/* Individual run dots */}
-          <Scatter name={`Easy runs (120–155 bpm)`} data={scatterXY} fill="#22d3ee" opacity={0.65} />
+          {/* Individual activity dots */}
+          <Scatter name={`Easy ${activityLabelPlural} (120–155 bpm)`} data={scatterXY} fill="#22d3ee" opacity={0.65} />
 
           {/* 4-week rolling average line */}
           <Scatter
@@ -474,6 +483,7 @@ function FilterBar({
   onPreset,
   onCustomSince,
   onCustomUntil,
+  theme,
 }: {
   preset: FilterPreset;
   customSince: string;
@@ -481,6 +491,7 @@ function FilterBar({
   onPreset: (p: FilterPreset) => void;
   onCustomSince: (v: string) => void;
   onCustomUntil: (v: string) => void;
+  theme: ThemeConfig;
 }) {
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-lg p-3 flex flex-wrap items-center gap-1.5">
@@ -490,7 +501,7 @@ function FilterBar({
           onClick={() => onPreset(id)}
           className={`px-3 py-1 text-xs rounded-md border transition-colors ${
             preset === id
-              ? "bg-green-500/20 text-green-400 border-green-500/30 font-medium"
+              ? `${theme.accentBg} ${theme.accentClass} ${theme.accentBorder} font-medium`
               : "text-gray-400 border-gray-700 hover:bg-gray-800 hover:text-gray-200"
           }`}
         >
@@ -503,7 +514,7 @@ function FilterBar({
             type="date"
             value={customSince}
             onChange={(e) => onCustomSince(e.target.value)}
-            className="bg-gray-800 text-gray-200 border border-gray-600 rounded px-2 py-0.5 text-xs focus:outline-none focus:border-green-500"
+            className="bg-gray-800 text-gray-200 border border-gray-600 rounded px-2 py-0.5 text-xs focus:outline-none focus:border-gray-500"
             style={{ colorScheme: "dark" }}
           />
           <span className="text-gray-500 text-xs">→</span>
@@ -511,7 +522,7 @@ function FilterBar({
             type="date"
             value={customUntil}
             onChange={(e) => onCustomUntil(e.target.value)}
-            className="bg-gray-800 text-gray-200 border border-gray-600 rounded px-2 py-0.5 text-xs focus:outline-none focus:border-green-500"
+            className="bg-gray-800 text-gray-200 border border-gray-600 rounded px-2 py-0.5 text-xs focus:outline-none focus:border-gray-500"
             style={{ colorScheme: "dark" }}
           />
         </div>
@@ -522,7 +533,7 @@ function FilterBar({
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
-export default function Charts() {
+export default function Charts({ mode, theme }: Props) {
   const [unit, setUnit] = useState<Unit>(() => {
     return (localStorage.getItem("strides_unit") as Unit) || "miles";
   });
@@ -538,7 +549,7 @@ export default function Charts() {
     localStorage.setItem("strides_unit", unit);
     setLoading(true);
     setError(null);
-    fetch(`/api/charts?unit=${unit}`)
+    fetch(`/api/charts?unit=${unit}&mode=${mode}`)
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
@@ -551,7 +562,7 @@ export default function Charts() {
         setError(e.message);
         setLoading(false);
       });
-  }, [unit]);
+  }, [unit, mode]);
 
   // Resolve the active date range
   const range = useMemo((): DateRange => {
@@ -598,7 +609,7 @@ export default function Charts() {
                 onClick={() => setUnit(u)}
                 className={`px-4 py-1.5 transition-colors ${
                   unit === u
-                    ? "bg-green-500/20 text-green-400 font-medium"
+                    ? `${theme.accentBg} ${theme.accentClass} font-medium`
                     : "text-gray-400 hover:bg-gray-800"
                 }`}
               >
@@ -615,6 +626,7 @@ export default function Charts() {
           onPreset={setPreset}
           onCustomSince={setCustomSince}
           onCustomUntil={setCustomUntil}
+          theme={theme}
         />
 
         {loading && (
@@ -637,9 +649,9 @@ export default function Charts() {
 
         {filtered && !loading && !empty && (
           <>
-            <WeeklyMileageChart data={filtered.weekly_mileage} unit={unit} />
+            <WeeklyMileageChart data={filtered.weekly_mileage} unit={unit} mode={mode} />
             <ATLCTLChart data={filtered.atl_ctl} unit={unit} />
-            <AerobicEfficiencyChart data={filtered.aerobic_efficiency} unit={unit} />
+            <AerobicEfficiencyChart data={filtered.aerobic_efficiency} unit={unit} mode={mode} />
           </>
         )}
       </div>

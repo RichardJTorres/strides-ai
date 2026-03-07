@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { Mode, ThemeConfig } from "../App";
 
 interface Activity {
   id: number;
@@ -13,6 +14,11 @@ interface Activity {
   sport_type: string | null;
 }
 
+interface Props {
+  mode: Mode;
+  theme: ThemeConfig;
+}
+
 type SortKey = "date" | "name" | "distance_m" | "moving_time_s" | "avg_pace_s_per_km" | "avg_hr" | "elevation_gain_m";
 type SortDir = "asc" | "desc";
 
@@ -21,6 +27,11 @@ function formatPace(s: number | null): string {
   const mins = Math.floor(s / 60);
   const secs = Math.floor(s % 60);
   return `${mins}:${String(secs).padStart(2, "0")}/km`;
+}
+
+function formatSpeed(s: number | null): string {
+  if (!s || s <= 0) return "—";
+  return `${(3600 / s).toFixed(1)} km/h`;
 }
 
 function formatDuration(s: number): string {
@@ -39,7 +50,7 @@ function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
   );
 }
 
-export default function Activities() {
+export default function Activities({ mode, theme }: Props) {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -56,11 +67,12 @@ export default function Activities() {
   const [minDist, setMinDist] = useState("");
 
   useEffect(() => {
-    fetch("/api/activities")
+    setLoading(true);
+    fetch(`/api/activities?mode=${mode}`)
       .then((r) => r.json())
       .then(setActivities)
       .finally(() => setLoading(false));
-  }, []);
+  }, [mode]);
 
   async function handleSync() {
     setSyncing(true);
@@ -70,10 +82,10 @@ export default function Activities() {
       const data = await res.json();
       setSyncMsg(
         data.new_activities > 0
-          ? `${data.new_activities} new run(s) synced.`
+          ? `${data.new_activities} new activit${data.new_activities === 1 ? "y" : "ies"} synced.`
           : "Already up to date."
       );
-      const rows = await fetch("/api/activities").then((r) => r.json());
+      const rows = await fetch(`/api/activities?mode=${mode}`).then((r) => r.json());
       setActivities(rows);
     } catch {
       setSyncMsg("Sync failed.");
@@ -111,6 +123,9 @@ export default function Activities() {
     });
   }, [activities, search, dateFrom, dateTo, minDist, sortKey, sortDir]);
 
+  const paceLabel = mode === "cycling" ? "Speed" : mode === "hybrid" ? "Pace/Speed" : "Pace";
+  const focusClass = "focus:outline-none focus:border-gray-500";
+
   function Th({
     label,
     col,
@@ -144,11 +159,11 @@ export default function Activities() {
           </span>
         </h2>
         <div className="flex items-center gap-3">
-          {syncMsg && <span className="text-sm text-green-400">{syncMsg}</span>}
+          {syncMsg && <span className={`text-sm ${theme.accentClass}`}>{syncMsg}</span>}
           <button
             onClick={handleSync}
             disabled={syncing}
-            className="px-3 py-1.5 rounded-md bg-green-600 hover:bg-green-500 text-white text-sm disabled:opacity-50 transition-colors"
+            className={`px-3 py-1.5 rounded-md ${theme.accentButton} text-white text-sm disabled:opacity-50 transition-colors`}
           >
             {syncing ? "Syncing…" : "Sync Strava"}
           </button>
@@ -162,14 +177,14 @@ export default function Activities() {
           placeholder="Search by name…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="rounded-md bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-green-500 w-48"
+          className={`rounded-md bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-gray-100 placeholder-gray-500 ${focusClass} w-48`}
         />
         <input
           type="date"
           value={dateFrom}
           onChange={(e) => setDateFrom(e.target.value)}
           title="From date"
-          className="rounded-md bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-green-500"
+          className={`rounded-md bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-gray-100 ${focusClass}`}
         />
         <span className="text-gray-600 text-sm">–</span>
         <input
@@ -177,7 +192,7 @@ export default function Activities() {
           value={dateTo}
           onChange={(e) => setDateTo(e.target.value)}
           title="To date"
-          className="rounded-md bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-green-500"
+          className={`rounded-md bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-gray-100 ${focusClass}`}
         />
         <input
           type="number"
@@ -186,7 +201,7 @@ export default function Activities() {
           onChange={(e) => setMinDist(e.target.value)}
           min="0"
           step="1"
-          className="rounded-md bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-green-500 w-24"
+          className={`rounded-md bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-gray-100 placeholder-gray-500 ${focusClass} w-24`}
         />
         {filtersActive && (
           <button
@@ -206,13 +221,13 @@ export default function Activities() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-900 text-gray-400 text-left sticky top-0">
-                <Th label="Date"     col="date" />
-                <Th label="Name"     col="name" />
+                <Th label="Date"      col="date" />
+                <Th label="Name"      col="name" />
                 <Th label="Dist (km)" col="distance_m"       right />
-                <Th label="Time"     col="moving_time_s"     right />
-                <Th label="Pace"     col="avg_pace_s_per_km" right />
-                <Th label="Avg HR"   col="avg_hr"            right />
-                <Th label="Elev (m)" col="elevation_gain_m"  right />
+                <Th label="Time"      col="moving_time_s"     right />
+                <Th label={paceLabel} col="avg_pace_s_per_km" right />
+                <Th label="Avg HR"    col="avg_hr"            right />
+                <Th label="Elev (m)"  col="elevation_gain_m"  right />
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-800">
@@ -243,7 +258,13 @@ export default function Activities() {
                       {formatDuration(a.moving_time_s)}
                     </td>
                     <td className="px-4 py-2 text-right text-gray-400">
-                      {formatPace(a.avg_pace_s_per_km)}
+                      {mode === "cycling"
+                        ? formatSpeed(a.avg_pace_s_per_km)
+                        : mode === "hybrid"
+                        ? (a.sport_type === "Ride" || a.sport_type === "VirtualRide" || a.sport_type === "GravelRide"
+                            ? formatSpeed(a.avg_pace_s_per_km)
+                            : formatPace(a.avg_pace_s_per_km))
+                        : formatPace(a.avg_pace_s_per_km)}
                     </td>
                     <td className="px-4 py-2 text-right text-gray-400">
                       {a.avg_hr ?? "—"}
