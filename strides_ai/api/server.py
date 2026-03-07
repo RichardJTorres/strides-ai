@@ -44,9 +44,7 @@ def main() -> None:
         except Exception:
             pass  # best-effort; no crash on parse failure
 
-    from .app import app, init_backend
-    saved_mode = db.get_setting("mode", "running")
-    init_backend(mode=saved_mode)
+    from .app import app  # lifespan handles backend initialisation at startup
 
     import uvicorn
     port = int(os.environ.get("PORT", 8000))

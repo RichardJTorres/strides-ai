@@ -18,16 +18,25 @@ class BaseBackend(ABC):
     def label(self) -> str:
         """Human-readable identifier shown in the startup banner, e.g. 'claude-sonnet-4-6'."""
 
+    @property
+    @abstractmethod
+    def supports_attachments(self) -> bool:
+        """Whether this backend can accept file/image attachments."""
+
     @abstractmethod
     def stream_turn(
         self,
         system: str,
         user_input: str,
         on_token: Callable[[str], None],
+        attachments: list[dict] | None = None,
     ) -> tuple[str, list[tuple[str, str]]]:
         """
         Append user_input to history, call on_token(chunk) for each text token,
         handle any tool calls, and return:
           - full response text
           - list of (category, content) tuples for memories saved this turn
+
+        attachments: optional list of Anthropic-format content blocks (image or text)
+          to prepend before the user's text in the message.
         """
