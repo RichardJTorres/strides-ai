@@ -65,6 +65,31 @@ CREATE TABLE IF NOT EXISTS profiles (
 )
 """
 
+CREATE_CALENDAR_PREFS = """
+CREATE TABLE IF NOT EXISTS calendar_prefs (
+    id            INTEGER PRIMARY KEY CHECK (id = 1),
+    rest_days     TEXT NOT NULL DEFAULT '[]',
+    long_run_days TEXT NOT NULL DEFAULT '[]',
+    frequency     INTEGER NOT NULL DEFAULT 4,
+    blocked_days  TEXT NOT NULL DEFAULT '[]',
+    races         TEXT NOT NULL DEFAULT '[]'
+)
+"""
+
+CREATE_TRAINING_PLAN = """
+CREATE TABLE IF NOT EXISTS training_plan (
+    date          TEXT PRIMARY KEY,
+    workout_type  TEXT,
+    description   TEXT,
+    distance_km   REAL,
+    elevation_m   REAL,
+    duration_min  INTEGER,
+    intensity     TEXT,
+    nutrition_json TEXT,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+)
+"""
+
 
 def _connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -81,6 +106,14 @@ def _migrate_conversations(conn: sqlite3.Connection) -> None:
         pass  # column already exists
 
 
+def _migrate_training_plan_elevation(conn: sqlite3.Connection) -> None:
+    """Add elevation_m column to training_plan if it does not exist yet."""
+    try:
+        conn.execute("ALTER TABLE training_plan ADD COLUMN elevation_m REAL")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+
+
 def init_db() -> None:
     with _connect() as conn:
         conn.execute(CREATE_TABLE)
@@ -88,7 +121,10 @@ def init_db() -> None:
         conn.execute(CREATE_MEMORIES)
         conn.execute(CREATE_SETTINGS)
         conn.execute(CREATE_PROFILES)
+        conn.execute(CREATE_CALENDAR_PREFS)
+        conn.execute(CREATE_TRAINING_PLAN)
         _migrate_conversations(conn)
+        _migrate_training_plan_elevation(conn)
 
 
 def get_latest_activity_date() -> str | None:
@@ -161,9 +197,7 @@ def upsert_activity(activity: dict[str, Any]) -> None:
 def get_all_activities() -> list[sqlite3.Row]:
     """Return all activities ordered newest-first."""
     with _connect() as conn:
-        return conn.execute(
-            "SELECT * FROM activities ORDER BY date DESC"
-        ).fetchall()
+        return conn.execute("SELECT * FROM activities ORDER BY date DESC").fetchall()
 
 
 def get_activities_for_mode(mode: str) -> list[sqlite3.Row]:
@@ -182,19 +216,16 @@ def get_activities_for_mode(mode: str) -> list[sqlite3.Row]:
                 tuple(CYCLE_TYPES),
             ).fetchall()
         else:  # hybrid
-            return conn.execute(
-                "SELECT * FROM activities ORDER BY date DESC"
-            ).fetchall()
+            return conn.execute("SELECT * FROM activities ORDER BY date DESC").fetchall()
 
 
 # ── Profiles ─────────────────────────────────────────────────────────────────
 
+
 def get_profile_fields(mode: str) -> dict | None:
     """Return the profile fields dict for the given mode, or None if not saved."""
     with _connect() as conn:
-        row = conn.execute(
-            "SELECT fields_json FROM profiles WHERE mode = ?", (mode,)
-        ).fetchone()
+        row = conn.execute("SELECT fields_json FROM profiles WHERE mode = ?", (mode,)).fetchone()
     return json.loads(row["fields_json"]) if row else None
 
 
@@ -208,11 +239,10 @@ def save_profile_fields(mode: str, fields: dict) -> None:
 
 # ── Settings ─────────────────────────────────────────────────────────────────
 
+
 def get_setting(key: str, default: str | None = None) -> str | None:
     with _connect() as conn:
-        row = conn.execute(
-            "SELECT value FROM settings WHERE key = ?", (key,)
-        ).fetchone()
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
     return row["value"] if row else default
 
 
@@ -225,6 +255,7 @@ def set_setting(key: str, value: str) -> None:
 
 
 # ── Conversation history ────────────────────────────────────────────────────
+
 
 def save_message(role: str, content: str, mode: str = "running") -> None:
     with _connect() as conn:
@@ -294,6 +325,7 @@ def search_messages(query: str, limit: int = 20, mode: str | None = None) -> lis
 
 # ── Memories ────────────────────────────────────────────────────────────────
 
+
 def save_memory(category: str, content: str) -> str:
     """Persist a memory. Returns a status string for the tool result."""
     try:
@@ -311,5 +343,101 @@ def get_all_memories() -> list[dict]:
     with _connect() as conn:
         rows = conn.execute(
             "SELECT id, category, content, created_at FROM memories ORDER BY created_at"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── Calendar ─────────────────────────────────────────────────────────────────
+
+
+def get_calendar_prefs() -> dict:
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM calendar_prefs WHERE id = 1").fetchone()
+    if row is None:
+        return {"blocked_days": [], "races": []}
+    return {
+        "blocked_days": json.loads(row["blocked_days"]),
+        "races": json.loads(row["races"]),
+    }
+
+
+def save_calendar_prefs(blocked_days: list, races: list) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO calendar_prefs (id, blocked_days, races)
+            VALUES (1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                blocked_days = excluded.blocked_days,
+                races = excluded.races
+            """,
+            (json.dumps(blocked_days), json.dumps(races)),
+        )
+
+
+def get_training_plan(start_date: str | None = None, end_date: str | None = None) -> list[dict]:
+    with _connect() as conn:
+        if start_date and end_date:
+            rows = conn.execute(
+                "SELECT * FROM training_plan WHERE date BETWEEN ? AND ? ORDER BY date",
+                (start_date, end_date),
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM training_plan ORDER BY date").fetchall()
+    return [dict(r) for r in rows]
+
+
+def save_planned_workout(
+    date: str,
+    workout_type: str,
+    description: str | None,
+    distance_km: float | None,
+    elevation_m: float | None,
+    duration_min: int | None,
+    intensity: str | None,
+) -> None:
+    """Upsert a user-entered planned workout."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO training_plan (date, workout_type, description, distance_km, elevation_m, duration_min, intensity, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(date) DO UPDATE SET
+                workout_type  = excluded.workout_type,
+                description   = excluded.description,
+                distance_km   = excluded.distance_km,
+                elevation_m   = excluded.elevation_m,
+                duration_min  = excluded.duration_min,
+                intensity     = excluded.intensity,
+                created_at    = excluded.created_at,
+                nutrition_json = NULL
+            """,
+            (date, workout_type, description, distance_km, elevation_m, duration_min, intensity),
+        )
+
+
+def delete_planned_workout(date: str) -> None:
+    with _connect() as conn:
+        conn.execute("DELETE FROM training_plan WHERE date = ?", (date,))
+
+
+def save_workout_nutrition(date: str, nutrition: dict) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE training_plan SET nutrition_json = ? WHERE date = ?",
+            (json.dumps(nutrition), date),
+        )
+
+
+def get_upcoming_planned_workouts(days: int = 14) -> list[dict]:
+    """Return planned workouts from today through the next `days` days."""
+    from datetime import date as date_cls, timedelta
+
+    today = date_cls.today().isoformat()
+    end = (date_cls.today() + timedelta(days=days)).isoformat()
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM training_plan WHERE date >= ? AND date <= ? ORDER BY date",
+            (today, end),
         ).fetchall()
     return [dict(r) for r in rows]

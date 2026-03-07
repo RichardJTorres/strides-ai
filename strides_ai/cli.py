@@ -42,6 +42,7 @@ def _build_backend(initial_history: list[dict]):
 
 # ── charts subcommand ─────────────────────────────────────────────────────────
 
+
 def _run_charts(unit: str, output: str | None) -> None:
     try:
         import matplotlib
@@ -110,8 +111,16 @@ def _plot_weekly_mileage(ax, weeks: list[dict], ul: str, fig) -> None:
     colors = ["#4ade80" if w["is_current"] else "#22d3ee" for w in weeks]
 
     ax.bar(dates, dists, color=colors, width=5, alpha=0.85, label=f"Weekly distance ({ul})")
-    ax.plot(dates, rollavg, color="#fb923c", linewidth=2, linestyle="--",
-            marker="o", markersize=3, label="4-week avg")
+    ax.plot(
+        dates,
+        rollavg,
+        color="#fb923c",
+        linewidth=2,
+        linestyle="--",
+        marker="o",
+        markersize=3,
+        label="4-week avg",
+    )
 
     ax.set_title(f"Weekly {ul.upper() if ul == 'km' else 'Mileage'}")
     ax.set_ylabel(f"Distance ({ul})")
@@ -121,8 +130,9 @@ def _plot_weekly_mileage(ax, weeks: list[dict], ul: str, fig) -> None:
 
     handles, labels = ax.get_legend_handles_labels()
     handles.append(Patch(color="#4ade80", alpha=0.85, label="Current week"))
-    ax.legend(handles=handles, facecolor="#1f2937", edgecolor="#374151",
-              labelcolor="#d1d5db", fontsize=9)
+    ax.legend(
+        handles=handles, facecolor="#1f2937", edgecolor="#374151", labelcolor="#d1d5db", fontsize=9
+    )
     _style_ax(ax)
 
 
@@ -147,8 +157,9 @@ def _plot_atl_ctl(ax, atl_ctl: list[dict], ul: str, fig) -> None:
     ax.plot(dates2, ctl_vals, color="#60a5fa", linewidth=1.5, label=f"CTL 42d ({ul}/day)")
     ax.set_ylabel(f"Load ({ul}/day)")
 
-    ax_ratio.plot(dates2, ratio_vals, color="#a78bfa", linewidth=1.5,
-                  linestyle="--", label="ATL/CTL ratio")
+    ax_ratio.plot(
+        dates2, ratio_vals, color="#a78bfa", linewidth=1.5, linestyle="--", label="ATL/CTL ratio"
+    )
     ax_ratio.axhspan(0.8, 1.3, alpha=0.08, color="#22c55e")
     ax_ratio.axhspan(1.3, 2.5, alpha=0.08, color="#ef4444")
     ax_ratio.axhspan(0.0, 0.8, alpha=0.08, color="#6b7280")
@@ -168,15 +179,26 @@ def _plot_atl_ctl(ax, atl_ctl: list[dict], ul: str, fig) -> None:
 
     lines1, labels1 = ax.get_legend_handles_labels()
     lines2, labels2 = ax_ratio.get_legend_handles_labels()
-    ax.legend(lines1 + lines2, labels1 + labels2, loc="upper left",
-              facecolor="#1f2937", edgecolor="#374151", labelcolor="#d1d5db", fontsize=9)
+    ax.legend(
+        lines1 + lines2,
+        labels1 + labels2,
+        loc="upper left",
+        facecolor="#1f2937",
+        edgecolor="#374151",
+        labelcolor="#d1d5db",
+        fontsize=9,
+    )
     _style_ax(ax)
 
     annot = ax_ratio.annotate(
-        "", xy=(0, 0), xytext=(15, 15), textcoords="offset points",
+        "",
+        xy=(0, 0),
+        xytext=(15, 15),
+        textcoords="offset points",
         bbox=dict(boxstyle="round,pad=0.4", fc="#1f2937", ec="#374151", alpha=0.95),
         arrowprops=dict(arrowstyle="->", color="#6b7280"),
-        color="#f3f4f6", fontsize=8,
+        color="#f3f4f6",
+        fontsize=8,
     )
     annot.set_visible(False)
 
@@ -195,7 +217,7 @@ def _plot_atl_ctl(ax, atl_ctl: list[dict], ul: str, fig) -> None:
             r = ratio_vals[idx]
             r_str = f"{r:.2f}" if not math.isnan(r) else "N/A"
             if not math.isnan(r):
-                zone = ("⚠ Injury risk" if r > 1.3 else "↓ Detraining" if r < 0.8 else "✓ Optimal")
+                zone = "⚠ Injury risk" if r > 1.3 else "↓ Detraining" if r < 0.8 else "✓ Optimal"
             else:
                 zone = ""
             annot.xy = (mdates.date2num(dates2[idx]), r if not math.isnan(r) else 0)
@@ -218,9 +240,9 @@ def _plot_pace_scatter(ax, scatter: dict, trends: dict, unit: str, ul: str, fig)
     med_thresh = 6 if unit == "miles" else 10
 
     bucket_cfg = [
-        ("long",   f"Long (≥{med_thresh} {ul})",                     "#6366f1"),
-        ("medium", f"Medium ({short_thresh}–{med_thresh} {ul})",      "#10b981"),
-        ("short",  f"Short (<{short_thresh} {ul})",                   "#f59e0b"),
+        ("long", f"Long (≥{med_thresh} {ul})", "#6366f1"),
+        ("medium", f"Medium ({short_thresh}–{med_thresh} {ul})", "#10b981"),
+        ("short", f"Short (<{short_thresh} {ul})", "#f59e0b"),
     ]
 
     def fmt_pace(s, _):
@@ -243,8 +265,7 @@ def _plot_pace_scatter(ax, scatter: dict, trends: dict, unit: str, ul: str, fig)
             ax.plot(t_dates, t_paces, color=color, linewidth=2.0, alpha=0.85)
 
     if not any_data:
-        ax.text(0.5, 0.5, "No data with pace", transform=ax.transAxes,
-                ha="center", color="#6b7280")
+        ax.text(0.5, 0.5, "No data with pace", transform=ax.transAxes, ha="center", color="#6b7280")
         _style_ax(ax)
         return
 
@@ -261,6 +282,7 @@ def _plot_pace_scatter(ax, scatter: dict, trends: dict, unit: str, ul: str, fig)
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
+
 def main() -> None:
     load_dotenv()
 
@@ -270,17 +292,22 @@ def main() -> None:
     # charts subcommand
     charts_p = subparsers.add_parser("charts", help="Generate training charts")
     charts_p.add_argument(
-        "--unit", choices=["miles", "km"], default="miles",
+        "--unit",
+        choices=["miles", "km"],
+        default="miles",
         help="Distance unit (default: miles)",
     )
     charts_p.add_argument(
-        "--output", metavar="FILE",
+        "--output",
+        metavar="FILE",
         help="Save PNG to FILE (default: ~/.strides_ai/charts.png)",
     )
 
     # Top-level flags for the default chat mode
     parser.add_argument(
-        "--mode", choices=["running", "cycling", "hybrid"], default="running",
+        "--mode",
+        choices=["running", "cycling", "hybrid"],
+        default="running",
         help="Training mode (default: running)",
     )
     args = parser.parse_args()

@@ -87,12 +87,8 @@ class ClaudeBackend(BaseBackend):
                 if not (hasattr(block, "type") and block.type == "tool_use"):
                     continue
                 if block.name == "save_memory":
-                    result = db.save_memory(
-                        block.input["category"], block.input["content"]
-                    )
-                    memories_saved.append(
-                        (block.input["category"], block.input["content"])
-                    )
+                    result = db.save_memory(block.input["category"], block.input["content"])
+                    memories_saved.append((block.input["category"], block.input["content"]))
                     tool_results.append(
                         {
                             "type": "tool_result",

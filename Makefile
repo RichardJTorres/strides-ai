@@ -24,7 +24,8 @@ install: $(VENV)/bin/activate web/node_modules
 $(VENV)/bin/activate:
 	python3 -m venv $(VENV)
 	$(PIP) install --quiet --upgrade pip
-	$(PIP) install -e .
+	$(PIP) install -e ".[dev]"
+	$(VENV)/bin/pre-commit install
 
 # Re-run pip if pyproject.toml is newer than the venv marker
 $(VENV)/bin/strides-ai: pyproject.toml $(VENV)/bin/activate

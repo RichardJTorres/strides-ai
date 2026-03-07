@@ -19,6 +19,7 @@ def _pace(avg_pace_s_per_km: float, unit: str) -> float:
 
 # ── Weekly mileage ────────────────────────────────────────────────────────────
 
+
 def compute_weekly_mileage(activities: list[dict], unit: str) -> list[dict]:
     """Weekly totals (Mon–Sun) with 4-week trailing rolling average."""
     weekly: dict[date, float] = defaultdict(float)
@@ -44,16 +45,19 @@ def compute_weekly_mileage(activities: list[dict], unit: str) -> list[dict]:
     for i, w in enumerate(weeks):
         dist = weekly.get(w, 0.0)
         window = [weekly.get(weeks[j], 0.0) for j in range(max(0, i - 3), i + 1)]
-        result.append({
-            "week": w.isoformat(),
-            "distance": round(dist, 2),
-            "rolling_avg": round(sum(window) / len(window), 2),
-            "is_current": w == current_week,
-        })
+        result.append(
+            {
+                "week": w.isoformat(),
+                "distance": round(dist, 2),
+                "rolling_avg": round(sum(window) / len(window), 2),
+                "is_current": w == current_week,
+            }
+        )
     return result
 
 
 # ── ATL / CTL ─────────────────────────────────────────────────────────────────
+
 
 def compute_atl_ctl(activities: list[dict], unit: str) -> list[dict]:
     """Daily ATL (7-day EWA), CTL (42-day EWA), and their ratio."""
@@ -76,12 +80,14 @@ def compute_atl_ctl(activities: list[dict], unit: str) -> list[dict]:
         atl += alpha_atl * (load - atl)
         ctl += alpha_ctl * (load - ctl)
         ratio = round(atl / ctl, 3) if ctl > 1e-3 else None
-        result.append({
-            "date": cur.isoformat(),
-            "atl": round(atl, 3),
-            "ctl": round(ctl, 3),
-            "ratio": ratio,
-        })
+        result.append(
+            {
+                "date": cur.isoformat(),
+                "atl": round(atl, 3),
+                "ctl": round(ctl, 3),
+                "ratio": ratio,
+            }
+        )
         cur += timedelta(days=1)
     return result
 
@@ -110,13 +116,15 @@ def compute_aerobic_efficiency(activities: list[dict], unit: str) -> dict:
             continue
         # efficiency: how fast per HR unit (higher = better)
         eff = (3600.0 / pace_s) / hr * 100.0
-        qualifying.append({
-            "date": act["date"],
-            "efficiency": round(eff, 3),
-            "name": act.get("name") or "",
-            "hr": round(hr, 1),
-            "pace_s": round(pace_s),
-        })
+        qualifying.append(
+            {
+                "date": act["date"],
+                "efficiency": round(eff, 3),
+                "name": act.get("name") or "",
+                "hr": round(hr, 1),
+                "pace_s": round(pace_s),
+            }
+        )
 
     qualifying.sort(key=lambda x: x["date"])
     n = len(qualifying)
@@ -136,26 +144,32 @@ def compute_aerobic_efficiency(activities: list[dict], unit: str) -> dict:
         d = date.fromisoformat(pt["date"])
         window_start = d - timedelta(days=27)
         window = [
-            q["efficiency"] for q in qualifying
+            q["efficiency"]
+            for q in qualifying
             if window_start <= date.fromisoformat(q["date"]) <= d
         ]
-        rolling_avg.append({
-            "date": pt["date"],
-            "avg": round(sum(window) / len(window), 3),
-        })
+        rolling_avg.append(
+            {
+                "date": pt["date"],
+                "avg": round(sum(window) / len(window), 3),
+            }
+        )
 
     # Improving: last 4 weeks avg vs previous 4 weeks avg
     today = date.today()
     last_4wk = [
-        q["efficiency"] for q in qualifying
+        q["efficiency"]
+        for q in qualifying
         if date.fromisoformat(q["date"]) >= today - timedelta(days=28)
     ]
     prev_4wk = [
-        q["efficiency"] for q in qualifying
+        q["efficiency"]
+        for q in qualifying
         if today - timedelta(days=56) <= date.fromisoformat(q["date"]) < today - timedelta(days=28)
     ]
     improving = (
-        len(last_4wk) >= 2 and len(prev_4wk) >= 2
+        len(last_4wk) >= 2
+        and len(prev_4wk) >= 2
         and (sum(last_4wk) / len(last_4wk)) > (sum(prev_4wk) / len(prev_4wk))
     )
 
@@ -169,6 +183,7 @@ def compute_aerobic_efficiency(activities: list[dict], unit: str) -> dict:
 
 
 # ── Combined ──────────────────────────────────────────────────────────────────
+
 
 def get_chart_data(activities, unit: str = "miles") -> dict:
     acts = [dict(a) for a in activities]

@@ -16,8 +16,8 @@ from strides_ai.charts_data import (
     get_chart_data,
 )
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def make_activity(
     date_str: str,
@@ -36,12 +36,13 @@ def make_activity(
 
 
 # Use fixed past dates that will never be "current week"
-PAST_MONDAY = "2024-01-01"   # Monday
+PAST_MONDAY = "2024-01-01"  # Monday
 PAST_TUESDAY = "2024-01-02"
 PAST_NEXT_MONDAY = "2024-01-08"
 
 
 # ── _dist ─────────────────────────────────────────────────────────────────────
+
 
 def test_dist_miles():
     assert _dist(1000, "miles") == pytest.approx(1000 * M_TO_MI)
@@ -61,6 +62,7 @@ def test_dist_none_treated_as_zero():
 
 # ── _pace ─────────────────────────────────────────────────────────────────────
 
+
 def test_pace_km_is_identity():
     assert _pace(300.0, "km") == pytest.approx(300.0)
 
@@ -71,6 +73,7 @@ def test_pace_miles_converts():
 
 
 # ── compute_weekly_mileage ────────────────────────────────────────────────────
+
 
 def test_weekly_mileage_empty():
     assert compute_weekly_mileage([], "km") == []
@@ -133,6 +136,7 @@ def test_weekly_mileage_unit_miles():
 
 # ── compute_atl_ctl ───────────────────────────────────────────────────────────
 
+
 def test_atl_ctl_empty():
     assert compute_atl_ctl([], "km") == []
 
@@ -187,6 +191,7 @@ def test_atl_ctl_ctl_smoother_than_atl():
 
 # ── compute_aerobic_efficiency ────────────────────────────────────────────────
 
+
 def test_aerobic_efficiency_empty():
     result = compute_aerobic_efficiency([], "km")
     assert result["has_enough_data"] is False
@@ -203,8 +208,8 @@ def test_aerobic_efficiency_too_few_runs():
 def test_aerobic_efficiency_hr_out_of_range_excluded():
     # HR below 120 and above 155 should be excluded
     acts = [
-        make_activity("2024-01-01", avg_hr=100),   # too low
-        make_activity("2024-01-02", avg_hr=160),   # too high
+        make_activity("2024-01-01", avg_hr=100),  # too low
+        make_activity("2024-01-02", avg_hr=160),  # too high
         make_activity("2024-01-03", avg_hr=None),  # missing
     ]
     result = compute_aerobic_efficiency(acts, "km")
@@ -246,6 +251,7 @@ def test_aerobic_efficiency_scatter_sorted_by_date():
 
 
 # ── get_chart_data ─────────────────────────────────────────────────────────────
+
 
 def test_get_chart_data_structure():
     acts = [make_activity(PAST_MONDAY)]

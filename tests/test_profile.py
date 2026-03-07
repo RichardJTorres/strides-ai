@@ -10,8 +10,8 @@ from strides_ai.profile import (
     profile_to_text,
 )
 
-
 # ── _strip_comments ───────────────────────────────────────────────────────────
+
 
 def test_strip_comments_removes_inline():
     assert _strip_comments("hello <!-- world --> there") == "hello  there"
@@ -172,19 +172,30 @@ def test_get_pb_marathon():
 
 # ── get_default_fields ────────────────────────────────────────────────────────
 
+
 def test_get_default_fields_running_keys():
     fields = get_default_fields("running")
     assert set(fields.keys()) == {
-        "personal", "running_background", "personal_bests",
-        "goals", "injuries_and_health", "gear", "other_notes",
+        "personal",
+        "running_background",
+        "personal_bests",
+        "goals",
+        "injuries_and_health",
+        "gear",
+        "other_notes",
     }
 
 
 def test_get_default_fields_cycling_keys():
     fields = get_default_fields("cycling")
     assert set(fields.keys()) == {
-        "personal", "cycling_background", "cycling_bests",
-        "goals", "injuries_and_health", "gear", "other_notes",
+        "personal",
+        "cycling_background",
+        "cycling_bests",
+        "goals",
+        "injuries_and_health",
+        "gear",
+        "other_notes",
     }
 
 
@@ -217,6 +228,7 @@ def test_get_default_fields_unknown_mode_falls_back_to_running():
 
 
 # ── profile_to_text ───────────────────────────────────────────────────────────
+
 
 def test_profile_to_text_none_returns_empty():
     assert profile_to_text(None, "running") == ""
@@ -274,11 +286,17 @@ def test_profile_to_text_skips_blank_fields():
 
 # ── parse_legacy_profile ──────────────────────────────────────────────────────
 
+
 def test_parse_legacy_profile_returns_all_keys():
     result = parse_legacy_profile(SAMPLE_DOC)
     assert set(result.keys()) == {
-        "personal", "running_background", "personal_bests",
-        "goals", "injuries_and_health", "gear", "other_notes",
+        "personal",
+        "running_background",
+        "personal_bests",
+        "goals",
+        "injuries_and_health",
+        "gear",
+        "other_notes",
     }
 
 

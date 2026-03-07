@@ -4,8 +4,8 @@ import pytest
 
 from strides_ai import db
 
-
 # ── init_db ───────────────────────────────────────────────────────────────────
+
 
 def test_init_db_creates_db_file(tmp_db):
     assert tmp_db.exists()
@@ -17,6 +17,7 @@ def test_init_db_idempotent(tmp_db):
 
 
 # ── upsert_activity / get_all_activities ──────────────────────────────────────
+
 
 def test_upsert_and_retrieve(tmp_db, sample_activity):
     db.upsert_activity(sample_activity)
@@ -84,6 +85,7 @@ def test_get_stored_ids_empty(tmp_db):
 
 # ── save_message / get_recent_messages ────────────────────────────────────────
 
+
 def test_save_and_get_messages(tmp_db):
     db.save_message("user", "Hello coach")
     db.save_message("assistant", "Hello athlete")
@@ -117,6 +119,7 @@ def test_get_recent_messages_empty(tmp_db):
 
 
 # ── save_memory / get_all_memories ────────────────────────────────────────────
+
 
 def test_save_and_get_memories(tmp_db):
     db.save_memory("goal", "Sub-3 marathon")
@@ -157,6 +160,7 @@ def test_get_all_memories_has_expected_keys(tmp_db):
 
 # ── get_activities_for_mode ───────────────────────────────────────────────────
 
+
 def test_get_activities_for_mode_running(tmp_db, sample_activity, sample_cycling_activity):
     db.upsert_activity(sample_activity)
     db.upsert_activity(sample_cycling_activity)
@@ -186,6 +190,7 @@ def test_get_activities_for_mode_empty(tmp_db):
 
 # ── cycling cadence not doubled ───────────────────────────────────────────────
 
+
 def test_upsert_does_not_double_cycling_cadence(tmp_db, sample_cycling_activity):
     db.upsert_activity(sample_cycling_activity)
     row = db.get_all_activities()[0]
@@ -193,6 +198,7 @@ def test_upsert_does_not_double_cycling_cadence(tmp_db, sample_cycling_activity)
 
 
 # ── get_setting / set_setting ─────────────────────────────────────────────────
+
 
 def test_get_setting_default(tmp_db):
     assert db.get_setting("mode", "running") == "running"
@@ -214,6 +220,7 @@ def test_set_setting_overwrites(tmp_db):
 
 
 # ── get_profile_fields / save_profile_fields ──────────────────────────────────
+
 
 def test_get_profile_fields_returns_none_when_not_saved(tmp_db):
     assert db.get_profile_fields("running") is None
@@ -242,6 +249,7 @@ def test_save_profile_fields_replaces_existing(tmp_db):
 
 # ── mode-scoped conversation history ─────────────────────────────────────────
 
+
 def test_save_message_mode_isolation(tmp_db):
     db.save_message("user", "running question", mode="running")
     db.save_message("user", "cycling question", mode="cycling")
@@ -254,6 +262,7 @@ def test_save_message_mode_isolation(tmp_db):
 
 
 # ── get_message_count ─────────────────────────────────────────────────────────
+
 
 def test_get_message_count_empty(tmp_db):
     assert db.get_message_count() == 0
@@ -273,6 +282,7 @@ def test_get_message_count_filtered_by_mode(tmp_db):
 
 
 # ── get_messages_before ───────────────────────────────────────────────────────
+
 
 def test_get_messages_before_returns_older(tmp_db):
     for i in range(5):
@@ -314,6 +324,7 @@ def test_get_messages_before_mode_filter(tmp_db):
 
 
 # ── search_messages ───────────────────────────────────────────────────────────
+
 
 def test_search_messages_finds_match(tmp_db):
     db.save_message("user", "What is my 5K pace?")

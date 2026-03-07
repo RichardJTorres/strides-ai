@@ -110,7 +110,9 @@ def _open_browser(url: str) -> None:
             ["/mnt/c/Windows/System32/cmd.exe", "/c", "start", "", url],
             [
                 "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
-                "-NoProfile", "-Command", f"Start-Process '{url}'",
+                "-NoProfile",
+                "-Command",
+                f"Start-Process '{url}'",
             ],
         ]
         for cmd in candidates:

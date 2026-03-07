@@ -25,7 +25,6 @@ from ..coach import build_initial_history, build_system, RECALL_MESSAGES
 from ..profile import profile_to_text, get_default_fields
 from ..sync import sync_activities
 
-
 VALID_MODES = {"running", "cycling", "hybrid"}
 UPLOADS_DIR = Path.home() / ".strides_ai" / "uploads"
 SUPPORTED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
@@ -119,6 +118,7 @@ app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR), check_dir=False), 
 
 # ── Settings ──────────────────────────────────────────────────────────────────
 
+
 class SettingsBody(BaseModel):
     mode: str
 
@@ -138,6 +138,7 @@ def put_settings(request: Request, body: SettingsBody):
 
 
 # ── Chat ─────────────────────────────────────────────────────────────────────
+
 
 @app.post("/api/chat")
 async def chat(
@@ -202,6 +203,7 @@ async def chat(
 
 # ── Activities ────────────────────────────────────────────────────────────────
 
+
 @app.get("/api/activities")
 def activities(mode: str | None = None):
     if mode and mode in VALID_MODES:
@@ -212,6 +214,7 @@ def activities(mode: str | None = None):
 
 
 # ── Charts ────────────────────────────────────────────────────────────────────
+
 
 @app.get("/api/charts")
 def charts(unit: str = "miles", mode: str = "running"):
@@ -225,12 +228,14 @@ def charts(unit: str = "miles", mode: str = "running"):
 
 # ── Memories ──────────────────────────────────────────────────────────────────
 
+
 @app.get("/api/memories")
 def memories():
     return db.get_all_memories()
 
 
 # ── Profile ───────────────────────────────────────────────────────────────────
+
 
 class ProfileBody(BaseModel):
     fields: dict
@@ -262,6 +267,7 @@ def reset_profile(request: Request, mode: str | None = None):
 
 # ── Sync ──────────────────────────────────────────────────────────────────────
 
+
 @app.post("/api/sync")
 def sync(request: Request, full: bool = False):
     client_id = os.environ.get("STRAVA_CLIENT_ID", "")
@@ -277,6 +283,7 @@ def sync(request: Request, full: bool = False):
 
 
 # ── History ───────────────────────────────────────────────────────────────────
+
 
 @app.get("/api/history")
 def history(limit: int = RECALL_MESSAGES, mode: str | None = None):
@@ -298,7 +305,83 @@ def history_search(q: str, limit: int = 20, mode: str | None = None):
     return {"results": db.search_messages(q.strip(), limit, mode=mode)}
 
 
+# ── Calendar ──────────────────────────────────────────────────────────────────
+
+
+class CalendarPrefsBody(BaseModel):
+    blocked_days: list[str] = []
+    races: list[dict] = []
+
+
+class WorkoutBody(BaseModel):
+    workout_type: str
+    description: str | None = None
+    distance_km: float | None = None
+    elevation_m: float | None = None
+    duration_min: int | None = None
+    intensity: str | None = None
+
+
+@app.get("/api/calendar/prefs")
+def get_calendar_prefs():
+    return db.get_calendar_prefs()
+
+
+@app.put("/api/calendar/prefs")
+def put_calendar_prefs(body: CalendarPrefsBody):
+    db.save_calendar_prefs(body.blocked_days, body.races)
+    return {"status": "ok"}
+
+
+@app.get("/api/calendar/plan")
+def get_calendar_plan():
+    return db.get_training_plan()
+
+
+@app.put("/api/calendar/plan/{date}")
+def put_planned_workout(date: str, body: WorkoutBody):
+    db.save_planned_workout(
+        date,
+        body.workout_type,
+        body.description,
+        body.distance_km,
+        body.elevation_m,
+        body.duration_min,
+        body.intensity,
+    )
+    return {"status": "ok", "date": date}
+
+
+@app.delete("/api/calendar/plan/{date}")
+def delete_planned_workout(date: str):
+    db.delete_planned_workout(date)
+    return {"status": "ok"}
+
+
+@app.post("/api/calendar/plan/{date}/nutrition")
+def analyze_workout_nutrition(date: str, request: Request):
+    from ..schedule import analyze_nutrition
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not set")
+
+    plan = db.get_training_plan()
+    workout = next((w for w in plan if w["date"] == date), None)
+    if not workout:
+        raise HTTPException(status_code=404, detail="No planned workout found for this date")
+
+    mode = getattr(request.app.state, "mode", "running")
+    profile_fields = db.get_profile_fields(mode)
+    profile_text = profile_to_text(profile_fields, mode)
+
+    nutrition = analyze_nutrition(workout, profile_text, api_key)
+    db.save_workout_nutrition(date, nutrition)
+    return nutrition
+
+
 # ── Status ────────────────────────────────────────────────────────────────────
+
 
 @app.get("/api/status")
 def status(request: Request, backend=Depends(get_backend)):

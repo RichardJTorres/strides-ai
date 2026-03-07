@@ -22,7 +22,11 @@ strides-ai = "strides_ai.cli:main"
 strides-ai-web = "strides_ai.api.server:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-mock>=3.12"]
+dev = ["pytest>=8.0", "pytest-mock>=3.12", "black>=24.0", "pre-commit>=3.0"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["strides_ai"]
