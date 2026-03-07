@@ -1,13 +1,13 @@
-"""Fetch runs from Strava and persist them locally."""
+"""Fetch runs and rides from Strava and persist them locally."""
 
 from typing import Generator
 
 import httpx
 
-from .db import get_stored_ids, upsert_activity
+from .db import get_stored_ids, upsert_activity, RUN_TYPES, CYCLE_TYPES
 
 ACTIVITIES_URL = "https://www.strava.com/api/v3/athlete/activities"
-RUN_TYPES = {"Run", "TrailRun", "VirtualRun"}
+ALL_SYNCED_TYPES = RUN_TYPES | CYCLE_TYPES
 PAGE_SIZE = 100
 
 
@@ -34,7 +34,7 @@ def _iter_activities(access_token: str) -> Generator[dict, None, None]:
 
 def sync_activities(access_token: str, full: bool = False) -> int:
     """
-    Sync run activities from Strava.
+    Sync run and cycling activities from Strava.
 
     If *full* is False (default), stops as soon as it encounters an activity
     already in the database — fast incremental sync.
@@ -49,7 +49,7 @@ def sync_activities(access_token: str, full: bool = False) -> int:
 
     for activity in _iter_activities(access_token):
         sport = activity.get("sport_type") or activity.get("type", "")
-        if sport not in RUN_TYPES:
+        if sport not in ALL_SYNCED_TYPES:
             continue
 
         if not full and activity["id"] in stored_ids:

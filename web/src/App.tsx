@@ -6,6 +6,48 @@ import Profile from "./pages/Profile";
 import Settings from "./pages/Settings";
 
 type Tab = "chat" | "activities" | "charts" | "profile" | "settings";
+export type Mode = "running" | "cycling" | "hybrid";
+
+export interface ThemeConfig {
+  accentClass: string;
+  accentBg: string;
+  accentBorder: string;
+  accentButton: string;
+  accentFocus: string;
+  accentActive: string;
+  label: string;
+}
+
+// All Tailwind class strings are written as complete literals so JIT scanner picks them up
+export const THEMES: Record<Mode, ThemeConfig> = {
+  running: {
+    accentClass: "text-green-400",
+    accentBg: "bg-green-500/20",
+    accentBorder: "border-green-500/30",
+    accentButton: "bg-green-600 hover:bg-green-500",
+    accentFocus: "focus:border-green-500/40 focus:ring-green-500/10",
+    accentActive: "bg-green-500/20 text-green-400",
+    label: "Running Coach",
+  },
+  cycling: {
+    accentClass: "text-blue-400",
+    accentBg: "bg-blue-500/20",
+    accentBorder: "border-blue-500/30",
+    accentButton: "bg-blue-600 hover:bg-blue-500",
+    accentFocus: "focus:border-blue-500/40 focus:ring-blue-500/10",
+    accentActive: "bg-blue-500/20 text-blue-400",
+    label: "Cycling Coach",
+  },
+  hybrid: {
+    accentClass: "text-purple-400",
+    accentBg: "bg-purple-500/20",
+    accentBorder: "border-purple-500/30",
+    accentButton: "bg-purple-600 hover:bg-purple-500",
+    accentFocus: "focus:border-purple-500/40 focus:ring-purple-500/10",
+    accentActive: "bg-purple-500/20 text-purple-400",
+    label: "Hybrid Coach",
+  },
+};
 
 const ICONS: Record<Tab, JSX.Element> = {
   chat: (
@@ -53,6 +95,8 @@ function tabFromHash(): Tab {
 
 export default function App() {
   const [tab, setTab] = useState<Tab>(tabFromHash);
+  const [mode, setMode] = useState<Mode>("running");
+  const [modeLoaded, setModeLoaded] = useState(false);
 
   useEffect(() => {
     const onHashChange = () => setTab(tabFromHash());
@@ -60,8 +104,29 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
+  // Load persisted mode from server on mount
+  useEffect(() => {
+    fetch("/api/settings")
+      .then((r) => r.json())
+      .then((data: { mode: Mode }) => {
+        if (data.mode) setMode(data.mode);
+      })
+      .catch(() => {})
+      .finally(() => setModeLoaded(true));
+  }, []);
+
   function navigate(t: Tab) {
     location.hash = t;
+  }
+
+  const theme = THEMES[mode];
+
+  if (!modeLoaded) {
+    return (
+      <div className="flex h-screen bg-gray-950 items-center justify-center text-gray-500 text-sm">
+        Loading…
+      </div>
+    );
   }
 
   return (
@@ -69,8 +134,8 @@ export default function App() {
       {/* Sidebar */}
       <nav className="w-48 shrink-0 bg-gray-900 border-r border-gray-800 flex flex-col">
         <div className="p-4 border-b border-gray-800">
-          <h1 className="font-bold text-green-400 text-lg">Strides AI</h1>
-          <p className="text-xs text-gray-500 mt-0.5">Running Coach</p>
+          <h1 className={`font-bold ${theme.accentClass} text-lg`}>Strides AI</h1>
+          <p className="text-xs text-gray-500 mt-0.5">{theme.label}</p>
         </div>
         <ul className="flex-1 p-2 space-y-1">
           {TABS.map((t) => (
@@ -79,7 +144,7 @@ export default function App() {
                 onClick={() => navigate(t.id)}
                 className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors flex items-center gap-2 ${
                   tab === t.id
-                    ? "bg-green-500/20 text-green-400 font-medium"
+                    ? `${theme.accentActive} font-medium`
                     : "text-gray-400 hover:bg-gray-800 hover:text-gray-100"
                 }`}
               >
@@ -94,7 +159,7 @@ export default function App() {
             onClick={() => navigate("settings")}
             className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors flex items-center gap-2 ${
               tab === "settings"
-                ? "bg-green-500/20 text-green-400 font-medium"
+                ? `${theme.accentActive} font-medium`
                 : "text-gray-400 hover:bg-gray-800 hover:text-gray-100"
             }`}
           >
@@ -106,11 +171,11 @@ export default function App() {
 
       {/* Main content */}
       <main className="flex-1 overflow-hidden">
-        {tab === "chat" && <Chat />}
-        {tab === "activities" && <Activities />}
-        {tab === "charts" && <Charts />}
-        {tab === "profile" && <Profile />}
-        {tab === "settings" && <Settings />}
+        {tab === "chat" && <Chat mode={mode} theme={theme} />}
+        {tab === "activities" && <Activities mode={mode} theme={theme} />}
+        {tab === "charts" && <Charts mode={mode} theme={theme} />}
+        {tab === "profile" && <Profile mode={mode} theme={theme} />}
+        {tab === "settings" && <Settings mode={mode} setMode={setMode} theme={theme} />}
       </main>
     </div>
   );

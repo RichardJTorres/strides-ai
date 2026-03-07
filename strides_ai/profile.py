@@ -1,105 +1,205 @@
-"""Athlete profile — loaded from a user-editable Markdown file."""
+"""Athlete profile — stored per-mode in the database."""
 
+import copy
 import re
-from pathlib import Path
 
-PROFILE_PATH = Path.home() / ".strides_ai" / "profile.md"
+# ── Per-mode default field schemas ────────────────────────────────────────────
 
-TEMPLATE = """\
-# Athlete Profile
+RUNNING_DEFAULTS: dict = {
+    "personal": {
+        "name": "",
+        "gender": "",
+        "date_of_birth": "",
+        "height": "",
+        "weight": "",
+    },
+    "running_background": {
+        "running_since": "",
+        "weekly_volume": "",
+        "background": "",
+    },
+    "personal_bests": {
+        "5k": "",
+        "10k": "",
+        "half_marathon": "",
+        "marathon": "",
+    },
+    "goals": "",
+    "injuries_and_health": "",
+    "gear": "",
+    "other_notes": "",
+}
 
-Edit this file freely. It is read at the start of every session and sent to
-your coach as context. Write in plain language — the more detail you provide,
-the more personalised your coaching will be.
+CYCLING_DEFAULTS: dict = {
+    "personal": {
+        "name": "",
+        "gender": "",
+        "date_of_birth": "",
+        "height": "",
+        "weight": "",
+    },
+    "cycling_background": {
+        "cycling_since": "",
+        "weekly_distance": "",
+        "background": "",
+    },
+    "cycling_bests": {
+        "ftp": "",
+        "fastest_century": "",
+        "fastest_gran_fondo": "",
+        "other": "",
+    },
+    "goals": "",
+    "injuries_and_health": "",
+    "gear": "",
+    "other_notes": "",
+}
 
----
+HYBRID_DEFAULTS: dict = {
+    "personal": {
+        "name": "",
+        "gender": "",
+        "date_of_birth": "",
+        "height": "",
+        "weight": "",
+    },
+    "running_background": {
+        "running_since": "",
+        "weekly_run_volume": "",
+        "background": "",
+    },
+    "cycling_background": {
+        "cycling_since": "",
+        "weekly_ride_distance": "",
+        "background": "",
+    },
+    "running_bests": {
+        "5k": "",
+        "10k": "",
+        "half_marathon": "",
+        "marathon": "",
+    },
+    "cycling_bests": {
+        "ftp": "",
+        "fastest_century": "",
+        "fastest_gran_fondo": "",
+        "other": "",
+    },
+    "goals": "",
+    "injuries_and_health": "",
+    "gear": "",
+    "other_notes": "",
+}
 
-## Personal
-
-- **Name:**
-- **Gender:**
-- **Date of birth:** <!-- e.g. 1990-05-15 -->
-- **Height:**
-- **Weight:**
-
----
-
-## Running Background
-
-<!-- How long have you been running? What's your athletic history?
-     Previous race experience, how you got into the sport, etc. -->
-
-- **Running since:**
-- **Typical weekly volume:**
-- **Background:**
-
----
-
-## Personal Bests
-
-| Distance      | Time  |
-|---------------|-------|
-| 5K            |       |
-| 10K           |       |
-| Half marathon |       |
-| Marathon      |       |
-
----
-
-## Goals
-
-<!-- Upcoming target races, time goals, non-race goals (e.g. lose weight,
-     run consistently, complete first marathon) -->
-
----
-
-## Injuries & Health
-
-<!-- Current or recurring injuries, medical conditions, medications,
-     or anything else your coach should know for safe training advice -->
-
----
-
-## Gear
-
-<!-- Shoes (model + km on them), hydration vest, poles, GPS watch,
-     anything else your coach should know about your kit -->
-
----
-
-## Other Notes
-
-<!-- Preferred training times, coaching style preferences, recent life
-     changes affecting training, anything else relevant -->
-"""
+_DEFAULTS = {
+    "running": RUNNING_DEFAULTS,
+    "cycling": CYCLING_DEFAULTS,
+    "hybrid": HYBRID_DEFAULTS,
+}
 
 
-def ensure_profile_file() -> bool:
+def get_default_fields(mode: str) -> dict:
+    return copy.deepcopy(_DEFAULTS.get(mode, RUNNING_DEFAULTS))
+
+
+# ── Text formatting for LLM system prompt ─────────────────────────────────────
+
+def _v(val: object) -> str:
+    return str(val).strip() if val else ""
+
+
+def _section(title: str, lines: list[str]) -> str:
+    body = "\n".join(line for line in lines if line)
+    return f"### {title}\n{body}" if body else ""
+
+
+def profile_to_text(fields: dict | None, mode: str) -> str:
+    """Convert a profile fields dict to readable text for the system prompt.
+
+    Only non-empty fields are emitted. Returns "" if fields is None or all blank.
     """
-    Create the profile file from the template if it doesn't exist.
-    Returns True if newly created, False if it already existed.
-    """
-    if PROFILE_PATH.exists():
-        return False
-    PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    PROFILE_PATH.write_text(TEMPLATE)
-    return True
-
-
-def load_profile() -> str:
-    """
-    Read and return the raw profile text.
-    Returns an empty string if the file doesn't exist or is blank.
-    """
-    if not PROFILE_PATH.exists():
+    if not fields:
         return ""
-    return PROFILE_PATH.read_text().strip()
+
+    p = fields.get("personal", {})
+    sections: list[str] = []
+
+    # Personal
+    personal_lines = [
+        f"Name: {_v(p.get('name'))}" if _v(p.get("name")) else "",
+        f"Gender: {_v(p.get('gender'))}" if _v(p.get("gender")) else "",
+        f"Date of birth: {_v(p.get('date_of_birth'))}" if _v(p.get("date_of_birth")) else "",
+        f"Height: {_v(p.get('height'))}" if _v(p.get("height")) else "",
+        f"Weight: {_v(p.get('weight'))}" if _v(p.get("weight")) else "",
+    ]
+    s = _section("Personal", personal_lines)
+    if s:
+        sections.append(s)
+
+    if mode in ("running", "hybrid"):
+        rb = fields.get("running_background", {})
+        rb_lines = [
+            f"Running since: {_v(rb.get('running_since'))}" if _v(rb.get("running_since")) else "",
+            f"Weekly volume: {_v(rb.get('weekly_volume') or rb.get('weekly_run_volume'))}" if _v(rb.get("weekly_volume") or rb.get("weekly_run_volume")) else "",
+            f"Background: {_v(rb.get('background'))}" if _v(rb.get("background")) else "",
+        ]
+        s = _section("Running Background", rb_lines)
+        if s:
+            sections.append(s)
+
+        pbs = fields.get("personal_bests" if mode == "running" else "running_bests", {})
+        pb_lines = [
+            f"5K: {_v(pbs.get('5k'))}" if _v(pbs.get("5k")) else "",
+            f"10K: {_v(pbs.get('10k'))}" if _v(pbs.get("10k")) else "",
+            f"Half marathon: {_v(pbs.get('half_marathon'))}" if _v(pbs.get("half_marathon")) else "",
+            f"Marathon: {_v(pbs.get('marathon'))}" if _v(pbs.get("marathon")) else "",
+        ]
+        s = _section("Running Personal Bests", pb_lines)
+        if s:
+            sections.append(s)
+
+    if mode in ("cycling", "hybrid"):
+        cb = fields.get("cycling_background", {})
+        cb_lines = [
+            f"Cycling since: {_v(cb.get('cycling_since'))}" if _v(cb.get("cycling_since")) else "",
+            f"Weekly distance: {_v(cb.get('weekly_distance') or cb.get('weekly_ride_distance'))}" if _v(cb.get("weekly_distance") or cb.get("weekly_ride_distance")) else "",
+            f"Background: {_v(cb.get('background'))}" if _v(cb.get("background")) else "",
+        ]
+        s = _section("Cycling Background", cb_lines)
+        if s:
+            sections.append(s)
+
+        cyb = fields.get("cycling_bests", {})
+        cyb_lines = [
+            f"FTP: {_v(cyb.get('ftp'))}" if _v(cyb.get("ftp")) else "",
+            f"Fastest century: {_v(cyb.get('fastest_century'))}" if _v(cyb.get("fastest_century")) else "",
+            f"Fastest gran fondo: {_v(cyb.get('fastest_gran_fondo'))}" if _v(cyb.get("fastest_gran_fondo")) else "",
+            f"Other: {_v(cyb.get('other'))}" if _v(cyb.get("other")) else "",
+        ]
+        s = _section("Cycling Bests", cyb_lines)
+        if s:
+            sections.append(s)
+
+    for key, title in [
+        ("goals", "Goals"),
+        ("injuries_and_health", "Injuries & Health"),
+        ("gear", "Gear"),
+        ("other_notes", "Other Notes"),
+    ]:
+        val = _v(fields.get(key))
+        if val:
+            sections.append(f"### {title}\n{val}")
+
+    if not sections:
+        return ""
+
+    return "## Athlete Profile\n\n" + "\n\n".join(sections)
 
 
-# ── Structured parse / serialize ─────────────────────────────────────────────
+# ── Legacy migration helper ───────────────────────────────────────────────────
+# Used once on server startup to import an existing profile.md into the DB.
 
 def _get_section(text: str, name: str) -> str:
-    """Extract the body of a ## Section, stopping at the next --- or ##."""
     pattern = rf'##\s+{re.escape(name)}\s*\n(.*?)(?=\n---|\n##|\Z)'
     m = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
     return m.group(1).strip() if m else ""
@@ -110,7 +210,6 @@ def _strip_comments(s: str) -> str:
 
 
 def _get_bullet(section_text: str, field_name: str) -> str:
-    """Extract the value from a '- **FieldName:** value' bullet line."""
     pattern = rf'^\s*-\s+\*\*{re.escape(field_name)}:\*\*[ \t]*(.*?)$'
     m = re.search(pattern, section_text, re.MULTILINE | re.IGNORECASE)
     if not m:
@@ -119,36 +218,16 @@ def _get_bullet(section_text: str, field_name: str) -> str:
 
 
 def _get_pb(pbs_text: str, label: str) -> str:
-    """Extract a time value from a personal bests table row."""
     pattern = rf'\|\s*{re.escape(label)}\s*\|\s*(.*?)\s*\|'
     for m in re.finditer(pattern, pbs_text, re.IGNORECASE):
         val = m.group(1).strip()
-        if not re.fullmatch(r'[-:]+', val):  # skip separator rows
+        if not re.fullmatch(r'[-:]+', val):
             return val
     return ""
 
 
-_REQUIRED_SECTIONS = [
-    "Personal",
-    "Running Background",
-    "Personal Bests",
-    "Goals",
-    "Injuries & Health",
-    "Gear",
-    "Other Notes",
-]
-
-
-def is_parseable(text: str) -> bool:
-    """Return True only if all expected section headers are present."""
-    return all(
-        re.search(rf'##\s+{re.escape(s)}', text, re.IGNORECASE)
-        for s in _REQUIRED_SECTIONS
-    )
-
-
-def parse_profile(text: str) -> dict:
-    """Parse profile Markdown into a structured fields dict."""
+def parse_legacy_profile(text: str) -> dict:
+    """Parse the old profile.md Markdown format into a running-schema fields dict."""
     personal = _get_section(text, "Personal")
     background = _get_section(text, "Running Background")
     pbs = _get_section(text, "Personal Bests")
@@ -177,52 +256,3 @@ def parse_profile(text: str) -> dict:
         "gear": _strip_comments(_get_section(text, "Gear")),
         "other_notes": _strip_comments(_get_section(text, "Other Notes")),
     }
-
-
-def serialize_profile(fields: dict) -> str:
-    """Serialize a structured fields dict back to profile Markdown."""
-    p = fields.get("personal", {})
-    bg = fields.get("running_background", {})
-    pbs = fields.get("personal_bests", {})
-
-    def v(val) -> str:
-        return (val or "").strip()
-
-    return (
-        "# Athlete Profile\n\n"
-        "Edit this file freely. It is read at the start of every session and sent to\n"
-        "your coach as context. Write in plain language — the more detail you provide,\n"
-        "the more personalised your coaching will be.\n\n"
-        "---\n\n"
-        "## Personal\n\n"
-        f"- **Name:** {v(p.get('name'))}\n"
-        f"- **Gender:** {v(p.get('gender'))}\n"
-        f"- **Date of birth:** {v(p.get('date_of_birth'))}\n"
-        f"- **Height:** {v(p.get('height'))}\n"
-        f"- **Weight:** {v(p.get('weight'))}\n\n"
-        "---\n\n"
-        "## Running Background\n\n"
-        f"- **Running since:** {v(bg.get('running_since'))}\n"
-        f"- **Typical weekly volume:** {v(bg.get('weekly_volume'))}\n"
-        f"- **Background:** {v(bg.get('background'))}\n\n"
-        "---\n\n"
-        "## Personal Bests\n\n"
-        "| Distance      | Time  |\n"
-        "|---------------:|-------|\n"
-        f"| 5K            | {v(pbs.get('5k'))} |\n"
-        f"| 10K           | {v(pbs.get('10k'))} |\n"
-        f"| Half marathon | {v(pbs.get('half_marathon'))} |\n"
-        f"| Marathon      | {v(pbs.get('marathon'))} |\n\n"
-        "---\n\n"
-        "## Goals\n\n"
-        f"{v(fields.get('goals'))}\n\n"
-        "---\n\n"
-        "## Injuries & Health\n\n"
-        f"{v(fields.get('injuries_and_health'))}\n\n"
-        "---\n\n"
-        "## Gear\n\n"
-        f"{v(fields.get('gear'))}\n\n"
-        "---\n\n"
-        "## Other Notes\n\n"
-        f"{v(fields.get('other_notes'))}\n"
-    )
