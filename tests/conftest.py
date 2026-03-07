@@ -38,6 +38,29 @@ def sample_activity():
 
 
 @pytest.fixture
+def sample_cycling_activity():
+    """A Strava-shaped cycling activity dict suitable for db.upsert_activity.
+
+    average_cadence is full RPM and must NOT be doubled on storage.
+    """
+    return {
+        "id": 2001,
+        "name": "Morning Ride",
+        "start_date_local": "2025-06-16T08:00:00Z",
+        "distance": 30_000.0,          # 30 km
+        "moving_time": 3_600,          # 1 hour → 30 km/h
+        "elapsed_time": 3_700,
+        "total_elevation_gain": 200.0,
+        "average_heartrate": 148.0,
+        "max_heartrate": 172,
+        "average_cadence": 85.0,       # full RPM — must NOT be doubled
+        "suffer_score": 55,
+        "perceived_exertion": 6.0,
+        "sport_type": "Ride",
+    }
+
+
+@pytest.fixture
 def activity_row():
     """A sqlite3.Row-compatible dict for coach/chart tests.
 
@@ -51,11 +74,12 @@ def activity_row():
             distance_m REAL, moving_time_s INTEGER,
             avg_pace_s_per_km REAL, avg_hr REAL, max_hr INTEGER,
             avg_cadence REAL, elevation_gain_m REAL,
-            suffer_score INTEGER, perceived_exertion REAL
+            suffer_score INTEGER, perceived_exertion REAL,
+            sport_type TEXT
         )"""
     )
     conn.execute(
-        "INSERT INTO a VALUES (1,'2025-06-15','Morning Run',10000,3600,360,145,165,174,50,42,5)"
+        "INSERT INTO a VALUES (1,'2025-06-15','Morning Run',10000,3600,360,145,165,174,50,42,5,'Run')"
     )
     row = conn.execute("SELECT * FROM a").fetchone()
     yield row

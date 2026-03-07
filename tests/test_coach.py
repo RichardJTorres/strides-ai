@@ -3,9 +3,12 @@
 import pytest
 
 from strides_ai.coach import (
-    BASE_SYSTEM_PROMPT,
+    CYCLING_SYSTEM_PROMPT,
+    HYBRID_SYSTEM_PROMPT,
+    RUNNING_SYSTEM_PROMPT,
     _format_duration,
     _format_pace,
+    _format_speed,
     build_initial_history,
     build_system,
     build_training_log,
@@ -73,13 +76,13 @@ def test_format_duration_full():
 
 def test_build_system_no_profile_no_memories():
     result = build_system("", [])
-    assert result == BASE_SYSTEM_PROMPT
+    assert result == RUNNING_SYSTEM_PROMPT
 
 
 def test_build_system_with_profile():
     result = build_system("Athlete profile text", [])
     assert "Athlete profile text" in result
-    assert BASE_SYSTEM_PROMPT in result
+    assert RUNNING_SYSTEM_PROMPT in result
 
 
 def test_build_system_with_memories():
@@ -109,14 +112,14 @@ def test_build_system_empty_memories_list():
 def _make_row(date="2025-06-15", name="Morning Run", distance_m=10000,
               moving_time_s=3600, avg_pace_s_per_km=360.0, avg_hr=145,
               max_hr=165, avg_cadence=174, elevation_gain_m=50,
-              suffer_score=42, perceived_exertion=5.0):
+              suffer_score=42, perceived_exertion=5.0, sport_type="Run"):
     """Return a dict that behaves like sqlite3.Row for build_training_log."""
     return {
         "date": date, "name": name, "distance_m": distance_m,
         "moving_time_s": moving_time_s, "avg_pace_s_per_km": avg_pace_s_per_km,
         "avg_hr": avg_hr, "max_hr": max_hr, "avg_cadence": avg_cadence,
         "elevation_gain_m": elevation_gain_m, "suffer_score": suffer_score,
-        "perceived_exertion": perceived_exertion,
+        "perceived_exertion": perceived_exertion, "sport_type": sport_type,
     }
 
 
@@ -194,3 +197,85 @@ def test_build_initial_history_activity_count_in_reply():
 def test_build_initial_history_empty_activities():
     history = build_initial_history([], [])
     assert "No activities found" in history[0]["content"]
+
+
+# ── _format_speed ─────────────────────────────────────────────────────────────
+
+def test_format_speed_none():
+    assert _format_speed(None) == "—"
+
+
+def test_format_speed_zero():
+    assert _format_speed(0.0) == "—"
+
+
+def test_format_speed_negative():
+    assert _format_speed(-1.0) == "—"
+
+
+def test_format_speed_normal():
+    # 360 s/km → 3600 / 360 = 10.0 km/h
+    assert _format_speed(360.0) == "10.0km/h"
+
+
+def test_format_speed_fast():
+    # 180 s/km → 20.0 km/h
+    assert _format_speed(180.0) == "20.0km/h"
+
+
+# ── build_system mode variants ────────────────────────────────────────────────
+
+def test_build_system_cycling_mode():
+    result = build_system("", [], mode="cycling")
+    assert result == CYCLING_SYSTEM_PROMPT
+
+
+def test_build_system_hybrid_mode():
+    result = build_system("", [], mode="hybrid")
+    assert result == HYBRID_SYSTEM_PROMPT
+
+
+def test_build_system_invalid_mode_falls_back_to_running():
+    result = build_system("", [], mode="triathlon")
+    assert result == RUNNING_SYSTEM_PROMPT
+
+
+# ── build_training_log cycling and hybrid modes ───────────────────────────────
+
+def test_build_training_log_cycling_header():
+    log = build_training_log([_make_row(sport_type="Ride")], mode="cycling")
+    header = log.split("\n")[0]
+    assert "SPEED" in header
+    # Running-specific label should not be in the cycling header
+    assert "PACE" not in header
+
+
+def test_build_training_log_cycling_totals():
+    rows = [_make_row(sport_type="Ride"), _make_row(sport_type="Ride")]
+    log = build_training_log(rows, mode="cycling")
+    assert "2 rides" in log
+
+
+def test_build_training_log_hybrid_totals():
+    rows = [_make_row(sport_type="Run"), _make_row(sport_type="Ride")]
+    log = build_training_log(rows, mode="hybrid")
+    assert "2 activities" in log
+
+
+def test_build_training_log_hybrid_header_has_type_column():
+    log = build_training_log([_make_row()], mode="hybrid")
+    header = log.split("\n")[0]
+    assert "TYPE" in header
+
+
+# ── build_initial_history mode labels ─────────────────────────────────────────
+
+def test_build_initial_history_cycling_label():
+    history = build_initial_history([_make_row(sport_type="Ride")], [], mode="cycling")
+    assert "rides" in history[1]["content"]
+
+
+def test_build_initial_history_hybrid_label():
+    rows = [_make_row(sport_type="Run"), _make_row(sport_type="Ride")]
+    history = build_initial_history(rows, [], mode="hybrid")
+    assert "activities" in history[1]["content"]
