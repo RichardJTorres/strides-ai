@@ -153,9 +153,10 @@ export default function App() {
   }
 
   const allNavTabs: { id: Tab; label: string }[] = [...TABS, { id: "settings", label: "Settings" }];
+  const mobileNavTabs = allNavTabs.filter((t) => t.id !== "calendar");
 
   return (
-    <div className="flex h-screen bg-gray-950 text-gray-100">
+    <div className="flex h-dvh bg-gray-950 text-gray-100">
       {/* Sidebar — desktop only */}
       <nav className="hidden md:flex w-48 shrink-0 bg-gray-900 border-r border-gray-800 flex-col">
         <div className="p-4 border-b border-gray-800">
@@ -206,7 +207,7 @@ export default function App() {
 
       {/* Bottom nav — mobile only */}
       <nav className="md:hidden fixed bottom-0 inset-x-0 bg-gray-900 border-t border-gray-800 flex z-20">
-        {allNavTabs.map((t) => (
+        {mobileNavTabs.map((t) => (
           <button
             key={t.id}
             onClick={() => navigate(t.id)}

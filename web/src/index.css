@@ -2,6 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
+html, body {
+  background-color: #030712; /* gray-950 — prevents white flash on mobile keyboard open */
+  height: 100%;
+}
+
 /* Coach message markdown styles */
 .coach-message h1, .coach-message h2, .coach-message h3 {
   font-weight: 600;
