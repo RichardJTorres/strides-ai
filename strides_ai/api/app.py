@@ -63,9 +63,11 @@ def _provider_statuses() -> list[dict]:
             "id": "ollama",
             "label": "Ollama",
             "default_model": os.environ.get("OLLAMA_MODEL", "llama3.1"),
-            "configured": True,
+            "configured": bool(os.environ.get("OLLAMA_MODEL")),
             "active": current == "ollama",
-            "config_hint": None,
+            "config_hint": (
+                "Set OLLAMA_MODEL in .env" if not os.environ.get("OLLAMA_MODEL") else None
+            ),
         },
     ]
 
