@@ -82,7 +82,7 @@ const MessageList = memo(function MessageList({
 
   return (
     <div ref={scrollContainerRef} className="flex-1 overflow-y-auto">
-      <div className="max-w-3xl mx-auto px-4 py-8">
+      <div className="max-w-3xl mx-auto px-3 sm:px-4 py-6 sm:py-8">
         {hasOlderMessages && (
           <div className="flex justify-center mb-6">
             <button
@@ -96,8 +96,8 @@ const MessageList = memo(function MessageList({
         )}
 
         {messages.length === 0 && !hasOlderMessages && (
-          <div className="text-center mt-24">
-            <h2 className="text-xl font-semibold text-gray-200 mb-2">
+          <div className="text-center mt-16 sm:mt-24 px-4">
+            <h2 className="text-lg sm:text-xl font-semibold text-gray-200 mb-2">
               {emptyStateText.heading}
             </h2>
             <p className="text-gray-500 text-sm">
@@ -119,7 +119,7 @@ const MessageList = memo(function MessageList({
                 }`}
               >
                 <div
-                  className={`max-w-[75%] rounded-2xl px-4 py-3 text-[15px] leading-relaxed border transition-colors duration-700 ${
+                  className={`max-w-[88%] sm:max-w-[75%] rounded-2xl px-4 py-3 text-[15px] leading-relaxed border transition-colors duration-700 ${
                     highlightedId !== null && m.id === highlightedId
                       ? `bg-gray-700 ${theme.accentBorder}`
                       : "bg-gray-800 text-gray-100 border-gray-700/50"
@@ -562,7 +562,7 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
       <button
         onClick={() => setSearchOpen((o) => !o)}
         title="Search conversation (Ctrl+F)"
-        className={`absolute top-3 right-3 z-10 w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+        className={`absolute top-3 right-3 z-10 w-9 h-9 rounded-lg flex items-center justify-center transition-colors ${
           searchOpen
             ? `${theme.accentButton} text-white`
             : "text-gray-500 hover:text-gray-300 hover:bg-gray-800"
@@ -581,7 +581,7 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
       {/* Search panel */}
       {searchOpen && (
         <div className="border-b border-gray-800 bg-gray-950 z-10">
-          <div className="max-w-3xl mx-auto px-4 py-3">
+          <div className="max-w-3xl mx-auto px-3 sm:px-4 py-3">
             <div className="relative">
               <input
                 ref={searchInputRef}
@@ -666,7 +666,7 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
       />
 
       {/* Input */}
-      <div className="px-4 pb-6 pt-5 border-t border-gray-800/60">
+      <div className="px-3 sm:px-4 pb-3 sm:pb-6 pt-3 sm:pt-5 border-t border-gray-800/60">
         <div className="max-w-3xl mx-auto">
           {/* File preview strip */}
           {attachedFiles.length > 0 && (
@@ -765,7 +765,7 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
             </button>
           </div>
         </div>
-        <p className="text-center text-xs text-gray-700 mt-2">
+        <p className="hidden sm:block text-center text-xs text-gray-700 mt-2">
           Enter to send · Shift+Enter for new line{supportsAttachments ? " · Attach images & files" : ""}
         </p>
       </div>

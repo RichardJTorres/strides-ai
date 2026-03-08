@@ -126,15 +126,17 @@ export default function App() {
       .finally(() => setModeLoaded(true));
   }, []);
 
-  // Load backend capabilities on mount
-  useEffect(() => {
+  function refreshStatus() {
     fetch("/api/status")
       .then((r) => r.json())
       .then((data: { supports_attachments?: boolean }) => {
         setSupportsAttachments(data.supports_attachments ?? false);
       })
       .catch(() => {});
-  }, []);
+  }
+
+  // Load backend capabilities on mount
+  useEffect(refreshStatus, []);
 
   function navigate(t: Tab) {
     location.hash = t;
@@ -150,10 +152,12 @@ export default function App() {
     );
   }
 
+  const allNavTabs: { id: Tab; label: string }[] = [...TABS, { id: "settings", label: "Settings" }];
+
   return (
     <div className="flex h-screen bg-gray-950 text-gray-100">
-      {/* Sidebar */}
-      <nav className="w-48 shrink-0 bg-gray-900 border-r border-gray-800 flex flex-col">
+      {/* Sidebar — desktop only */}
+      <nav className="hidden md:flex w-48 shrink-0 bg-gray-900 border-r border-gray-800 flex-col">
         <div className="p-4 border-b border-gray-800">
           <h1 className={`font-bold ${theme.accentClass} text-lg`}>Strides AI</h1>
           <p className="text-xs text-gray-500 mt-0.5">{theme.label}</p>
@@ -190,15 +194,31 @@ export default function App() {
         </div>
       </nav>
 
-      {/* Main content */}
-      <main className="flex-1 overflow-hidden">
+      {/* Main content — shrinks on mobile to leave room for bottom nav */}
+      <main className="flex-1 overflow-hidden pb-14 md:pb-0">
         {tab === "chat" && <Chat mode={mode} theme={theme} supportsAttachments={supportsAttachments} />}
         {tab === "activities" && <Activities mode={mode} theme={theme} />}
         {tab === "charts" && <Charts mode={mode} theme={theme} />}
         {tab === "calendar" && <Calendar />}
         {tab === "profile" && <Profile mode={mode} theme={theme} />}
-        {tab === "settings" && <Settings mode={mode} setMode={setMode} theme={theme} />}
+        {tab === "settings" && <Settings mode={mode} setMode={setMode} theme={theme} onProviderChanged={refreshStatus} />}
       </main>
+
+      {/* Bottom nav — mobile only */}
+      <nav className="md:hidden fixed bottom-0 inset-x-0 bg-gray-900 border-t border-gray-800 flex z-20">
+        {allNavTabs.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => navigate(t.id)}
+            className={`flex-1 flex flex-col items-center justify-center gap-0.5 py-2.5 px-1 transition-colors ${
+              tab === t.id ? `${theme.accentClass}` : "text-gray-500"
+            }`}
+          >
+            {ICONS[t.id]}
+            <span className="text-[9px] leading-none mt-0.5">{t.label}</span>
+          </button>
+        ))}
+      </nav>
     </div>
   );
 }

@@ -19,6 +19,7 @@ interface Props {
   mode: Mode;
   setMode: Dispatch<SetStateAction<Mode>>;
   theme: ThemeConfig;
+  onProviderChanged: () => void;
 }
 
 const MODE_CARDS: {
@@ -57,7 +58,7 @@ const MODE_CARDS: {
 
 type SyncState = "idle" | "syncing" | "done" | "error";
 
-export default function Settings({ mode, setMode, theme }: Props) {
+export default function Settings({ mode, setMode, theme, onProviderChanged }: Props) {
   const [syncState, setSyncState] = useState<SyncState>("idle");
   const [syncCount, setSyncCount] = useState<number | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -108,6 +109,7 @@ export default function Settings({ mode, setMode, theme }: Props) {
         body: JSON.stringify({ provider: providerId }),
       });
       setProviders((ps) => ps.map((p) => ({ ...p, active: p.id === providerId })));
+      onProviderChanged();
     } finally {
       setSwitchingProvider(false);
     }
@@ -144,7 +146,7 @@ export default function Settings({ mode, setMode, theme }: Props) {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto">
+    <div className="h-full overflow-y-auto">
       <div className="max-w-2xl mx-auto px-6 py-10">
         <h2 className="text-xl font-semibold text-gray-100 mb-1">Settings</h2>
         <p className="text-sm text-gray-500 mb-8">Configure your Strides AI preferences.</p>
