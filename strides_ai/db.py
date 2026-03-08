@@ -106,6 +106,15 @@ def _migrate_conversations(conn: sqlite3.Connection) -> None:
         pass  # column already exists
 
 
+def _migrate_conversations_model(conn: sqlite3.Connection) -> None:
+    """Add model column and backfill existing rows with 'claude'."""
+    try:
+        conn.execute("ALTER TABLE conversations ADD COLUMN model TEXT")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+    conn.execute("UPDATE conversations SET model = 'claude' WHERE model IS NULL")
+
+
 def _migrate_training_plan_elevation(conn: sqlite3.Connection) -> None:
     """Add elevation_m column to training_plan if it does not exist yet."""
     try:
@@ -124,6 +133,7 @@ def init_db() -> None:
         conn.execute(CREATE_CALENDAR_PREFS)
         conn.execute(CREATE_TRAINING_PLAN)
         _migrate_conversations(conn)
+        _migrate_conversations_model(conn)
         _migrate_training_plan_elevation(conn)
 
 
@@ -257,11 +267,11 @@ def set_setting(key: str, value: str) -> None:
 # ── Conversation history ────────────────────────────────────────────────────
 
 
-def save_message(role: str, content: str, mode: str = "running") -> None:
+def save_message(role: str, content: str, mode: str = "running", model: str | None = None) -> None:
     with _connect() as conn:
         conn.execute(
-            "INSERT INTO conversations (role, content, mode) VALUES (?, ?, ?)",
-            (role, content, mode),
+            "INSERT INTO conversations (role, content, mode, model) VALUES (?, ?, ?, ?)",
+            (role, content, mode, model),
         )
 
 
@@ -270,12 +280,12 @@ def get_recent_messages(n: int = 40, mode: str | None = None) -> list[dict]:
     with _connect() as conn:
         if mode:
             rows = conn.execute(
-                "SELECT id, role, content, created_at FROM conversations WHERE mode = ? ORDER BY id DESC LIMIT ?",
+                "SELECT id, role, content, model, created_at FROM conversations WHERE mode = ? ORDER BY id DESC LIMIT ?",
                 (mode, n),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, role, content, created_at FROM conversations ORDER BY id DESC LIMIT ?",
+                "SELECT id, role, content, model, created_at FROM conversations ORDER BY id DESC LIMIT ?",
                 (n,),
             ).fetchall()
     return [dict(r) for r in reversed(rows)]
@@ -286,12 +296,12 @@ def get_messages_before(before_id: int, limit: int = 40, mode: str | None = None
     with _connect() as conn:
         if mode:
             rows = conn.execute(
-                "SELECT id, role, content, created_at FROM conversations WHERE id < ? AND mode = ? ORDER BY id DESC LIMIT ?",
+                "SELECT id, role, content, model, created_at FROM conversations WHERE id < ? AND mode = ? ORDER BY id DESC LIMIT ?",
                 (before_id, mode, limit),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, role, content, created_at FROM conversations WHERE id < ? ORDER BY id DESC LIMIT ?",
+                "SELECT id, role, content, model, created_at FROM conversations WHERE id < ? ORDER BY id DESC LIMIT ?",
                 (before_id, limit),
             ).fetchall()
     return [dict(r) for r in reversed(rows)]
@@ -312,12 +322,12 @@ def search_messages(query: str, limit: int = 20, mode: str | None = None) -> lis
     with _connect() as conn:
         if mode:
             rows = conn.execute(
-                "SELECT id, role, content, created_at FROM conversations WHERE content LIKE ? AND mode = ? ORDER BY id DESC LIMIT ?",
+                "SELECT id, role, content, model, created_at FROM conversations WHERE content LIKE ? AND mode = ? ORDER BY id DESC LIMIT ?",
                 (f"%{query}%", mode, limit),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, role, content, created_at FROM conversations WHERE content LIKE ? ORDER BY id DESC LIMIT ?",
+                "SELECT id, role, content, model, created_at FROM conversations WHERE content LIKE ? ORDER BY id DESC LIMIT ?",
                 (f"%{query}%", limit),
             ).fetchall()
     return [dict(r) for r in rows]

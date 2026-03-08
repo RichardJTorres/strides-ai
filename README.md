@@ -1,6 +1,6 @@
 # strides-ai
 
-A local AI multisport coach that connects to your Strava account and lets you have coaching conversations about your training. Supports Claude (via the Anthropic API) and any model running locally via Ollama.
+A local AI multisport coach that connects to your Strava account and lets you have coaching conversations about your training. Supports Claude and Gemini (cloud APIs) and any model running locally via Ollama.
 
 ## What it does
 
@@ -12,7 +12,7 @@ A local AI multisport coach that connects to your Strava account and lets you ha
 - **Persistent memory** — the coach proactively saves key facts (goals, injuries, preferences, upcoming races) and recalls them at the start of every session.
 - **Conversation history** — the last 40 messages from previous sessions are reloaded so coaching advice stays consistent across conversations. History is scoped per mode.
 - **Training calendar** — plan upcoming workouts on a calendar, overlay your actual Strava activities, and get AI-powered nutrition recommendations per workout.
-- **Swappable backends** — run Claude in the cloud or a local model via Ollama, configured with a single env var.
+- **Swappable backends** — run Claude or Gemini in the cloud, or a local model via Ollama. Switch providers live from the Settings tab without restarting the server.
 
 ## Setup
 
@@ -21,7 +21,7 @@ A local AI multisport coach that connects to your Strava account and lets you ha
 - Python 3.11+
 - Node.js 18+ (for the web UI)
 - A [Strava API app](https://www.strava.com/settings/api) — set **Authorization Callback Domain** to `localhost`
-- An Anthropic API key **or** a local [Ollama](https://ollama.com) installation (see [Backends](#backends) below)
+- An Anthropic API key, a Google Gemini API key, **or** a local [Ollama](https://ollama.com) installation (see [Backends](#backends) below)
 
 ### 2. Install
 
@@ -69,7 +69,7 @@ On first run, a browser window opens to Strava's authorization page — approve 
 | Charts | Training visualisations: weekly volume with 4-week rolling average, ATL/CTL fitness & fatigue curves, aerobic efficiency scatter plot |
 | Calendar | Plan upcoming workouts, see actual Strava activities overlaid, and get AI nutrition advice per workout |
 | Profile | Structured editor for your athlete profile (per-mode) |
-| Settings | Switch between Running, Cycling, and Hybrid coaching modes |
+| Settings | Switch between Running, Cycling, and Hybrid coaching modes; switch LLM provider |
 
 The URL uses hash-based navigation (`#chat`, `#activities`, `#charts`, `#calendar`, `#profile`, `#settings`), so refreshing the page keeps you on the same tab.
 
@@ -149,6 +149,18 @@ CLAUDE_MODEL=claude-opus-4-6
 
 Nutrition analysis uses `claude-haiku-4-5` for fast, cost-effective structured output regardless of the `CLAUDE_MODEL` setting.
 
+### Gemini
+
+Uses the [Google Gemini API](https://aistudio.google.com/apikey). Get a free API key from Google AI Studio.
+
+```env
+PROVIDER=gemini
+GEMINI_API_KEY=your_gemini_api_key
+
+# Optional: change the model (default: gemini-2.0-flash)
+GEMINI_MODEL=gemini-2.5-pro
+```
+
 ### Ollama (local)
 
 Runs any model locally via [Ollama](https://ollama.com). No API key or internet connection required after the model is downloaded.
@@ -179,6 +191,7 @@ strides_ai/
 ├── backends/
 │   ├── base.py     # BaseBackend ABC — stream_turn(system, input, on_token)
 │   ├── claude.py   # Anthropic SDK, tool_use loop
+│   ├── gemini.py   # Google Gemini SDK, function calling loop
 │   └── ollama.py   # httpx → Ollama /api/chat, streaming + tools
 ├── auth.py         # Strava OAuth2 — token exchange, storage, auto-refresh
 ├── db.py           # SQLite — activities, history, memories, profiles, calendar
@@ -210,6 +223,7 @@ web/
 |---|---|
 | Strava API | `httpx` |
 | Anthropic API | `anthropic` |
+| Gemini API | `google-genai` |
 | Ollama API | `httpx` |
 | Web framework | `fastapi` + `uvicorn` |
 | Database | `sqlite3` (stdlib) |

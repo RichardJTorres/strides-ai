@@ -357,3 +357,45 @@ def test_search_messages_respects_limit(tmp_db):
         db.save_message("user", f"pace question {i}")
     results = db.search_messages("pace", limit=3)
     assert len(results) == 3
+
+
+# ── model column ──────────────────────────────────────────────────────────────
+
+
+def test_save_message_stores_model(tmp_db):
+    db.save_message("assistant", "Here is your plan", model="claude-sonnet-4-6")
+    msgs = db.get_recent_messages(10)
+    assert msgs[0]["model"] == "claude-sonnet-4-6"
+
+
+def test_save_message_model_defaults_to_none(tmp_db):
+    db.save_message("user", "Hello coach")
+    msgs = db.get_recent_messages(10)
+    assert msgs[0]["model"] is None
+
+
+def test_get_recent_messages_includes_model_field(tmp_db):
+    db.save_message("assistant", "reply", model="gemini:gemini-2.0-flash")
+    msg = db.get_recent_messages(1)[0]
+    assert "model" in msg
+
+
+def test_migrate_backfills_claude_for_existing_rows(tmp_db):
+    """Rows inserted before the model column existed should be backfilled with 'claude'."""
+    import sqlite3 as _sqlite3
+
+    # Insert a row bypassing the model column (simulates pre-migration data)
+    with _sqlite3.connect(db.DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO conversations (role, content, mode) VALUES (?, ?, ?)",
+            ("assistant", "old message", "running"),
+        )
+
+    # Re-run the migration (idempotent — column already exists, but backfill still applies)
+    with _sqlite3.connect(db.DB_PATH) as conn:
+        conn.row_factory = _sqlite3.Row
+        db._migrate_conversations_model(conn)
+
+    msgs = db.get_recent_messages(10)
+    old = next(m for m in msgs if m["content"] == "old message")
+    assert old["model"] == "claude"

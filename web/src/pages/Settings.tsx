@@ -1,5 +1,19 @@
-import { useState, type Dispatch, type SetStateAction } from "react";
+import { useState, useEffect, type Dispatch, type SetStateAction } from "react";
 import type { Mode, ThemeConfig } from "../App";
+
+interface Provider {
+  id: string;
+  label: string;
+  selected_model: string;
+  configured: boolean;
+  active: boolean;
+  config_hint: string | null;
+}
+
+interface ProviderModel {
+  id: string;
+  display_name: string;
+}
 
 interface Props {
   mode: Mode;
@@ -46,6 +60,26 @@ type SyncState = "idle" | "syncing" | "done" | "error";
 export default function Settings({ mode, setMode, theme }: Props) {
   const [syncState, setSyncState] = useState<SyncState>("idle");
   const [syncCount, setSyncCount] = useState<number | null>(null);
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [switchingProvider, setSwitchingProvider] = useState(false);
+  const [activeModels, setActiveModels] = useState<ProviderModel[]>([]);
+  const [changingModel, setChangingModel] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/providers")
+      .then((r) => r.json())
+      .then((data: Provider[]) => setProviders(data))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const active = providers.find((p) => p.active);
+    if (!active) return;
+    fetch(`/api/providers/${active.id}/models`)
+      .then((r) => r.json())
+      .then((data: ProviderModel[]) => setActiveModels(data))
+      .catch(() => setActiveModels([]));
+  }, [providers]);
 
   async function handleModeChange(newMode: Mode) {
     try {
@@ -59,6 +93,34 @@ export default function Settings({ mode, setMode, theme }: Props) {
     }
     setMode(newMode);
     location.hash = "chat";
+  }
+
+  async function handleProviderChange(providerId: string) {
+    setSwitchingProvider(true);
+    try {
+      await fetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: providerId }),
+      });
+      setProviders((ps) => ps.map((p) => ({ ...p, active: p.id === providerId })));
+    } finally {
+      setSwitchingProvider(false);
+    }
+  }
+
+  async function handleModelChange(model: string) {
+    setChangingModel(true);
+    try {
+      await fetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model }),
+      });
+      setProviders((ps) => ps.map((p) => (p.active ? { ...p, selected_model: model } : p)));
+    } finally {
+      setChangingModel(false);
+    }
   }
 
   async function handleFullSync() {
@@ -114,6 +176,67 @@ export default function Settings({ mode, setMode, theme }: Props) {
                     </div>
                     <p className="text-xs text-gray-500 pl-5">{card.description}</p>
                   </button>
+                );
+              })}
+            </div>
+          </section>
+
+          <section>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">
+              LLM Provider
+            </h3>
+            <p className="text-xs text-gray-600 mb-3">
+              Switch which AI model powers the coaching chat. Only providers configured in{" "}
+              <code className="text-gray-500">.env</code> can be selected.
+            </p>
+            <div className="space-y-3">
+              {providers.map((provider) => {
+                const isSelectable = provider.configured && !provider.active && !switchingProvider;
+                return (
+                  <div
+                    key={provider.id}
+                    className={`w-full text-left p-4 rounded-lg border-2 transition-colors bg-gray-900 ${
+                      !provider.configured
+                        ? "border-gray-800 opacity-50"
+                        : provider.active
+                        ? "border-gray-400"
+                        : "border-gray-700 hover:border-gray-500 cursor-pointer"
+                    }`}
+                    onClick={() => isSelectable && handleProviderChange(provider.id)}
+                  >
+                    <div className="flex items-center gap-3 mb-1">
+                      <span className="font-medium text-sm text-gray-200">{provider.label}</span>
+                      {provider.active && (
+                        <span className="ml-auto text-xs text-gray-400">Active</span>
+                      )}
+                      {!provider.configured && (
+                        <span className="ml-auto text-xs text-yellow-600">Not configured</span>
+                      )}
+                    </div>
+                    {provider.active && activeModels.length > 1 ? (
+                      <select
+                        value={provider.selected_model}
+                        onChange={(e) => {
+                          e.stopPropagation();
+                          handleModelChange(e.target.value);
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        disabled={changingModel}
+                        className="mt-1 w-full bg-gray-800 text-gray-300 text-xs rounded px-2 py-1 border border-gray-700 focus:outline-none focus:border-gray-500 disabled:opacity-50"
+                      >
+                        {activeModels.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.display_name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <p className="text-xs text-gray-500">{provider.selected_model}</p>
+                    )}
+                    {!provider.configured && provider.config_hint && (
+                      <p className="text-xs text-yellow-700/80 mt-1">{provider.config_hint}</p>
+                    )}
+                  </div>
                 );
               })}
             </div>

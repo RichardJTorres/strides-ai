@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from .. import db
 from ..auth import get_access_token
 from ..backends.claude import ClaudeBackend
+from ..backends.gemini import GeminiBackend, DEFAULT_MODEL as GEMINI_DEFAULT_MODEL
 from ..backends.ollama import OllamaBackend, DEFAULT_HOST
 from ..charts_data import get_chart_data
 from ..coach import build_initial_history, build_system, RECALL_MESSAGES
@@ -31,24 +32,113 @@ SUPPORTED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 MAX_FILE_BYTES = 20 * 1024 * 1024  # 20 MB
 
 
-def init_backend(app: FastAPI, mode: str | None = None) -> None:
-    """Called at server startup (and on mode/profile changes) to build the LLM backend."""
+VALID_PROVIDERS = {"claude", "gemini", "ollama"}
+
+# Curated model lists for cloud providers
+CLAUDE_MODELS = [
+    {"id": "claude-sonnet-4-6", "display_name": "Claude Sonnet 4.6"},
+    {"id": "claude-opus-4-6", "display_name": "Claude Opus 4.6"},
+    {"id": "claude-haiku-4-5-20251001", "display_name": "Claude Haiku 4.5"},
+]
+
+GEMINI_MODELS = [
+    {"id": "gemini-2.0-flash", "display_name": "Gemini 2.0 Flash (free)"},
+    {"id": "gemini-2.0-flash-lite", "display_name": "Gemini 2.0 Flash Lite (free)"},
+    {"id": "gemini-1.5-flash", "display_name": "Gemini 1.5 Flash (free)"},
+    {"id": "gemini-1.5-flash-8b", "display_name": "Gemini 1.5 Flash-8B (free)"},
+    {"id": "gemini-1.5-pro", "display_name": "Gemini 1.5 Pro"},
+    {"id": "gemini-2.5-pro", "display_name": "Gemini 2.5 Pro"},
+]
+
+
+def _get_provider_models(provider_id: str) -> list[dict]:
+    """Return available models for a provider."""
+    if provider_id == "claude":
+        return CLAUDE_MODELS
+    if provider_id == "gemini":
+        return GEMINI_MODELS
+    if provider_id == "ollama":
+        host = os.environ.get("OLLAMA_HOST", DEFAULT_HOST).rstrip("/")
+        try:
+            import httpx as _httpx
+
+            resp = _httpx.get(f"{host}/api/tags", timeout=3)
+            return [
+                {"id": m["name"], "display_name": m["name"]} for m in resp.json().get("models", [])
+            ]
+        except Exception:
+            return []
+    return []
+
+
+def _stored_model(provider_id: str, env_key: str, default: str) -> str:
+    """Return the model stored in DB for this provider, falling back to env then default."""
+    return db.get_setting(f"{provider_id}_model") or os.environ.get(env_key, default)
+
+
+def _provider_statuses() -> list[dict]:
+    """Return the list of providers with their configuration and active status."""
+    current = db.get_setting("provider", os.environ.get("PROVIDER", "claude")) or "claude"
+    return [
+        {
+            "id": "claude",
+            "label": "Claude",
+            "selected_model": _stored_model("claude", "CLAUDE_MODEL", "claude-sonnet-4-6"),
+            "configured": bool(os.environ.get("ANTHROPIC_API_KEY")),
+            "active": current == "claude",
+            "config_hint": (
+                "Set ANTHROPIC_API_KEY in .env" if not os.environ.get("ANTHROPIC_API_KEY") else None
+            ),
+        },
+        {
+            "id": "gemini",
+            "label": "Gemini",
+            "selected_model": _stored_model("gemini", "GEMINI_MODEL", GEMINI_DEFAULT_MODEL),
+            "configured": bool(os.environ.get("GEMINI_API_KEY")),
+            "active": current == "gemini",
+            "config_hint": (
+                "Set GEMINI_API_KEY in .env" if not os.environ.get("GEMINI_API_KEY") else None
+            ),
+        },
+        {
+            "id": "ollama",
+            "label": "Ollama",
+            "selected_model": _stored_model("ollama", "OLLAMA_MODEL", "llama3.1"),
+            "configured": bool(os.environ.get("OLLAMA_MODEL")),
+            "active": current == "ollama",
+            "config_hint": (
+                "Set OLLAMA_MODEL in .env" if not os.environ.get("OLLAMA_MODEL") else None
+            ),
+        },
+    ]
+
+
+def init_backend(app: FastAPI, mode: str | None = None, provider: str | None = None) -> None:
+    """Called at server startup (and on mode/profile/provider changes) to build the LLM backend."""
     if mode is not None:
         app.state.mode = mode
+    if provider is not None:
+        app.state.provider = provider
     current_mode = getattr(app.state, "mode", "running")
+    current_provider = (
+        getattr(app.state, "provider", None) or os.environ.get("PROVIDER", "claude")
+    ).lower()
 
     activities = db.get_activities_for_mode(current_mode)
     prior_messages = db.get_recent_messages(RECALL_MESSAGES, mode=current_mode)
     initial_history = build_initial_history(activities, prior_messages, mode=current_mode)
 
-    provider = os.environ.get("PROVIDER", "claude").lower()
-    if provider == "ollama":
-        model = os.environ.get("OLLAMA_MODEL", "llama3.1")
+    if current_provider == "ollama":
+        model = _stored_model("ollama", "OLLAMA_MODEL", "llama3.1")
         host = os.environ.get("OLLAMA_HOST", DEFAULT_HOST)
         app.state.backend = OllamaBackend(model, initial_history, host)
+    elif current_provider == "gemini":
+        api_key = os.environ.get("GEMINI_API_KEY", "")
+        model = _stored_model("gemini", "GEMINI_MODEL", GEMINI_DEFAULT_MODEL)
+        app.state.backend = GeminiBackend(api_key, initial_history, model)
     else:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        model = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
+        model = _stored_model("claude", "CLAUDE_MODEL", "claude-sonnet-4-6")
         app.state.backend = ClaudeBackend(api_key, initial_history, model)
 
 
@@ -100,7 +190,8 @@ async def _process_attachment(file: UploadFile) -> tuple[dict, str]:
 async def lifespan(app: FastAPI):
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     saved_mode = db.get_setting("mode", "running")
-    init_backend(app, mode=saved_mode)
+    saved_provider = db.get_setting("provider", os.environ.get("PROVIDER", "claude"))
+    init_backend(app, mode=saved_mode, provider=saved_provider)
     yield
 
 
@@ -120,21 +211,58 @@ app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR), check_dir=False), 
 
 
 class SettingsBody(BaseModel):
-    mode: str
+    mode: str | None = None
+    provider: str | None = None
+    model: str | None = None
 
 
 @app.get("/api/settings")
 def get_settings():
-    return {"mode": db.get_setting("mode", "running")}
+    return {
+        "mode": db.get_setting("mode", "running"),
+        "provider": db.get_setting("provider", os.environ.get("PROVIDER", "claude")),
+    }
 
 
 @app.put("/api/settings")
 def put_settings(request: Request, body: SettingsBody):
-    if body.mode not in VALID_MODES:
-        raise HTTPException(status_code=400, detail=f"mode must be one of {sorted(VALID_MODES)}")
-    db.set_setting("mode", body.mode)
-    init_backend(request.app, mode=body.mode)
-    return {"mode": body.mode}
+    if body.mode is not None:
+        if body.mode not in VALID_MODES:
+            raise HTTPException(
+                status_code=400, detail=f"mode must be one of {sorted(VALID_MODES)}"
+            )
+        db.set_setting("mode", body.mode)
+    if body.provider is not None:
+        if body.provider not in VALID_PROVIDERS:
+            raise HTTPException(
+                status_code=400, detail=f"provider must be one of {sorted(VALID_PROVIDERS)}"
+            )
+        db.set_setting("provider", body.provider)
+    if body.model is not None:
+        target = (
+            body.provider
+            or db.get_setting("provider", os.environ.get("PROVIDER", "claude"))
+            or "claude"
+        )
+        db.set_setting(f"{target}_model", body.model)
+    if body.mode is not None or body.provider is not None or body.model is not None:
+        init_backend(request.app, mode=body.mode, provider=body.provider)
+    return {
+        "mode": db.get_setting("mode", "running"),
+        "provider": db.get_setting("provider", os.environ.get("PROVIDER", "claude")),
+    }
+
+
+@app.get("/api/providers")
+def get_providers():
+    return _provider_statuses()
+
+
+@app.get("/api/providers/{provider}/models")
+def get_provider_models(provider: str):
+    if provider not in VALID_PROVIDERS:
+        raise HTTPException(status_code=404, detail=f"Unknown provider: {provider}")
+    return _get_provider_models(provider)
 
 
 # ── Chat ─────────────────────────────────────────────────────────────────────
@@ -182,8 +310,8 @@ async def chat(
                     + json.dumps([{"category": c, "content": t} for c, t in memories_saved])
                 )
             db.save_message("user", saved_message, mode=mode)
-            db.save_message("assistant", response_text, mode=mode)
-        except NotImplementedError as exc:
+            db.save_message("assistant", response_text, mode=mode, model=backend.label)
+        except Exception as exc:
             token_queue.put(f"[ERROR]{exc}")
         finally:
             token_queue.put(None)  # sentinel

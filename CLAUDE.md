@@ -47,7 +47,7 @@ Examples:
 
 ```
 strides-ai        (CLI)  →  coach.py:chat()  ─┐
-strides-ai-web    (Web)  →  api/app.py       ─┤─→  backends/{claude,ollama}.py
+strides-ai-web    (Web)  →  api/app.py       ─┤─→  backends/{claude,gemini,ollama}.py
                                                └─→  db.py / profile.py / sync.py
 ```
 
@@ -55,9 +55,9 @@ The Python package has two entry points (`pyproject.toml`): `strides-ai` → `st
 
 ### LLM backends (`strides_ai/backends/`)
 
-`BaseBackend` (ABC) defines `stream_turn(system, user_input, on_token) → (text, memories)`. Both concrete backends maintain in-memory message history. Each call streams tokens via the `on_token` callback and handles tool calls (`save_memory`) in a loop until the LLM stops calling tools.
+`BaseBackend` (ABC) defines `stream_turn(system, user_input, on_token) → (text, memories)`. All concrete backends maintain in-memory message history. Each call streams tokens via the `on_token` callback and handles tool calls (`save_memory`) in a loop until the LLM stops calling tools.
 
-Select backend with `PROVIDER=claude` (default, uses `ANTHROPIC_API_KEY`) or `PROVIDER=ollama` (uses `OLLAMA_MODEL` + `OLLAMA_HOST`).
+Select backend with `PROVIDER=claude` (default, uses `ANTHROPIC_API_KEY`), `PROVIDER=gemini` (uses `GEMINI_API_KEY`), or `PROVIDER=ollama` (uses `OLLAMA_MODEL` + `OLLAMA_HOST`).
 
 ### System prompt assembly
 
@@ -89,9 +89,11 @@ OAuth2 lives in `auth.py` — tokens stored in `~/.strides_ai/token.json`, auto-
 |---|---|
 | `STRAVA_CLIENT_ID` / `STRAVA_CLIENT_SECRET` | All modes |
 | `ANTHROPIC_API_KEY` | `PROVIDER=claude` (default) |
+| `GEMINI_API_KEY` | `PROVIDER=gemini` |
 | `OLLAMA_MODEL` | `PROVIDER=ollama` |
 | `OLLAMA_HOST` | `PROVIDER=ollama` (default: `http://localhost:11434`) |
 | `CLAUDE_MODEL` | Optional; defaults to `claude-sonnet-4-6` |
+| `GEMINI_MODEL` | Optional; defaults to `gemini-2.0-flash` |
 | `PORT` | Optional; defaults to `8000` |
 
 Copy `.env.example` to `.env` to get started. The `_check_env` Make target enforces `.env` exists before running any server.

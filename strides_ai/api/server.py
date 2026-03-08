@@ -16,6 +16,10 @@ def main() -> None:
         if not os.environ.get("OLLAMA_MODEL"):
             print("OLLAMA_MODEL must be set when using PROVIDER=ollama")
             sys.exit(1)
+    elif provider == "gemini":
+        if not os.environ.get("GEMINI_API_KEY"):
+            print("GEMINI_API_KEY must be set when using PROVIDER=gemini")
+            sys.exit(1)
     else:
         if not os.environ.get("ANTHROPIC_API_KEY"):
             print("ANTHROPIC_API_KEY must be set when using PROVIDER=claude (the default)")
