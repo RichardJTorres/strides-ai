@@ -9,7 +9,7 @@ from google.genai.errors import ClientError
 from .. import db
 from .base import BaseBackend
 
-DEFAULT_MODEL = "gemini-2.0-flash"
+DEFAULT_MODEL = "gemini-2.5-flash"
 
 _MAX_RETRIES = 3
 _RETRY_DELAY_S = 10  # seconds to wait after a 429

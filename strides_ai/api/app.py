@@ -2,9 +2,9 @@
 
 import base64
 import json
-import os
 import queue
 import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
@@ -19,46 +19,96 @@ from pydantic import BaseModel
 from .. import db
 from ..auth import get_access_token
 from ..backends.claude import ClaudeBackend
-from ..backends.gemini import GeminiBackend, DEFAULT_MODEL as GEMINI_DEFAULT_MODEL
-from ..backends.ollama import OllamaBackend, DEFAULT_HOST
+from ..backends.gemini import GeminiBackend
+from ..backends.ollama import OllamaBackend
 from ..charts_data import get_chart_data
 from ..coach import build_initial_history, build_system, RECALL_MESSAGES
+from ..config import (
+    MAX_FILE_BYTES,
+    SUPPORTED_IMAGE_TYPES,
+    UPLOADS_DIR,
+    VALID_MODES,
+    VALID_PROVIDERS,
+    get_settings,
+)
 from ..profile import profile_to_text, get_default_fields
 from ..sync import sync_activities
 
-VALID_MODES = {"running", "cycling", "hybrid"}
-UPLOADS_DIR = Path.home() / ".strides_ai" / "uploads"
-SUPPORTED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
-MAX_FILE_BYTES = 20 * 1024 * 1024  # 20 MB
+_MODEL_CACHE_TTL = 300  # seconds
+
+_CLAUDE_CACHE: dict = {"models": None, "ts": 0.0}
+_GEMINI_CACHE: dict = {"models": None, "ts": 0.0}
 
 
-VALID_PROVIDERS = {"claude", "gemini", "ollama"}
+def _fetch_claude_models() -> list[dict]:
+    """Fetch available Claude models from the Anthropic API, with a 5-minute cache.
 
-# Curated model lists for cloud providers
-CLAUDE_MODELS = [
-    {"id": "claude-sonnet-4-6", "display_name": "Claude Sonnet 4.6"},
-    {"id": "claude-opus-4-6", "display_name": "Claude Opus 4.6"},
-    {"id": "claude-haiku-4-5-20251001", "display_name": "Claude Haiku 4.5"},
-]
+    Returns an empty list if ANTHROPIC_API_KEY is not set or the call fails.
+    """
+    api_key = get_settings().anthropic_api_key
+    if not api_key:
+        return []
 
-GEMINI_MODELS = [
-    {"id": "gemini-2.0-flash", "display_name": "Gemini 2.0 Flash (free)"},
-    {"id": "gemini-2.0-flash-lite", "display_name": "Gemini 2.0 Flash Lite (free)"},
-    {"id": "gemini-1.5-flash", "display_name": "Gemini 1.5 Flash (free)"},
-    {"id": "gemini-1.5-flash-8b", "display_name": "Gemini 1.5 Flash-8B (free)"},
-    {"id": "gemini-1.5-pro", "display_name": "Gemini 1.5 Pro"},
-    {"id": "gemini-2.5-pro", "display_name": "Gemini 2.5 Pro"},
-]
+    now = time.monotonic()
+    if _CLAUDE_CACHE["models"] is not None and now - _CLAUDE_CACHE["ts"] < _MODEL_CACHE_TTL:
+        return _CLAUDE_CACHE["models"]
+
+    try:
+        import anthropic as _anthropic
+
+        client = _anthropic.Anthropic(api_key=api_key)
+        models = [
+            {"id": m.id, "display_name": m.display_name} for m in client.models.list(limit=100)
+        ]
+    except Exception:
+        models = []
+
+    _CLAUDE_CACHE["models"] = models
+    _CLAUDE_CACHE["ts"] = now
+    return models
+
+
+def _fetch_gemini_models() -> list[dict]:
+    """Fetch available Gemini generateContent models from the API, with a 5-minute cache.
+
+    Returns an empty list if GEMINI_API_KEY is not set or the call fails.
+    """
+    api_key = get_settings().gemini_api_key
+    if not api_key:
+        return []
+
+    now = time.monotonic()
+    if _GEMINI_CACHE["models"] is not None and now - _GEMINI_CACHE["ts"] < _MODEL_CACHE_TTL:
+        return _GEMINI_CACHE["models"]
+
+    try:
+        from google import genai as _genai
+
+        client = _genai.Client(api_key=api_key)
+        models = []
+        for m in client.models.list():
+            if "generateContent" not in (m.supported_actions or []):
+                continue
+            model_id = m.name.removeprefix("models/")
+            if not model_id.startswith("gemini-"):
+                continue
+            models.append({"id": model_id, "display_name": m.display_name or model_id})
+    except Exception:
+        models = []
+
+    _GEMINI_CACHE["models"] = models
+    _GEMINI_CACHE["ts"] = now
+    return models
 
 
 def _get_provider_models(provider_id: str) -> list[dict]:
     """Return available models for a provider."""
     if provider_id == "claude":
-        return CLAUDE_MODELS
+        return _fetch_claude_models()
     if provider_id == "gemini":
-        return GEMINI_MODELS
+        return _fetch_gemini_models()
     if provider_id == "ollama":
-        host = os.environ.get("OLLAMA_HOST", DEFAULT_HOST).rstrip("/")
+        host = get_settings().ollama_host.rstrip("/")
         try:
             import httpx as _httpx
 
@@ -71,14 +121,16 @@ def _get_provider_models(provider_id: str) -> list[dict]:
     return []
 
 
-def _stored_model(provider_id: str, env_key: str, default: str) -> str:
+def _stored_model(provider_id: str, default: str = "") -> str:
     """Return the model stored in DB for this provider, falling back to env then default."""
-    return db.get_setting(f"{provider_id}_model") or os.environ.get(env_key, default)
+    env_default = getattr(get_settings(), f"{provider_id}_model", "") or default
+    return db.get_setting(f"{provider_id}_model") or env_default
 
 
 def _provider_statuses() -> list[dict]:
     """Return the list of providers with their configuration and active status."""
-    current = db.get_setting("provider", os.environ.get("PROVIDER", "claude")) or "claude"
+    settings = get_settings()
+    current = db.get_setting("provider", settings.provider) or "claude"
 
     # Probe Ollama once — reachable + has models == configured
     ollama_models = _get_provider_models("ollama")
@@ -89,27 +141,25 @@ def _provider_statuses() -> list[dict]:
         {
             "id": "claude",
             "label": "Claude",
-            "selected_model": _stored_model("claude", "CLAUDE_MODEL", "claude-sonnet-4-6"),
-            "configured": bool(os.environ.get("ANTHROPIC_API_KEY")),
+            "selected_model": _stored_model("claude"),
+            "configured": bool(settings.anthropic_api_key),
             "active": current == "claude",
             "config_hint": (
-                "Set ANTHROPIC_API_KEY in .env" if not os.environ.get("ANTHROPIC_API_KEY") else None
+                "Set ANTHROPIC_API_KEY in .env" if not settings.anthropic_api_key else None
             ),
         },
         {
             "id": "gemini",
             "label": "Gemini",
-            "selected_model": _stored_model("gemini", "GEMINI_MODEL", GEMINI_DEFAULT_MODEL),
-            "configured": bool(os.environ.get("GEMINI_API_KEY")),
+            "selected_model": _stored_model("gemini"),
+            "configured": bool(settings.gemini_api_key),
             "active": current == "gemini",
-            "config_hint": (
-                "Set GEMINI_API_KEY in .env" if not os.environ.get("GEMINI_API_KEY") else None
-            ),
+            "config_hint": ("Set GEMINI_API_KEY in .env" if not settings.gemini_api_key else None),
         },
         {
             "id": "ollama",
             "label": "Ollama",
-            "selected_model": _stored_model("ollama", "OLLAMA_MODEL", ollama_default),
+            "selected_model": _stored_model("ollama", ollama_default),
             "configured": ollama_configured,
             "active": current == "ollama",
             "config_hint": (
@@ -126,9 +176,8 @@ def init_backend(app: FastAPI, mode: str | None = None, provider: str | None = N
     if provider is not None:
         app.state.provider = provider
     current_mode = getattr(app.state, "mode", "running")
-    current_provider = (
-        getattr(app.state, "provider", None) or os.environ.get("PROVIDER", "claude")
-    ).lower()
+    settings = get_settings()
+    current_provider = (getattr(app.state, "provider", None) or settings.provider).lower()
 
     activities = db.get_activities_for_mode(current_mode)
     prior_messages = db.get_recent_messages(RECALL_MESSAGES, mode=current_mode)
@@ -137,17 +186,14 @@ def init_backend(app: FastAPI, mode: str | None = None, provider: str | None = N
     if current_provider == "ollama":
         available = _get_provider_models("ollama")
         auto_default = available[0]["id"] if available else ""
-        model = _stored_model("ollama", "OLLAMA_MODEL", auto_default)
-        host = os.environ.get("OLLAMA_HOST", DEFAULT_HOST)
-        app.state.backend = OllamaBackend(model, initial_history, host)
+        model = _stored_model("ollama", auto_default)
+        app.state.backend = OllamaBackend(model, initial_history, settings.ollama_host)
     elif current_provider == "gemini":
-        api_key = os.environ.get("GEMINI_API_KEY", "")
-        model = _stored_model("gemini", "GEMINI_MODEL", GEMINI_DEFAULT_MODEL)
-        app.state.backend = GeminiBackend(api_key, initial_history, model)
+        model = _stored_model("gemini")
+        app.state.backend = GeminiBackend(settings.gemini_api_key, initial_history, model)
     else:
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        model = _stored_model("claude", "CLAUDE_MODEL", "claude-sonnet-4-6")
-        app.state.backend = ClaudeBackend(api_key, initial_history, model)
+        model = _stored_model("claude")
+        app.state.backend = ClaudeBackend(settings.anthropic_api_key, initial_history, model)
 
 
 def get_backend(request: Request):
@@ -198,7 +244,7 @@ async def _process_attachment(file: UploadFile) -> tuple[dict, str]:
 async def lifespan(app: FastAPI):
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     saved_mode = db.get_setting("mode", "running")
-    saved_provider = db.get_setting("provider", os.environ.get("PROVIDER", "claude"))
+    saved_provider = db.get_setting("provider", get_settings().provider)
     init_backend(app, mode=saved_mode, provider=saved_provider)
     yield
 
@@ -225,15 +271,16 @@ class SettingsBody(BaseModel):
 
 
 @app.get("/api/settings")
-def get_settings():
+def get_api_settings():
     return {
         "mode": db.get_setting("mode", "running"),
-        "provider": db.get_setting("provider", os.environ.get("PROVIDER", "claude")),
+        "provider": db.get_setting("provider", get_settings().provider),
     }
 
 
 @app.put("/api/settings")
 def put_settings(request: Request, body: SettingsBody):
+    settings = get_settings()
     if body.mode is not None:
         if body.mode not in VALID_MODES:
             raise HTTPException(
@@ -247,17 +294,13 @@ def put_settings(request: Request, body: SettingsBody):
             )
         db.set_setting("provider", body.provider)
     if body.model is not None:
-        target = (
-            body.provider
-            or db.get_setting("provider", os.environ.get("PROVIDER", "claude"))
-            or "claude"
-        )
+        target = body.provider or db.get_setting("provider", settings.provider) or "claude"
         db.set_setting(f"{target}_model", body.model)
     if body.mode is not None or body.provider is not None or body.model is not None:
         init_backend(request.app, mode=body.mode, provider=body.provider)
     return {
         "mode": db.get_setting("mode", "running"),
-        "provider": db.get_setting("provider", os.environ.get("PROVIDER", "claude")),
+        "provider": db.get_setting("provider", settings.provider),
     }
 
 
@@ -407,12 +450,11 @@ def reset_profile(request: Request, mode: str | None = None):
 
 @app.post("/api/sync")
 def sync(request: Request, full: bool = False):
-    client_id = os.environ.get("STRAVA_CLIENT_ID", "")
-    client_secret = os.environ.get("STRAVA_CLIENT_SECRET", "")
-    if not client_id or not client_secret:
+    settings = get_settings()
+    if not settings.strava_client_id or not settings.strava_client_secret:
         raise HTTPException(status_code=500, detail="Strava credentials not configured")
 
-    access_token = get_access_token(client_id, client_secret)
+    access_token = get_access_token(settings.strava_client_id, settings.strava_client_secret)
     new_count = sync_activities(access_token, full=full)
     if new_count > 0:
         init_backend(request.app)
@@ -499,7 +541,7 @@ def delete_planned_workout(date: str):
 def analyze_workout_nutrition(date: str, request: Request):
     from ..schedule import analyze_nutrition
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    api_key = get_settings().anthropic_api_key
     if not api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not set")
 
