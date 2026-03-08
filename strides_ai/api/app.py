@@ -132,10 +132,12 @@ def _provider_statuses() -> list[dict]:
     settings = get_settings()
     current = db.get_setting("provider", settings.provider) or "claude"
 
-    # Probe Ollama once — reachable + has models == configured
     ollama_models = _get_provider_models("ollama")
     ollama_configured = len(ollama_models) > 0
     ollama_default = ollama_models[0]["id"] if ollama_models else ""
+
+    gemini_models = _get_provider_models("gemini")
+    gemini_default = gemini_models[0]["id"] if gemini_models else ""
 
     return [
         {
@@ -151,7 +153,7 @@ def _provider_statuses() -> list[dict]:
         {
             "id": "gemini",
             "label": "Gemini",
-            "selected_model": _stored_model("gemini"),
+            "selected_model": _stored_model("gemini", gemini_default),
             "configured": bool(settings.gemini_api_key),
             "active": current == "gemini",
             "config_hint": ("Set GEMINI_API_KEY in .env" if not settings.gemini_api_key else None),
@@ -189,7 +191,9 @@ def init_backend(app: FastAPI, mode: str | None = None, provider: str | None = N
         model = _stored_model("ollama", auto_default)
         app.state.backend = OllamaBackend(model, initial_history, settings.ollama_host)
     elif current_provider == "gemini":
-        model = _stored_model("gemini")
+        available = _get_provider_models("gemini")
+        auto_default = available[0]["id"] if available else ""
+        model = _stored_model("gemini", auto_default)
         app.state.backend = GeminiBackend(settings.gemini_api_key, initial_history, model)
     else:
         model = _stored_model("claude")

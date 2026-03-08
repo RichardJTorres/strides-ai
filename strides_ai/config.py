@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     gemini_api_key: str = ""
     claude_model: str = "claude-sonnet-4-6"
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = ""
     ollama_model: str = ""
     ollama_host: str = "http://localhost:11434"
 
