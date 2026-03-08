@@ -51,6 +51,8 @@ class OllamaBackend(BaseBackend):
         # Ollama uses the same OpenAI-style role/content format as our neutral format,
         # so initial_history requires no conversion.
         self._history: list[dict] = list(initial_history)
+        # None = not yet tested; False = model doesn't support tools (e.g. Gemma)
+        self._supports_tools: bool | None = None
 
     @property
     def label(self) -> str:
@@ -74,36 +76,40 @@ class OllamaBackend(BaseBackend):
             full_content = ""
             tool_calls: list[dict] = []
 
+            body: dict = {"model": self._model, "messages": messages, "stream": True}
+            if self._supports_tools is not False:
+                body["tools"] = [SAVE_MEMORY_TOOL]
+
+            retry_without_tools = False
             with httpx.Client(timeout=120) as client:
-                with client.stream(
-                    "POST",
-                    f"{self._host}/api/chat",
-                    json={
-                        "model": self._model,
-                        "messages": messages,
-                        "tools": [SAVE_MEMORY_TOOL],
-                        "stream": True,
-                    },
-                ) as resp:
-                    resp.raise_for_status()
-                    for line in resp.iter_lines():
-                        if not line:
-                            continue
-                        chunk = json.loads(line)
-                        msg = chunk.get("message", {})
+                with client.stream("POST", f"{self._host}/api/chat", json=body) as resp:
+                    if resp.status_code == 400 and "tools" in body:
+                        # Model doesn't support tool calling (e.g. Gemma) — retry without
+                        self._supports_tools = False
+                        retry_without_tools = True
+                    else:
+                        resp.raise_for_status()
+                        for line in resp.iter_lines():
+                            if not line:
+                                continue
+                            chunk = json.loads(line)
+                            msg = chunk.get("message", {})
 
-                        text = msg.get("content", "")
-                        if text:
-                            on_token(text)
-                            full_content += text
-                            response_text += text
+                            text = msg.get("content", "")
+                            if text:
+                                on_token(text)
+                                full_content += text
+                                response_text += text
 
-                        # Tool calls typically arrive in the final chunk
-                        if msg.get("tool_calls"):
-                            tool_calls = msg["tool_calls"]
+                            # Tool calls typically arrive in the final chunk
+                            if msg.get("tool_calls"):
+                                tool_calls = msg["tool_calls"]
 
-                        if chunk.get("done"):
-                            break
+                            if chunk.get("done"):
+                                break
+
+            if retry_without_tools:
+                continue
 
             self._history.append({"role": "assistant", "content": full_content})
 
