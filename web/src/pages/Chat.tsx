@@ -189,14 +189,6 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [backendLabel, setBackendLabel] = useState<string>("");
-
-  useEffect(() => {
-    fetch("/api/status")
-      .then((r) => r.json())
-      .then((d: { backend?: string }) => setBackendLabel(d.backend ?? ""))
-      .catch(() => {});
-  }, []);
 
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -493,6 +485,14 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
           const payload = line.slice(6).replace(/\\n/g, "\n");
           if (payload === "[DONE]") break;
 
+          if (payload.startsWith("[MODEL]")) {
+            const label = payload.slice(7);
+            setMessages((prev) =>
+              prev.map((m, i) => (i === assistantIndex ? { ...m, model: label } : m))
+            );
+            continue;
+          }
+
           if (payload.startsWith("[MEMORIES]")) {
             try {
               const mems: Memory[] = JSON.parse(payload.slice(10));
@@ -527,11 +527,6 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
       );
     } finally {
       setStreamingIndex(null);
-      setMessages((prev) =>
-        prev.map((m, i) =>
-          i === assistantIndex && !m.model ? { ...m, model: backendLabel } : m
-        )
-      );
       scrollToBottom();
     }
   }

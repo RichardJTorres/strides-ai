@@ -312,6 +312,7 @@ async def chat(
             response_text, memories_saved = backend.stream_turn(
                 system, message, on_token, attachments=llm_blocks or None
             )
+            token_queue.put(f"[MODEL]{backend.label}")
             if memories_saved:
                 token_queue.put(
                     "[MEMORIES]"
