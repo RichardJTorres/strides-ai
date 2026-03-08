@@ -62,24 +62,28 @@ export default function Settings({ mode, setMode, theme }: Props) {
   const [syncCount, setSyncCount] = useState<number | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [switchingProvider, setSwitchingProvider] = useState(false);
-  const [activeModels, setActiveModels] = useState<ProviderModel[]>([]);
+  const [providerModels, setProviderModels] = useState<Record<string, ProviderModel[]>>({});
   const [changingModel, setChangingModel] = useState(false);
 
   useEffect(() => {
     fetch("/api/providers")
       .then((r) => r.json())
-      .then((data: Provider[]) => setProviders(data))
+      .then((data: Provider[]) => {
+        setProviders(data);
+        // Fetch models for every configured provider in parallel
+        data
+          .filter((p) => p.configured)
+          .forEach((p) => {
+            fetch(`/api/providers/${p.id}/models`)
+              .then((r) => r.json())
+              .then((models: ProviderModel[]) =>
+                setProviderModels((prev) => ({ ...prev, [p.id]: models }))
+              )
+              .catch(() => {});
+          });
+      })
       .catch(() => {});
   }, []);
-
-  useEffect(() => {
-    const active = providers.find((p) => p.active);
-    if (!active) return;
-    fetch(`/api/providers/${active.id}/models`)
-      .then((r) => r.json())
-      .then((data: ProviderModel[]) => setActiveModels(data))
-      .catch(() => setActiveModels([]));
-  }, [providers]);
 
   async function handleModeChange(newMode: Mode) {
     try {
@@ -109,15 +113,17 @@ export default function Settings({ mode, setMode, theme }: Props) {
     }
   }
 
-  async function handleModelChange(model: string) {
+  async function handleModelChange(providerId: string, model: string) {
     setChangingModel(true);
     try {
       await fetch("/api/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model }),
+        body: JSON.stringify({ provider: providerId, model }),
       });
-      setProviders((ps) => ps.map((p) => (p.active ? { ...p, selected_model: model } : p)));
+      setProviders((ps) =>
+        ps.map((p) => (p.id === providerId ? { ...p, selected_model: model } : p))
+      );
     } finally {
       setChangingModel(false);
     }
@@ -186,8 +192,9 @@ export default function Settings({ mode, setMode, theme }: Props) {
               LLM Provider
             </h3>
             <p className="text-xs text-gray-600 mb-3">
-              Switch which AI model powers the coaching chat. Only providers configured in{" "}
-              <code className="text-gray-500">.env</code> can be selected.
+              Switch which AI model powers the coaching chat. Ollama is auto-detected when running
+              locally; Claude and Gemini require API keys in{" "}
+              <code className="text-gray-500">.env</code>.
             </p>
             <div className="space-y-3">
               {providers.map((provider) => {
@@ -213,18 +220,19 @@ export default function Settings({ mode, setMode, theme }: Props) {
                         <span className="ml-auto text-xs text-yellow-600">Not configured</span>
                       )}
                     </div>
-                    {provider.active && activeModels.length > 1 ? (
+                    {provider.configured &&
+                    (providerModels[provider.id] ?? []).length > 1 ? (
                       <select
                         value={provider.selected_model}
                         onChange={(e) => {
                           e.stopPropagation();
-                          handleModelChange(e.target.value);
+                          handleModelChange(provider.id, e.target.value);
                         }}
                         onClick={(e) => e.stopPropagation()}
                         disabled={changingModel}
                         className="mt-1 w-full bg-gray-800 text-gray-300 text-xs rounded px-2 py-1 border border-gray-700 focus:outline-none focus:border-gray-500 disabled:opacity-50"
                       >
-                        {activeModels.map((m) => (
+                        {(providerModels[provider.id] ?? []).map((m) => (
                           <option key={m.id} value={m.id}>
                             {m.display_name}
                           </option>

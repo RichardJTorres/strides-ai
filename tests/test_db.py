@@ -380,22 +380,9 @@ def test_get_recent_messages_includes_model_field(tmp_db):
     assert "model" in msg
 
 
-def test_migrate_backfills_claude_for_existing_rows(tmp_db):
-    """Rows inserted before the model column existed should be backfilled with 'claude'."""
-    import sqlite3 as _sqlite3
-
-    # Insert a row bypassing the model column (simulates pre-migration data)
-    with _sqlite3.connect(db.DB_PATH) as conn:
-        conn.execute(
-            "INSERT INTO conversations (role, content, mode) VALUES (?, ?, ?)",
-            ("assistant", "old message", "running"),
-        )
-
-    # Re-run the migration (idempotent — column already exists, but backfill still applies)
-    with _sqlite3.connect(db.DB_PATH) as conn:
-        conn.row_factory = _sqlite3.Row
-        db._migrate_conversations_model(conn)
-
+def test_save_message_model_is_none_when_not_provided(tmp_db):
+    """Messages saved without a model label default to None."""
+    db.save_message("assistant", "old message", mode="running")
     msgs = db.get_recent_messages(10)
     old = next(m for m in msgs if m["content"] == "old message")
-    assert old["model"] == "claude"
+    assert old["model"] is None

@@ -8,6 +8,7 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   created_at?: string;
+  model?: string;
 }
 
 interface Memory {
@@ -128,6 +129,9 @@ const MessageList = memo(function MessageList({
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                   {m.content || (i === streamingIndex ? "" : "…")}
                 </ReactMarkdown>
+                {m.model && i !== streamingIndex && (
+                  <p className="text-[10px] text-gray-700 mt-1">{m.model}</p>
+                )}
               </div>
             )
           )}
@@ -184,6 +188,7 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
 
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -479,6 +484,14 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
           if (!line.startsWith("data: ")) continue;
           const payload = line.slice(6).replace(/\\n/g, "\n");
           if (payload === "[DONE]") break;
+
+          if (payload.startsWith("[MODEL]")) {
+            const label = payload.slice(7);
+            setMessages((prev) =>
+              prev.map((m, i) => (i === assistantIndex ? { ...m, model: label } : m))
+            );
+            continue;
+          }
 
           if (payload.startsWith("[MEMORIES]")) {
             try {

@@ -13,9 +13,7 @@ def main() -> None:
     # Validate required env vars
     provider = os.environ.get("PROVIDER", "claude").lower()
     if provider == "ollama":
-        if not os.environ.get("OLLAMA_MODEL"):
-            print("OLLAMA_MODEL must be set when using PROVIDER=ollama")
-            sys.exit(1)
+        pass  # Ollama is auto-detected at runtime; no env var required
     elif provider == "gemini":
         if not os.environ.get("GEMINI_API_KEY"):
             print("GEMINI_API_KEY must be set when using PROVIDER=gemini")

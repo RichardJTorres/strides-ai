@@ -79,6 +79,12 @@ def _stored_model(provider_id: str, env_key: str, default: str) -> str:
 def _provider_statuses() -> list[dict]:
     """Return the list of providers with their configuration and active status."""
     current = db.get_setting("provider", os.environ.get("PROVIDER", "claude")) or "claude"
+
+    # Probe Ollama once — reachable + has models == configured
+    ollama_models = _get_provider_models("ollama")
+    ollama_configured = len(ollama_models) > 0
+    ollama_default = ollama_models[0]["id"] if ollama_models else ""
+
     return [
         {
             "id": "claude",
@@ -103,11 +109,11 @@ def _provider_statuses() -> list[dict]:
         {
             "id": "ollama",
             "label": "Ollama",
-            "selected_model": _stored_model("ollama", "OLLAMA_MODEL", "llama3.1"),
-            "configured": bool(os.environ.get("OLLAMA_MODEL")),
+            "selected_model": _stored_model("ollama", "OLLAMA_MODEL", ollama_default),
+            "configured": ollama_configured,
             "active": current == "ollama",
             "config_hint": (
-                "Set OLLAMA_MODEL in .env" if not os.environ.get("OLLAMA_MODEL") else None
+                "Start Ollama and pull at least one model" if not ollama_configured else None
             ),
         },
     ]
@@ -129,7 +135,9 @@ def init_backend(app: FastAPI, mode: str | None = None, provider: str | None = N
     initial_history = build_initial_history(activities, prior_messages, mode=current_mode)
 
     if current_provider == "ollama":
-        model = _stored_model("ollama", "OLLAMA_MODEL", "llama3.1")
+        available = _get_provider_models("ollama")
+        auto_default = available[0]["id"] if available else ""
+        model = _stored_model("ollama", "OLLAMA_MODEL", auto_default)
         host = os.environ.get("OLLAMA_HOST", DEFAULT_HOST)
         app.state.backend = OllamaBackend(model, initial_history, host)
     elif current_provider == "gemini":
@@ -304,6 +312,7 @@ async def chat(
             response_text, memories_saved = backend.stream_turn(
                 system, message, on_token, attachments=llm_blocks or None
             )
+            token_queue.put(f"[MODEL]{backend.label}")
             if memories_saved:
                 token_queue.put(
                     "[MEMORIES]"
