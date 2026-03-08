@@ -83,7 +83,7 @@ def _provider_statuses() -> list[dict]:
     # Probe Ollama once — reachable + has models == configured
     ollama_models = _get_provider_models("ollama")
     ollama_configured = len(ollama_models) > 0
-    ollama_default = ollama_models[0]["id"] if ollama_models else "llama3.1"
+    ollama_default = ollama_models[0]["id"] if ollama_models else ""
 
     return [
         {
@@ -136,7 +136,7 @@ def init_backend(app: FastAPI, mode: str | None = None, provider: str | None = N
 
     if current_provider == "ollama":
         available = _get_provider_models("ollama")
-        auto_default = available[0]["id"] if available else "llama3.1"
+        auto_default = available[0]["id"] if available else ""
         model = _stored_model("ollama", "OLLAMA_MODEL", auto_default)
         host = os.environ.get("OLLAMA_HOST", DEFAULT_HOST)
         app.state.backend = OllamaBackend(model, initial_history, host)
