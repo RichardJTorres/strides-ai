@@ -1,6 +1,5 @@
 """Entry point for the web server: strides-ai-web."""
 
-import os
 import sys
 from pathlib import Path
 
@@ -10,21 +9,24 @@ from dotenv import load_dotenv
 def main() -> None:
     load_dotenv()
 
+    from ..config import get_settings
+
+    settings = get_settings()
+
     # Validate required env vars
-    provider = os.environ.get("PROVIDER", "claude").lower()
+    provider = settings.provider.lower()
     if provider == "ollama":
         pass  # Ollama is auto-detected at runtime; no env var required
     elif provider == "gemini":
-        if not os.environ.get("GEMINI_API_KEY"):
+        if not settings.gemini_api_key:
             print("GEMINI_API_KEY must be set when using PROVIDER=gemini")
             sys.exit(1)
     else:
-        if not os.environ.get("ANTHROPIC_API_KEY"):
+        if not settings.anthropic_api_key:
             print("ANTHROPIC_API_KEY must be set when using PROVIDER=claude (the default)")
             sys.exit(1)
 
-    strava_ok = os.environ.get("STRAVA_CLIENT_ID") and os.environ.get("STRAVA_CLIENT_SECRET")
-    if not strava_ok:
+    if not settings.strava_client_id or not settings.strava_client_secret:
         print("Missing STRAVA_CLIENT_ID or STRAVA_CLIENT_SECRET.")
         sys.exit(1)
 
@@ -59,7 +61,7 @@ def main() -> None:
 
     import uvicorn
 
-    port = int(os.environ.get("PORT", 8000))
+    port = settings.port
     print(f"Starting Strides AI web server on http://localhost:{port}")
     uvicorn.run(app, host="0.0.0.0", port=port)
 
