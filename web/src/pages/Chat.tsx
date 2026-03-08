@@ -25,6 +25,20 @@ interface Props {
 const SCROLL_KEY = "chat_scroll";
 const PAGE_SIZE = 40;
 
+function TypingIndicator() {
+  return (
+    <div className="flex items-center gap-1.5 py-1">
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          className="w-2 h-2 rounded-full bg-gray-500 animate-bounce"
+          style={{ animationDelay: `${i * 160}ms`, animationDuration: "1s" }}
+        />
+      ))}
+    </div>
+  );
+}
+
 // Memoized so it doesn't re-render on every input keystroke
 const MessageList = memo(function MessageList({
   messages,
@@ -126,9 +140,13 @@ const MessageList = memo(function MessageList({
                     : ""
                 }`}
               >
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {m.content || (i === streamingIndex ? "" : "…")}
-                </ReactMarkdown>
+                {i === streamingIndex && !m.content ? (
+                  <TypingIndicator />
+                ) : (
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {m.content || "…"}
+                  </ReactMarkdown>
+                )}
                 {m.model && i !== streamingIndex && (
                   <p className="text-[10px] text-gray-700 mt-1">{m.model}</p>
                 )}
