@@ -16,6 +16,8 @@ dependencies = [
     "fastapi>=0.100",
     "uvicorn>=0.20",
     "matplotlib>=3.7",
+    "sqlmodel>=0.0.21",
+    "alembic>=1.13",
 ]
 
 [project.scripts]

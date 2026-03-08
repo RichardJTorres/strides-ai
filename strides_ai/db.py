@@ -1,9 +1,13 @@
-"""SQLite persistence for Strava activities, conversation history, memories, and profile."""
+"""SQLite persistence using SQLModel + Alembic."""
 
 import json
-import sqlite3
+from datetime import date as date_cls, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
+
+import sqlalchemy as sa
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlmodel import Column, Field, Session, SQLModel, create_engine, select
 
 DB_PATH = Path.home() / ".strides_ai" / "activities.db"
 
@@ -11,143 +15,188 @@ DB_PATH = Path.home() / ".strides_ai" / "activities.db"
 RUN_TYPES = {"Run", "TrailRun", "VirtualRun"}
 CYCLE_TYPES = {"Ride", "VirtualRide", "GravelRide"}
 
-CREATE_TABLE = """
-CREATE TABLE IF NOT EXISTS activities (
-    id                INTEGER PRIMARY KEY,
-    name              TEXT,
-    date              TEXT,          -- ISO-8601 local date
-    distance_m        REAL,          -- metres
-    moving_time_s     INTEGER,       -- seconds
-    elapsed_time_s    INTEGER,       -- seconds
-    elevation_gain_m  REAL,          -- metres
-    avg_pace_s_per_km REAL,          -- seconds per km (derived)
-    avg_hr            REAL,
-    max_hr            INTEGER,
-    avg_cadence       REAL,          -- steps/min for running, rpm for cycling
-    suffer_score      INTEGER,
-    perceived_exertion REAL,
-    sport_type        TEXT,
-    raw_json          TEXT           -- full Strava payload for future use
-)
-"""
 
-CREATE_CONVERSATIONS = """
-CREATE TABLE IF NOT EXISTS conversations (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    role       TEXT NOT NULL,   -- 'user' or 'assistant'
-    content    TEXT NOT NULL,
-    mode       TEXT NOT NULL DEFAULT 'running',
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-)
-"""
-
-CREATE_MEMORIES = """
-CREATE TABLE IF NOT EXISTS memories (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    category   TEXT NOT NULL,
-    content    TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-)
-"""
-
-CREATE_SETTINGS = """
-CREATE TABLE IF NOT EXISTS settings (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-)
-"""
-
-CREATE_PROFILES = """
-CREATE TABLE IF NOT EXISTS profiles (
-    mode        TEXT PRIMARY KEY,
-    fields_json TEXT NOT NULL,
-    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
-)
-"""
-
-CREATE_CALENDAR_PREFS = """
-CREATE TABLE IF NOT EXISTS calendar_prefs (
-    id            INTEGER PRIMARY KEY CHECK (id = 1),
-    rest_days     TEXT NOT NULL DEFAULT '[]',
-    long_run_days TEXT NOT NULL DEFAULT '[]',
-    frequency     INTEGER NOT NULL DEFAULT 4,
-    blocked_days  TEXT NOT NULL DEFAULT '[]',
-    races         TEXT NOT NULL DEFAULT '[]'
-)
-"""
-
-CREATE_TRAINING_PLAN = """
-CREATE TABLE IF NOT EXISTS training_plan (
-    date          TEXT PRIMARY KEY,
-    workout_type  TEXT,
-    description   TEXT,
-    distance_km   REAL,
-    elevation_m   REAL,
-    duration_min  INTEGER,
-    intensity     TEXT,
-    nutrition_json TEXT,
-    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
-)
-"""
+# ── Models ────────────────────────────────────────────────────────────────────
 
 
-def _connect() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+class Activity(SQLModel, table=True):
+    __tablename__ = "activities"
+
+    id: int = Field(primary_key=True)
+    name: Optional[str] = None
+    date: Optional[str] = None
+    distance_m: Optional[float] = None
+    moving_time_s: Optional[int] = None
+    elapsed_time_s: Optional[int] = None
+    elevation_gain_m: Optional[float] = None
+    avg_pace_s_per_km: Optional[float] = None
+    avg_hr: Optional[float] = None
+    max_hr: Optional[int] = None
+    avg_cadence: Optional[float] = None
+    suffer_score: Optional[int] = None
+    perceived_exertion: Optional[float] = None
+    sport_type: Optional[str] = None
+    raw_json: Optional[str] = None
 
 
-def _migrate_conversations(conn: sqlite3.Connection) -> None:
-    """Add mode column to conversations table if it does not exist yet."""
-    try:
-        conn.execute("ALTER TABLE conversations ADD COLUMN mode TEXT NOT NULL DEFAULT 'running'")
-    except sqlite3.OperationalError:
-        pass  # column already exists
+class Conversation(SQLModel, table=True):
+    __tablename__ = "conversations"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    role: str
+    content: str
+    mode: str = Field(default="running")
+    model: Optional[str] = None
+    created_at: Optional[str] = Field(
+        default=None,
+        sa_column=Column(sa.Text, server_default=sa.text("datetime('now')")),
+    )
 
 
-def _migrate_conversations_model(conn: sqlite3.Connection) -> None:
-    """Add model column and backfill existing rows with 'claude'."""
-    try:
-        conn.execute("ALTER TABLE conversations ADD COLUMN model TEXT")
-    except sqlite3.OperationalError:
-        pass  # column already exists
-    conn.execute("UPDATE conversations SET model = 'claude' WHERE model IS NULL")
+class Memory(SQLModel, table=True):
+    __tablename__ = "memories"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    category: str
+    content: str = Field(sa_column=Column(sa.Text, unique=True, nullable=False))
+    created_at: Optional[str] = Field(
+        default=None,
+        sa_column=Column(sa.Text, server_default=sa.text("datetime('now')")),
+    )
 
 
-def _migrate_training_plan_elevation(conn: sqlite3.Connection) -> None:
-    """Add elevation_m column to training_plan if it does not exist yet."""
-    try:
-        conn.execute("ALTER TABLE training_plan ADD COLUMN elevation_m REAL")
-    except sqlite3.OperationalError:
-        pass  # column already exists
+class Setting(SQLModel, table=True):
+    __tablename__ = "settings"
+
+    key: str = Field(primary_key=True)
+    value: str
+
+
+class Profile(SQLModel, table=True):
+    __tablename__ = "profiles"
+
+    mode: str = Field(primary_key=True)
+    fields_json: str
+    updated_at: Optional[str] = Field(
+        default=None,
+        sa_column=Column(sa.Text, server_default=sa.text("datetime('now')")),
+    )
+
+
+class CalendarPref(SQLModel, table=True):
+    __tablename__ = "calendar_prefs"
+
+    id: int = Field(
+        default=1,
+        sa_column=Column(sa.Integer, sa.CheckConstraint("id = 1"), primary_key=True),
+    )
+    rest_days: str = Field(
+        default="[]",
+        sa_column=Column(sa.Text, nullable=False, server_default="'[]'"),
+    )
+    long_run_days: str = Field(
+        default="[]",
+        sa_column=Column(sa.Text, nullable=False, server_default="'[]'"),
+    )
+    frequency: int = Field(
+        default=4,
+        sa_column=Column(sa.Integer, nullable=False, server_default="4"),
+    )
+    blocked_days: str = Field(
+        default="[]",
+        sa_column=Column(sa.Text, nullable=False, server_default="'[]'"),
+    )
+    races: str = Field(
+        default="[]",
+        sa_column=Column(sa.Text, nullable=False, server_default="'[]'"),
+    )
+
+
+class TrainingPlan(SQLModel, table=True):
+    __tablename__ = "training_plan"
+
+    date: str = Field(primary_key=True)
+    workout_type: Optional[str] = None
+    description: Optional[str] = None
+    distance_km: Optional[float] = None
+    elevation_m: Optional[float] = None
+    duration_min: Optional[int] = None
+    intensity: Optional[str] = None
+    nutrition_json: Optional[str] = None
+    created_at: Optional[str] = Field(
+        default=None,
+        sa_column=Column(sa.Text, server_default=sa.text("datetime('now')")),
+    )
+
+
+# ── Engine ────────────────────────────────────────────────────────────────────
+
+_engine: sa.engine.Engine | None = None
+
+
+def _get_engine() -> sa.engine.Engine:
+    global _engine
+    if _engine is None:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _engine = create_engine(
+            f"sqlite:///{DB_PATH}",
+            connect_args={"check_same_thread": False},
+        )
+    return _engine
+
+
+def _reset_engine() -> None:
+    global _engine
+    if _engine is not None:
+        _engine.dispose()
+        _engine = None
+
+
+def _make_alembic_config():
+    from alembic.config import Config
+
+    alembic_dir = Path(__file__).parent.parent / "alembic"
+    cfg = Config()
+    cfg.set_main_option("script_location", str(alembic_dir))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{DB_PATH}")
+    return cfg
 
 
 def init_db() -> None:
-    with _connect() as conn:
-        conn.execute(CREATE_TABLE)
-        conn.execute(CREATE_CONVERSATIONS)
-        conn.execute(CREATE_MEMORIES)
-        conn.execute(CREATE_SETTINGS)
-        conn.execute(CREATE_PROFILES)
-        conn.execute(CREATE_CALENDAR_PREFS)
-        conn.execute(CREATE_TRAINING_PLAN)
-        _migrate_conversations(conn)
-        _migrate_conversations_model(conn)
-        _migrate_training_plan_elevation(conn)
+    _reset_engine()
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    from alembic import command as alembic_command
+
+    cfg = _make_alembic_config()
+
+    with _get_engine().connect() as conn:
+        tables = (
+            conn.execute(sa.text("SELECT name FROM sqlite_master WHERE type='table'"))
+            .scalars()
+            .all()
+        )
+
+    if "activities" in tables and "alembic_version" not in tables:
+        # Existing database — stamp without running DDL
+        alembic_command.stamp(cfg, "head")
+    else:
+        # Fresh database or already stamped — run migrations
+        alembic_command.upgrade(cfg, "head")
+
+
+# ── Activities ────────────────────────────────────────────────────────────────
 
 
 def get_latest_activity_date() -> str | None:
     """Return the ISO date of the most recent stored activity, or None."""
-    with _connect() as conn:
-        row = conn.execute("SELECT MAX(date) FROM activities").fetchone()
-        return row[0] if row else None
+    with Session(_get_engine()) as session:
+        return session.execute(select(sa.func.max(Activity.date))).scalar()
 
 
 def get_stored_ids() -> set[int]:
-    with _connect() as conn:
-        rows = conn.execute("SELECT id FROM activities").fetchall()
-        return {r["id"] for r in rows}
+    with Session(_get_engine()) as session:
+        return set(session.execute(select(Activity.id)).scalars().all())
 
 
 def upsert_activity(activity: dict[str, Any]) -> None:
@@ -155,15 +204,11 @@ def upsert_activity(activity: dict[str, Any]) -> None:
     distance_m: float = activity.get("distance", 0)
     moving_time_s: int = activity.get("moving_time", 0)
 
-    # Pace in seconds per km (works for both running and cycling)
     if distance_m > 0 and moving_time_s > 0:
         avg_pace_s_per_km = moving_time_s / (distance_m / 1000)
     else:
         avg_pace_s_per_km = None
 
-    # Strava returns running cadence as average steps per minute for one foot;
-    # multiply by 2 for total (running cadence convention).
-    # Cycling cadence is already full RPM — do not double.
     sport = activity.get("sport_type", activity.get("type", ""))
     raw_cadence = activity.get("average_cadence")
     if raw_cadence is not None:
@@ -171,62 +216,60 @@ def upsert_activity(activity: dict[str, Any]) -> None:
     else:
         avg_cadence = None
 
-    with _connect() as conn:
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO activities (
-                id, name, date, distance_m, moving_time_s, elapsed_time_s,
-                elevation_gain_m, avg_pace_s_per_km, avg_hr, max_hr,
-                avg_cadence, suffer_score, perceived_exertion, sport_type, raw_json
-            ) VALUES (
-                :id, :name, :date, :distance_m, :moving_time_s, :elapsed_time_s,
-                :elevation_gain_m, :avg_pace_s_per_km, :avg_hr, :max_hr,
-                :avg_cadence, :suffer_score, :perceived_exertion, :sport_type, :raw_json
-            )
-            """,
-            {
-                "id": activity["id"],
-                "name": activity.get("name"),
-                "date": activity.get("start_date_local", "")[:10],
-                "distance_m": distance_m,
-                "moving_time_s": moving_time_s,
-                "elapsed_time_s": activity.get("elapsed_time"),
-                "elevation_gain_m": activity.get("total_elevation_gain"),
-                "avg_pace_s_per_km": avg_pace_s_per_km,
-                "avg_hr": activity.get("average_heartrate"),
-                "max_hr": activity.get("max_heartrate"),
-                "avg_cadence": avg_cadence,
-                "suffer_score": activity.get("suffer_score"),
-                "perceived_exertion": activity.get("perceived_exertion"),
-                "sport_type": sport,
-                "raw_json": json.dumps(activity),
-            },
+    values = {
+        "id": activity["id"],
+        "name": activity.get("name"),
+        "date": activity.get("start_date_local", "")[:10],
+        "distance_m": distance_m,
+        "moving_time_s": moving_time_s,
+        "elapsed_time_s": activity.get("elapsed_time"),
+        "elevation_gain_m": activity.get("total_elevation_gain"),
+        "avg_pace_s_per_km": avg_pace_s_per_km,
+        "avg_hr": activity.get("average_heartrate"),
+        "max_hr": activity.get("max_heartrate"),
+        "avg_cadence": avg_cadence,
+        "suffer_score": activity.get("suffer_score"),
+        "perceived_exertion": activity.get("perceived_exertion"),
+        "sport_type": sport,
+        "raw_json": json.dumps(activity),
+    }
+
+    with Session(_get_engine()) as session:
+        stmt = sqlite_insert(Activity).values(**values)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["id"],
+            set_={k: v for k, v in values.items() if k != "id"},
         )
+        session.execute(stmt)
+        session.commit()
 
 
-def get_all_activities() -> list[sqlite3.Row]:
+def get_all_activities() -> list[dict]:
     """Return all activities ordered newest-first."""
-    with _connect() as conn:
-        return conn.execute("SELECT * FROM activities ORDER BY date DESC").fetchall()
+    with Session(_get_engine()) as session:
+        rows = session.exec(select(Activity).order_by(Activity.date.desc())).all()
+    return [r.model_dump() for r in rows]
 
 
-def get_activities_for_mode(mode: str) -> list[sqlite3.Row]:
+def get_activities_for_mode(mode: str) -> list[dict]:
     """Return activities filtered to the active mode, newest-first."""
-    with _connect() as conn:
+    with Session(_get_engine()) as session:
         if mode == "running":
-            placeholders = ",".join("?" * len(RUN_TYPES))
-            return conn.execute(
-                f"SELECT * FROM activities WHERE sport_type IN ({placeholders}) ORDER BY date DESC",
-                tuple(RUN_TYPES),
-            ).fetchall()
+            stmt = (
+                select(Activity)
+                .where(Activity.sport_type.in_(RUN_TYPES))
+                .order_by(Activity.date.desc())
+            )
         elif mode == "cycling":
-            placeholders = ",".join("?" * len(CYCLE_TYPES))
-            return conn.execute(
-                f"SELECT * FROM activities WHERE sport_type IN ({placeholders}) ORDER BY date DESC",
-                tuple(CYCLE_TYPES),
-            ).fetchall()
+            stmt = (
+                select(Activity)
+                .where(Activity.sport_type.in_(CYCLE_TYPES))
+                .order_by(Activity.date.desc())
+            )
         else:  # hybrid
-            return conn.execute("SELECT * FROM activities ORDER BY date DESC").fetchall()
+            stmt = select(Activity).order_by(Activity.date.desc())
+        rows = session.exec(stmt).all()
+    return [r.model_dump() for r in rows]
 
 
 # ── Profiles ─────────────────────────────────────────────────────────────────
@@ -234,167 +277,158 @@ def get_activities_for_mode(mode: str) -> list[sqlite3.Row]:
 
 def get_profile_fields(mode: str) -> dict | None:
     """Return the profile fields dict for the given mode, or None if not saved."""
-    with _connect() as conn:
-        row = conn.execute("SELECT fields_json FROM profiles WHERE mode = ?", (mode,)).fetchone()
-    return json.loads(row["fields_json"]) if row else None
+    with Session(_get_engine()) as session:
+        row = session.get(Profile, mode)
+    return json.loads(row.fields_json) if row else None
 
 
 def save_profile_fields(mode: str, fields: dict) -> None:
-    with _connect() as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO profiles (mode, fields_json, updated_at) VALUES (?, ?, datetime('now'))",
-            (mode, json.dumps(fields)),
+    with Session(_get_engine()) as session:
+        stmt = sqlite_insert(Profile).values(mode=mode, fields_json=json.dumps(fields))
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["mode"],
+            set_={"fields_json": json.dumps(fields), "updated_at": sa.text("datetime('now')")},
         )
+        session.execute(stmt)
+        session.commit()
 
 
 # ── Settings ─────────────────────────────────────────────────────────────────
 
 
 def get_setting(key: str, default: str | None = None) -> str | None:
-    with _connect() as conn:
-        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-    return row["value"] if row else default
+    with Session(_get_engine()) as session:
+        row = session.get(Setting, key)
+    return row.value if row else default
 
 
 def set_setting(key: str, value: str) -> None:
-    with _connect() as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-            (key, value),
-        )
+    with Session(_get_engine()) as session:
+        stmt = sqlite_insert(Setting).values(key=key, value=value)
+        stmt = stmt.on_conflict_do_update(index_elements=["key"], set_={"value": value})
+        session.execute(stmt)
+        session.commit()
 
 
-# ── Conversation history ────────────────────────────────────────────────────
+# ── Conversation history ──────────────────────────────────────────────────────
 
 
 def save_message(role: str, content: str, mode: str = "running", model: str | None = None) -> None:
-    with _connect() as conn:
-        conn.execute(
-            "INSERT INTO conversations (role, content, mode, model) VALUES (?, ?, ?, ?)",
-            (role, content, mode, model),
-        )
+    with Session(_get_engine()) as session:
+        session.add(Conversation(role=role, content=content, mode=mode, model=model))
+        session.commit()
 
 
 def get_recent_messages(n: int = 40, mode: str | None = None) -> list[dict]:
     """Return the last *n* messages in chronological order, optionally filtered by mode."""
-    with _connect() as conn:
+    with Session(_get_engine()) as session:
+        stmt = select(Conversation).order_by(Conversation.id.desc()).limit(n)
         if mode:
-            rows = conn.execute(
-                "SELECT id, role, content, model, created_at FROM conversations WHERE mode = ? ORDER BY id DESC LIMIT ?",
-                (mode, n),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT id, role, content, model, created_at FROM conversations ORDER BY id DESC LIMIT ?",
-                (n,),
-            ).fetchall()
-    return [dict(r) for r in reversed(rows)]
+            stmt = stmt.where(Conversation.mode == mode)
+        rows = session.exec(stmt).all()
+    return [r.model_dump() for r in reversed(rows)]
 
 
 def get_messages_before(before_id: int, limit: int = 40, mode: str | None = None) -> list[dict]:
     """Return up to *limit* messages with id < before_id, in chronological order."""
-    with _connect() as conn:
+    with Session(_get_engine()) as session:
+        stmt = (
+            select(Conversation)
+            .where(Conversation.id < before_id)
+            .order_by(Conversation.id.desc())
+            .limit(limit)
+        )
         if mode:
-            rows = conn.execute(
-                "SELECT id, role, content, model, created_at FROM conversations WHERE id < ? AND mode = ? ORDER BY id DESC LIMIT ?",
-                (before_id, mode, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT id, role, content, model, created_at FROM conversations WHERE id < ? ORDER BY id DESC LIMIT ?",
-                (before_id, limit),
-            ).fetchall()
-    return [dict(r) for r in reversed(rows)]
+            stmt = stmt.where(Conversation.mode == mode)
+        rows = session.exec(stmt).all()
+    return [r.model_dump() for r in reversed(rows)]
 
 
 def get_message_count(mode: str | None = None) -> int:
     """Return the total number of stored messages, optionally filtered by mode."""
-    with _connect() as conn:
+    with Session(_get_engine()) as session:
+        stmt = select(sa.func.count()).select_from(Conversation)
         if mode:
-            return conn.execute(
-                "SELECT COUNT(*) FROM conversations WHERE mode = ?", (mode,)
-            ).fetchone()[0]
-        return conn.execute("SELECT COUNT(*) FROM conversations").fetchone()[0]
+            stmt = stmt.where(Conversation.mode == mode)
+        return session.execute(stmt).scalar() or 0
 
 
 def search_messages(query: str, limit: int = 20, mode: str | None = None) -> list[dict]:
     """Case-insensitive substring search. Returns newest-first."""
-    with _connect() as conn:
+    with Session(_get_engine()) as session:
+        stmt = (
+            select(Conversation)
+            .where(Conversation.content.ilike(f"%{query}%"))
+            .order_by(Conversation.id.desc())
+            .limit(limit)
+        )
         if mode:
-            rows = conn.execute(
-                "SELECT id, role, content, model, created_at FROM conversations WHERE content LIKE ? AND mode = ? ORDER BY id DESC LIMIT ?",
-                (f"%{query}%", mode, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT id, role, content, model, created_at FROM conversations WHERE content LIKE ? ORDER BY id DESC LIMIT ?",
-                (f"%{query}%", limit),
-            ).fetchall()
-    return [dict(r) for r in rows]
+            stmt = stmt.where(Conversation.mode == mode)
+        rows = session.exec(stmt).all()
+    return [r.model_dump() for r in rows]
 
 
-# ── Memories ────────────────────────────────────────────────────────────────
+# ── Memories ──────────────────────────────────────────────────────────────────
 
 
 def save_memory(category: str, content: str) -> str:
     """Persist a memory. Returns a status string for the tool result."""
     try:
-        with _connect() as conn:
-            conn.execute(
-                "INSERT OR IGNORE INTO memories (category, content) VALUES (?, ?)",
-                (category, content),
-            )
+        with Session(_get_engine()) as session:
+            stmt = sqlite_insert(Memory).values(category=category, content=content)
+            stmt = stmt.on_conflict_do_nothing(index_elements=["content"])
+            session.execute(stmt)
+            session.commit()
         return "Memory saved."
     except Exception as exc:
         return f"Error: {exc}"
 
 
 def get_all_memories() -> list[dict]:
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT id, category, content, created_at FROM memories ORDER BY created_at"
-        ).fetchall()
-    return [dict(r) for r in rows]
+    with Session(_get_engine()) as session:
+        rows = session.exec(select(Memory).order_by(Memory.created_at)).all()
+    return [r.model_dump() for r in rows]
 
 
-# ── Calendar ─────────────────────────────────────────────────────────────────
+# ── Calendar ──────────────────────────────────────────────────────────────────
 
 
 def get_calendar_prefs() -> dict:
-    with _connect() as conn:
-        row = conn.execute("SELECT * FROM calendar_prefs WHERE id = 1").fetchone()
+    with Session(_get_engine()) as session:
+        row = session.get(CalendarPref, 1)
     if row is None:
         return {"blocked_days": [], "races": []}
     return {
-        "blocked_days": json.loads(row["blocked_days"]),
-        "races": json.loads(row["races"]),
+        "blocked_days": json.loads(row.blocked_days),
+        "races": json.loads(row.races),
     }
 
 
 def save_calendar_prefs(blocked_days: list, races: list) -> None:
-    with _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO calendar_prefs (id, blocked_days, races)
-            VALUES (1, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                blocked_days = excluded.blocked_days,
-                races = excluded.races
-            """,
-            (json.dumps(blocked_days), json.dumps(races)),
+    with Session(_get_engine()) as session:
+        stmt = sqlite_insert(CalendarPref).values(
+            id=1,
+            blocked_days=json.dumps(blocked_days),
+            races=json.dumps(races),
         )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["id"],
+            set_={
+                "blocked_days": json.dumps(blocked_days),
+                "races": json.dumps(races),
+            },
+        )
+        session.execute(stmt)
+        session.commit()
 
 
 def get_training_plan(start_date: str | None = None, end_date: str | None = None) -> list[dict]:
-    with _connect() as conn:
+    with Session(_get_engine()) as session:
+        stmt = select(TrainingPlan).order_by(TrainingPlan.date)
         if start_date and end_date:
-            rows = conn.execute(
-                "SELECT * FROM training_plan WHERE date BETWEEN ? AND ? ORDER BY date",
-                (start_date, end_date),
-            ).fetchall()
-        else:
-            rows = conn.execute("SELECT * FROM training_plan ORDER BY date").fetchall()
-    return [dict(r) for r in rows]
+            stmt = stmt.where(TrainingPlan.date.between(start_date, end_date))
+        rows = session.exec(stmt).all()
+    return [r.model_dump() for r in rows]
 
 
 def save_planned_workout(
@@ -407,47 +441,59 @@ def save_planned_workout(
     intensity: str | None,
 ) -> None:
     """Upsert a user-entered planned workout."""
-    with _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO training_plan (date, workout_type, description, distance_km, elevation_m, duration_min, intensity, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-            ON CONFLICT(date) DO UPDATE SET
-                workout_type  = excluded.workout_type,
-                description   = excluded.description,
-                distance_km   = excluded.distance_km,
-                elevation_m   = excluded.elevation_m,
-                duration_min  = excluded.duration_min,
-                intensity     = excluded.intensity,
-                created_at    = excluded.created_at,
-                nutrition_json = NULL
-            """,
-            (date, workout_type, description, distance_km, elevation_m, duration_min, intensity),
+    with Session(_get_engine()) as session:
+        stmt = sqlite_insert(TrainingPlan).values(
+            date=date,
+            workout_type=workout_type,
+            description=description,
+            distance_km=distance_km,
+            elevation_m=elevation_m,
+            duration_min=duration_min,
+            intensity=intensity,
         )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["date"],
+            set_={
+                "workout_type": workout_type,
+                "description": description,
+                "distance_km": distance_km,
+                "elevation_m": elevation_m,
+                "duration_min": duration_min,
+                "intensity": intensity,
+                "nutrition_json": None,
+                "created_at": sa.text("datetime('now')"),
+            },
+        )
+        session.execute(stmt)
+        session.commit()
 
 
 def delete_planned_workout(date: str) -> None:
-    with _connect() as conn:
-        conn.execute("DELETE FROM training_plan WHERE date = ?", (date,))
+    with Session(_get_engine()) as session:
+        row = session.get(TrainingPlan, date)
+        if row:
+            session.delete(row)
+            session.commit()
 
 
 def save_workout_nutrition(date: str, nutrition: dict) -> None:
-    with _connect() as conn:
-        conn.execute(
-            "UPDATE training_plan SET nutrition_json = ? WHERE date = ?",
-            (json.dumps(nutrition), date),
-        )
+    with Session(_get_engine()) as session:
+        row = session.get(TrainingPlan, date)
+        if row:
+            row.nutrition_json = json.dumps(nutrition)
+            session.add(row)
+            session.commit()
 
 
 def get_upcoming_planned_workouts(days: int = 14) -> list[dict]:
     """Return planned workouts from today through the next `days` days."""
-    from datetime import date as date_cls, timedelta
-
     today = date_cls.today().isoformat()
     end = (date_cls.today() + timedelta(days=days)).isoformat()
-    with _connect() as conn:
-        rows = conn.execute(
-            "SELECT * FROM training_plan WHERE date >= ? AND date <= ? ORDER BY date",
-            (today, end),
-        ).fetchall()
-    return [dict(r) for r in rows]
+    with Session(_get_engine()) as session:
+        stmt = (
+            select(TrainingPlan)
+            .where(TrainingPlan.date >= today, TrainingPlan.date <= end)
+            .order_by(TrainingPlan.date)
+        )
+        rows = session.exec(stmt).all()
+    return [r.model_dump() for r in rows]
