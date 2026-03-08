@@ -8,6 +8,7 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   created_at?: string;
+  model?: string;
 }
 
 interface Memory {
@@ -128,6 +129,9 @@ const MessageList = memo(function MessageList({
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                   {m.content || (i === streamingIndex ? "" : "…")}
                 </ReactMarkdown>
+                {m.model && i !== streamingIndex && (
+                  <p className="text-[10px] text-gray-700 mt-1">{m.model}</p>
+                )}
               </div>
             )
           )}
@@ -184,6 +188,15 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [backendLabel, setBackendLabel] = useState<string>("");
+
+  useEffect(() => {
+    fetch("/api/status")
+      .then((r) => r.json())
+      .then((d: { backend?: string }) => setBackendLabel(d.backend ?? ""))
+      .catch(() => {});
+  }, []);
 
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -514,6 +527,11 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
       );
     } finally {
       setStreamingIndex(null);
+      setMessages((prev) =>
+        prev.map((m, i) =>
+          i === assistantIndex && !m.model ? { ...m, model: backendLabel } : m
+        )
+      );
       scrollToBottom();
     }
   }
