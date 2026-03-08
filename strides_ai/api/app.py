@@ -34,6 +34,47 @@ MAX_FILE_BYTES = 20 * 1024 * 1024  # 20 MB
 
 VALID_PROVIDERS = {"claude", "gemini", "ollama"}
 
+# Curated model lists for cloud providers
+CLAUDE_MODELS = [
+    {"id": "claude-sonnet-4-6", "display_name": "Claude Sonnet 4.6"},
+    {"id": "claude-opus-4-6", "display_name": "Claude Opus 4.6"},
+    {"id": "claude-haiku-4-5-20251001", "display_name": "Claude Haiku 4.5"},
+]
+
+GEMINI_MODELS = [
+    {"id": "gemini-2.0-flash", "display_name": "Gemini 2.0 Flash (free)"},
+    {"id": "gemini-2.0-flash-lite", "display_name": "Gemini 2.0 Flash Lite (free)"},
+    {"id": "gemini-1.5-flash", "display_name": "Gemini 1.5 Flash (free)"},
+    {"id": "gemini-1.5-flash-8b", "display_name": "Gemini 1.5 Flash-8B (free)"},
+    {"id": "gemini-1.5-pro", "display_name": "Gemini 1.5 Pro"},
+    {"id": "gemini-2.5-pro", "display_name": "Gemini 2.5 Pro"},
+]
+
+
+def _get_provider_models(provider_id: str) -> list[dict]:
+    """Return available models for a provider."""
+    if provider_id == "claude":
+        return CLAUDE_MODELS
+    if provider_id == "gemini":
+        return GEMINI_MODELS
+    if provider_id == "ollama":
+        host = os.environ.get("OLLAMA_HOST", DEFAULT_HOST).rstrip("/")
+        try:
+            import httpx as _httpx
+
+            resp = _httpx.get(f"{host}/api/tags", timeout=3)
+            return [
+                {"id": m["name"], "display_name": m["name"]} for m in resp.json().get("models", [])
+            ]
+        except Exception:
+            return []
+    return []
+
+
+def _stored_model(provider_id: str, env_key: str, default: str) -> str:
+    """Return the model stored in DB for this provider, falling back to env then default."""
+    return db.get_setting(f"{provider_id}_model") or os.environ.get(env_key, default)
+
 
 def _provider_statuses() -> list[dict]:
     """Return the list of providers with their configuration and active status."""
@@ -42,7 +83,7 @@ def _provider_statuses() -> list[dict]:
         {
             "id": "claude",
             "label": "Claude",
-            "default_model": os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6"),
+            "selected_model": _stored_model("claude", "CLAUDE_MODEL", "claude-sonnet-4-6"),
             "configured": bool(os.environ.get("ANTHROPIC_API_KEY")),
             "active": current == "claude",
             "config_hint": (
@@ -52,7 +93,7 @@ def _provider_statuses() -> list[dict]:
         {
             "id": "gemini",
             "label": "Gemini",
-            "default_model": os.environ.get("GEMINI_MODEL", GEMINI_DEFAULT_MODEL),
+            "selected_model": _stored_model("gemini", "GEMINI_MODEL", GEMINI_DEFAULT_MODEL),
             "configured": bool(os.environ.get("GEMINI_API_KEY")),
             "active": current == "gemini",
             "config_hint": (
@@ -62,7 +103,7 @@ def _provider_statuses() -> list[dict]:
         {
             "id": "ollama",
             "label": "Ollama",
-            "default_model": os.environ.get("OLLAMA_MODEL", "llama3.1"),
+            "selected_model": _stored_model("ollama", "OLLAMA_MODEL", "llama3.1"),
             "configured": bool(os.environ.get("OLLAMA_MODEL")),
             "active": current == "ollama",
             "config_hint": (
@@ -88,16 +129,16 @@ def init_backend(app: FastAPI, mode: str | None = None, provider: str | None = N
     initial_history = build_initial_history(activities, prior_messages, mode=current_mode)
 
     if current_provider == "ollama":
-        model = os.environ.get("OLLAMA_MODEL", "llama3.1")
+        model = _stored_model("ollama", "OLLAMA_MODEL", "llama3.1")
         host = os.environ.get("OLLAMA_HOST", DEFAULT_HOST)
         app.state.backend = OllamaBackend(model, initial_history, host)
     elif current_provider == "gemini":
         api_key = os.environ.get("GEMINI_API_KEY", "")
-        model = os.environ.get("GEMINI_MODEL", GEMINI_DEFAULT_MODEL)
+        model = _stored_model("gemini", "GEMINI_MODEL", GEMINI_DEFAULT_MODEL)
         app.state.backend = GeminiBackend(api_key, initial_history, model)
     else:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        model = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
+        model = _stored_model("claude", "CLAUDE_MODEL", "claude-sonnet-4-6")
         app.state.backend = ClaudeBackend(api_key, initial_history, model)
 
 
@@ -172,6 +213,7 @@ app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR), check_dir=False), 
 class SettingsBody(BaseModel):
     mode: str | None = None
     provider: str | None = None
+    model: str | None = None
 
 
 @app.get("/api/settings")
@@ -196,7 +238,14 @@ def put_settings(request: Request, body: SettingsBody):
                 status_code=400, detail=f"provider must be one of {sorted(VALID_PROVIDERS)}"
             )
         db.set_setting("provider", body.provider)
-    if body.mode is not None or body.provider is not None:
+    if body.model is not None:
+        target = (
+            body.provider
+            or db.get_setting("provider", os.environ.get("PROVIDER", "claude"))
+            or "claude"
+        )
+        db.set_setting(f"{target}_model", body.model)
+    if body.mode is not None or body.provider is not None or body.model is not None:
         init_backend(request.app, mode=body.mode, provider=body.provider)
     return {
         "mode": db.get_setting("mode", "running"),
@@ -207,6 +256,13 @@ def put_settings(request: Request, body: SettingsBody):
 @app.get("/api/providers")
 def get_providers():
     return _provider_statuses()
+
+
+@app.get("/api/providers/{provider}/models")
+def get_provider_models(provider: str):
+    if provider not in VALID_PROVIDERS:
+        raise HTTPException(status_code=404, detail=f"Unknown provider: {provider}")
+    return _get_provider_models(provider)
 
 
 # ── Chat ─────────────────────────────────────────────────────────────────────
@@ -255,7 +311,7 @@ async def chat(
                 )
             db.save_message("user", saved_message, mode=mode)
             db.save_message("assistant", response_text, mode=mode, model=backend.label)
-        except NotImplementedError as exc:
+        except Exception as exc:
             token_queue.put(f"[ERROR]{exc}")
         finally:
             token_queue.put(None)  # sentinel

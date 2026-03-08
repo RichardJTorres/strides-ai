@@ -1,12 +1,18 @@
 """Google Gemini backend."""
 
+import time
+
 from google import genai
 from google.genai import types
+from google.genai.errors import ClientError
 
 from .. import db
 from .base import BaseBackend
 
 DEFAULT_MODEL = "gemini-2.0-flash"
+
+_MAX_RETRIES = 3
+_RETRY_DELAY_S = 10  # seconds to wait after a 429
 
 SAVE_MEMORY_TOOL = types.Tool(
     function_declarations=[
@@ -87,29 +93,46 @@ class GeminiBackend(BaseBackend):
             fc_parts: list[types.Part] = []
 
             if first_turn:
-                # Stream the first response to the user
-                for chunk in self._client.models.generate_content_stream(
-                    model=self._model,
-                    contents=self._history,
-                    config=config,
-                ):
-                    if chunk.text:
-                        on_token(chunk.text)
-                        collected_text += chunk.text
-                    # Collect function-call parts (arrive as complete parts, not deltas)
-                    if chunk.candidates:
-                        for part in chunk.candidates[0].content.parts:
-                            fc = getattr(part, "function_call", None)
-                            if fc and getattr(fc, "name", None):
-                                fc_parts.append(part)
+                # Stream the first response to the user (with retry on rate limit)
+                for attempt in range(_MAX_RETRIES):
+                    try:
+                        for chunk in self._client.models.generate_content_stream(
+                            model=self._model,
+                            contents=self._history,
+                            config=config,
+                        ):
+                            if chunk.text:
+                                on_token(chunk.text)
+                                collected_text += chunk.text
+                            # Collect function-call parts (arrive as complete parts, not deltas)
+                            if chunk.candidates:
+                                for part in chunk.candidates[0].content.parts:
+                                    fc = getattr(part, "function_call", None)
+                                    if fc and getattr(fc, "name", None):
+                                        fc_parts.append(part)
+                        break  # success
+                    except ClientError as exc:
+                        if exc.code != 429 or attempt == _MAX_RETRIES - 1:
+                            raise
+                        on_token(f"\n\n*(Rate limit hit — retrying in {_RETRY_DELAY_S}s…)*\n\n")
+                        collected_text = ""
+                        fc_parts = []
+                        time.sleep(_RETRY_DELAY_S)
                 first_turn = False
             else:
                 # Non-streaming for follow-up turns after tool responses
-                resp = self._client.models.generate_content(
-                    model=self._model,
-                    contents=self._history,
-                    config=config,
-                )
+                for attempt in range(_MAX_RETRIES):
+                    try:
+                        resp = self._client.models.generate_content(
+                            model=self._model,
+                            contents=self._history,
+                            config=config,
+                        )
+                        break  # success
+                    except ClientError as exc:
+                        if exc.code != 429 or attempt == _MAX_RETRIES - 1:
+                            raise
+                        time.sleep(_RETRY_DELAY_S)
                 if resp.candidates:
                     for part in resp.candidates[0].content.parts:
                         if part.text:

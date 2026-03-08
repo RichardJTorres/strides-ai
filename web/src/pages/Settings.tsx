@@ -4,10 +4,15 @@ import type { Mode, ThemeConfig } from "../App";
 interface Provider {
   id: string;
   label: string;
-  default_model: string;
+  selected_model: string;
   configured: boolean;
   active: boolean;
   config_hint: string | null;
+}
+
+interface ProviderModel {
+  id: string;
+  display_name: string;
 }
 
 interface Props {
@@ -57,6 +62,8 @@ export default function Settings({ mode, setMode, theme }: Props) {
   const [syncCount, setSyncCount] = useState<number | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [switchingProvider, setSwitchingProvider] = useState(false);
+  const [activeModels, setActiveModels] = useState<ProviderModel[]>([]);
+  const [changingModel, setChangingModel] = useState(false);
 
   useEffect(() => {
     fetch("/api/providers")
@@ -64,6 +71,15 @@ export default function Settings({ mode, setMode, theme }: Props) {
       .then((data: Provider[]) => setProviders(data))
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    const active = providers.find((p) => p.active);
+    if (!active) return;
+    fetch(`/api/providers/${active.id}/models`)
+      .then((r) => r.json())
+      .then((data: ProviderModel[]) => setActiveModels(data))
+      .catch(() => setActiveModels([]));
+  }, [providers]);
 
   async function handleModeChange(newMode: Mode) {
     try {
@@ -90,6 +106,20 @@ export default function Settings({ mode, setMode, theme }: Props) {
       setProviders((ps) => ps.map((p) => ({ ...p, active: p.id === providerId })));
     } finally {
       setSwitchingProvider(false);
+    }
+  }
+
+  async function handleModelChange(model: string) {
+    setChangingModel(true);
+    try {
+      await fetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model }),
+      });
+      setProviders((ps) => ps.map((p) => (p.active ? { ...p, selected_model: model } : p)));
+    } finally {
+      setChangingModel(false);
     }
   }
 
@@ -163,17 +193,16 @@ export default function Settings({ mode, setMode, theme }: Props) {
               {providers.map((provider) => {
                 const isSelectable = provider.configured && !provider.active && !switchingProvider;
                 return (
-                  <button
+                  <div
                     key={provider.id}
-                    onClick={() => isSelectable && handleProviderChange(provider.id)}
-                    disabled={!isSelectable}
                     className={`w-full text-left p-4 rounded-lg border-2 transition-colors bg-gray-900 ${
                       !provider.configured
-                        ? "border-gray-800 opacity-50 cursor-not-allowed"
+                        ? "border-gray-800 opacity-50"
                         : provider.active
                         ? "border-gray-400"
                         : "border-gray-700 hover:border-gray-500 cursor-pointer"
                     }`}
+                    onClick={() => isSelectable && handleProviderChange(provider.id)}
                   >
                     <div className="flex items-center gap-3 mb-1">
                       <span className="font-medium text-sm text-gray-200">{provider.label}</span>
@@ -184,11 +213,30 @@ export default function Settings({ mode, setMode, theme }: Props) {
                         <span className="ml-auto text-xs text-yellow-600">Not configured</span>
                       )}
                     </div>
-                    <p className="text-xs text-gray-500">{provider.default_model}</p>
+                    {provider.active && activeModels.length > 1 ? (
+                      <select
+                        value={provider.selected_model}
+                        onChange={(e) => {
+                          e.stopPropagation();
+                          handleModelChange(e.target.value);
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        disabled={changingModel}
+                        className="mt-1 w-full bg-gray-800 text-gray-300 text-xs rounded px-2 py-1 border border-gray-700 focus:outline-none focus:border-gray-500 disabled:opacity-50"
+                      >
+                        {activeModels.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.display_name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <p className="text-xs text-gray-500">{provider.selected_model}</p>
+                    )}
                     {!provider.configured && provider.config_hint && (
                       <p className="text-xs text-yellow-700/80 mt-1">{provider.config_hint}</p>
                     )}
-                  </button>
+                  </div>
                 );
               })}
             </div>
