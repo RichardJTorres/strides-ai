@@ -79,15 +79,97 @@ function Section({
   );
 }
 
+// ── Snacks list ───────────────────────────────────────────────────────────────
+
+function SnacksList({
+  snacks,
+  onChange,
+  focusClass,
+}: {
+  snacks: string[];
+  onChange: (v: string[]) => void;
+  focusClass: string;
+}) {
+  const [input, setInput] = useState("");
+
+  function add() {
+    const val = input.trim();
+    if (!val || snacks.includes(val)) return;
+    onChange([...snacks, val]);
+    setInput("");
+  }
+
+  function remove(i: number) {
+    onChange(snacks.filter((_, idx) => idx !== i));
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      add();
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <label className="text-xs font-medium text-gray-400">
+        Preferred snacks &amp; fuel — the coach will pick from this list when suggesting nutrition loadouts
+      </label>
+      {snacks.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {snacks.map((s, i) => (
+            <span
+              key={i}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-800 border border-gray-700 text-sm text-gray-200"
+            >
+              {s}
+              <button
+                type="button"
+                onClick={() => remove(i)}
+                className="text-gray-500 hover:text-red-400 transition-colors leading-none"
+                aria-label={`Remove ${s}`}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="e.g. Maurten Gel 100, Clif Bar, Medjool dates…"
+          className={`flex-1 rounded-md bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-100 placeholder-gray-600 focus:outline-none ${focusClass}`}
+        />
+        <button
+          type="button"
+          onClick={add}
+          disabled={!input.trim()}
+          className="px-3 py-2 rounded-md bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          Add
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Common lower sections ─────────────────────────────────────────────────────
 
 function CommonSections({
   fields,
   setFields,
+  setFieldsRaw,
   focusClass,
 }: {
-  fields: Record<string, string>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  fields: Record<string, any>;
   setFields: (key: string, val: string) => void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  setFieldsRaw: (key: string, val: any) => void;
   focusClass: string;
 }) {
   return (
@@ -119,6 +201,13 @@ function CommonSections({
           onChange={(v) => setFields("gear", v)}
           placeholder="e.g. Nike Vaporfly (~400 km), Garmin Forerunner 955…"
           rows={3}
+          focusClass={focusClass}
+        />
+      </Section>
+      <Section title="Nutrition & Snacks">
+        <SnacksList
+          snacks={Array.isArray(fields.nutrition_snacks) ? fields.nutrition_snacks : []}
+          onChange={(v) => setFieldsRaw("nutrition_snacks", v)}
           focusClass={focusClass}
         />
       </Section>
@@ -195,7 +284,8 @@ export default function Profile({ mode, theme }: Props) {
     setFields((f) => ({ ...f, [section]: { ...f[section], [key]: val } }));
   }
 
-  function setTop(key: string, val: string) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function setTop(key: string, val: any) {
     setFields((f) => ({ ...f, [key]: val }));
   }
 
@@ -377,7 +467,7 @@ export default function Profile({ mode, theme }: Props) {
           )}
 
           {/* Common lower sections */}
-          <CommonSections fields={fields} setFields={setTop} focusClass={focusClass} />
+          <CommonSections fields={fields} setFields={setTop} setFieldsRaw={setTop} focusClass={focusClass} />
         </div>
       )}
     </div>

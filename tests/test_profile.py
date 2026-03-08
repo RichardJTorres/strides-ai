@@ -182,6 +182,7 @@ def test_get_default_fields_running_keys():
         "goals",
         "injuries_and_health",
         "gear",
+        "nutrition_snacks",
         "other_notes",
     }
 
@@ -195,6 +196,7 @@ def test_get_default_fields_cycling_keys():
         "goals",
         "injuries_and_health",
         "gear",
+        "nutrition_snacks",
         "other_notes",
     }
 

@@ -27,6 +27,7 @@ RUNNING_DEFAULTS: dict = {
     "goals": "",
     "injuries_and_health": "",
     "gear": "",
+    "nutrition_snacks": [],
     "other_notes": "",
 }
 
@@ -52,6 +53,7 @@ CYCLING_DEFAULTS: dict = {
     "goals": "",
     "injuries_and_health": "",
     "gear": "",
+    "nutrition_snacks": [],
     "other_notes": "",
 }
 
@@ -88,6 +90,7 @@ HYBRID_DEFAULTS: dict = {
     "goals": "",
     "injuries_and_health": "",
     "gear": "",
+    "nutrition_snacks": [],
     "other_notes": "",
 }
 
@@ -210,6 +213,15 @@ def profile_to_text(fields: dict | None, mode: str) -> str:
         val = _v(fields.get(key))
         if val:
             sections.append(f"### {title}\n{val}")
+
+    snacks = fields.get("nutrition_snacks", [])
+    if isinstance(snacks, list):
+        snack_items = [s.strip() for s in snacks if str(s).strip()]
+    else:
+        snack_items = [s.strip() for s in str(snacks).splitlines() if s.strip()]
+    if snack_items:
+        bullet_list = "\n".join(f"- {s}" for s in snack_items)
+        sections.append(f"### Preferred Nutrition & Snacks\n{bullet_list}")
 
     if not sections:
         return ""
