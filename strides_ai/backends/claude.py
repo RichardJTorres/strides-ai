@@ -1,5 +1,7 @@
 """Anthropic Claude backend."""
 
+import time
+
 import anthropic
 
 from .. import db
@@ -35,6 +37,31 @@ SAVE_MEMORY_TOOL = {
 
 
 class ClaudeBackend(BaseBackend):
+    _model_cache: dict = {"models": None, "ts": 0.0}
+    _MODEL_CACHE_TTL: int = 300
+
+    @classmethod
+    def fetch_models(cls, api_key: str) -> list[dict]:
+        """Fetch available Claude models from the Anthropic API, with a 5-minute cache."""
+        if not api_key:
+            return []
+        now = time.monotonic()
+        if (
+            cls._model_cache["models"] is not None
+            and now - cls._model_cache["ts"] < cls._MODEL_CACHE_TTL
+        ):
+            return cls._model_cache["models"]
+        try:
+            client = anthropic.Anthropic(api_key=api_key)
+            models = [
+                {"id": m.id, "display_name": m.display_name} for m in client.models.list(limit=100)
+            ]
+        except Exception:
+            models = []
+        cls._model_cache["models"] = models
+        cls._model_cache["ts"] = now
+        return models
+
     def __init__(
         self,
         api_key: str,
