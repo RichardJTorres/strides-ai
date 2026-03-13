@@ -1,6 +1,6 @@
 # strides-ai
 
-A local AI multisport coach that connects to your Strava account and lets you have coaching conversations about your training. Supports Claude and Gemini (cloud APIs) and any model running locally via Ollama.
+A local AI multisport coach that connects to your Strava account and lets you have coaching conversations about your training. Supports Claude, Gemini, and ChatGPT (cloud APIs) and any model running locally via Ollama.
 
 ## What it does
 
@@ -12,7 +12,7 @@ A local AI multisport coach that connects to your Strava account and lets you ha
 - **Persistent memory** — the coach proactively saves key facts (goals, injuries, preferences, upcoming races) and recalls them at the start of every session.
 - **Conversation history** — the last 40 messages from previous sessions are reloaded so coaching advice stays consistent across conversations. History is scoped per mode.
 - **Training calendar** — plan upcoming workouts on a calendar, overlay your actual Strava activities, and get AI-powered nutrition recommendations per workout.
-- **Swappable backends** — run Claude or Gemini in the cloud, or a local model via Ollama. Switch providers live from the Settings tab without restarting the server.
+- **Swappable backends** — run Claude, Gemini, or ChatGPT in the cloud, or a local model via Ollama. Switch providers live from the Settings tab without restarting the server.
 
 ## Setup
 
@@ -21,7 +21,7 @@ A local AI multisport coach that connects to your Strava account and lets you ha
 - Python 3.11+
 - Node.js 18+ (for the web UI)
 - A [Strava API app](https://www.strava.com/settings/api) — set **Authorization Callback Domain** to `localhost`
-- An Anthropic API key, a Google Gemini API key, **or** a local [Ollama](https://ollama.com) installation (see [Backends](#backends) below)
+- An Anthropic API key, a Google Gemini API key, an OpenAI API key, **or** a local [Ollama](https://ollama.com) installation (see [Backends](#backends) below)
 
 ### 2. Install
 
@@ -161,6 +161,18 @@ GEMINI_API_KEY=your_gemini_api_key
 GEMINI_MODEL=gemini-2.5-pro
 ```
 
+### ChatGPT (OpenAI)
+
+Uses the [OpenAI API](https://platform.openai.com/api-keys). Requires an API key.
+
+```env
+PROVIDER=openai
+OPENAI_API_KEY=sk-...
+
+# Optional: change the model (default: gpt-4o)
+OPENAI_MODEL=gpt-4o-mini
+```
+
 ### Ollama (local)
 
 Runs any model locally via [Ollama](https://ollama.com). No API key or internet connection required after the model is downloaded.
@@ -192,6 +204,7 @@ strides_ai/
 │   ├── base.py     # BaseBackend ABC — stream_turn(system, input, on_token)
 │   ├── claude.py   # Anthropic SDK, tool_use loop
 │   ├── gemini.py   # Google Gemini SDK, function calling loop
+│   ├── openai.py   # OpenAI SDK, streaming + tool calling loop
 │   └── ollama.py   # httpx → Ollama /api/chat, streaming + tools
 ├── auth.py         # Strava OAuth2 — token exchange, storage, auto-refresh
 ├── db.py           # SQLite — activities, history, memories, profiles, calendar
@@ -224,6 +237,7 @@ web/
 | Strava API | `httpx` |
 | Anthropic API | `anthropic` |
 | Gemini API | `google-genai` |
+| OpenAI API | `openai` |
 | Ollama API | `httpx` |
 | Web framework | `fastapi` + `uvicorn` |
 | Database | `sqlite3` (stdlib) |

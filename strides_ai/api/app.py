@@ -21,6 +21,7 @@ from ..auth import get_access_token
 from ..backends.claude import ClaudeBackend
 from ..backends.gemini import GeminiBackend
 from ..backends.ollama import OllamaBackend
+from ..backends.openai import OpenAIBackend
 from ..charts_data import get_chart_data
 from ..coach import build_initial_history, build_system, RECALL_MESSAGES
 from ..config import (
@@ -38,6 +39,7 @@ _MODEL_CACHE_TTL = 300  # seconds
 
 _CLAUDE_CACHE: dict = {"models": None, "ts": 0.0}
 _GEMINI_CACHE: dict = {"models": None, "ts": 0.0}
+_OPENAI_CACHE: dict = {"models": None, "ts": 0.0}
 
 
 def _fetch_claude_models() -> list[dict]:
@@ -101,12 +103,49 @@ def _fetch_gemini_models() -> list[dict]:
     return models
 
 
+def _fetch_openai_models() -> list[dict]:
+    """Fetch available OpenAI chat models from the API, with a 5-minute cache.
+
+    Returns an empty list if OPENAI_API_KEY is not set or the call fails.
+    """
+    api_key = get_settings().openai_api_key
+    if not api_key:
+        return []
+
+    now = time.monotonic()
+    if _OPENAI_CACHE["models"] is not None and now - _OPENAI_CACHE["ts"] < _MODEL_CACHE_TTL:
+        return _OPENAI_CACHE["models"]
+
+    try:
+        import openai as _openai
+
+        client = _openai.OpenAI(api_key=api_key)
+        # Filter to GPT chat models only (exclude embeddings, tts, whisper, etc.)
+        models = sorted(
+            [
+                {"id": m.id, "display_name": m.id}
+                for m in client.models.list()
+                if m.id.startswith("gpt-") or m.id.startswith("o1") or m.id.startswith("o3")
+            ],
+            key=lambda m: m["id"],
+            reverse=True,
+        )
+    except Exception:
+        models = []
+
+    _OPENAI_CACHE["models"] = models
+    _OPENAI_CACHE["ts"] = now
+    return models
+
+
 def _get_provider_models(provider_id: str) -> list[dict]:
     """Return available models for a provider."""
     if provider_id == "claude":
         return _fetch_claude_models()
     if provider_id == "gemini":
         return _fetch_gemini_models()
+    if provider_id == "openai":
+        return _fetch_openai_models()
     if provider_id == "ollama":
         host = get_settings().ollama_host.rstrip("/")
         try:
@@ -139,6 +178,9 @@ def _provider_statuses() -> list[dict]:
     gemini_models = _get_provider_models("gemini")
     gemini_default = gemini_models[0]["id"] if gemini_models else ""
 
+    openai_models = _get_provider_models("openai")
+    openai_default = openai_models[0]["id"] if openai_models else ""
+
     return [
         {
             "id": "claude",
@@ -157,6 +199,14 @@ def _provider_statuses() -> list[dict]:
             "configured": bool(settings.gemini_api_key),
             "active": current == "gemini",
             "config_hint": ("Set GEMINI_API_KEY in .env" if not settings.gemini_api_key else None),
+        },
+        {
+            "id": "openai",
+            "label": "ChatGPT",
+            "selected_model": _stored_model("openai", openai_default),
+            "configured": bool(settings.openai_api_key),
+            "active": current == "openai",
+            "config_hint": ("Set OPENAI_API_KEY in .env" if not settings.openai_api_key else None),
         },
         {
             "id": "ollama",
@@ -195,6 +245,11 @@ def init_backend(app: FastAPI, mode: str | None = None, provider: str | None = N
         auto_default = available[0]["id"] if available else ""
         model = _stored_model("gemini", auto_default)
         app.state.backend = GeminiBackend(settings.gemini_api_key, initial_history, model)
+    elif current_provider == "openai":
+        available = _get_provider_models("openai")
+        auto_default = available[0]["id"] if available else "gpt-4o"
+        model = _stored_model("openai", auto_default)
+        app.state.backend = OpenAIBackend(settings.openai_api_key, initial_history, model)
     else:
         model = _stored_model("claude")
         app.state.backend = ClaudeBackend(settings.anthropic_api_key, initial_history, model)

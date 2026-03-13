@@ -11,8 +11,10 @@ class Settings(BaseSettings):
     provider: str = "claude"
     anthropic_api_key: str = ""
     gemini_api_key: str = ""
+    openai_api_key: str = ""
     claude_model: str = "claude-sonnet-4-6"
     gemini_model: str = ""
+    openai_model: str = ""
     ollama_model: str = ""
     ollama_host: str = "http://localhost:11434"
 
@@ -32,7 +34,7 @@ def get_settings() -> Settings:
 # ── Application constants ──────────────────────────────────────────────────────
 
 VALID_MODES: frozenset[str] = frozenset({"running", "cycling", "hybrid"})
-VALID_PROVIDERS: frozenset[str] = frozenset({"claude", "gemini", "ollama"})
+VALID_PROVIDERS: frozenset[str] = frozenset({"claude", "gemini", "ollama", "openai"})
 
 UPLOADS_DIR = Path.home() / ".strides_ai" / "uploads"
 SUPPORTED_IMAGE_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
