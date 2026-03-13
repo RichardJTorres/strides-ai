@@ -1,6 +1,7 @@
 """Ollama backend (native /api/chat endpoint)."""
 
 import json
+import time
 
 import httpx
 
@@ -40,6 +41,30 @@ SAVE_MEMORY_TOOL = {
 
 
 class OllamaBackend(BaseBackend):
+    _model_cache: dict = {"models": None, "ts": 0.0}
+    _MODEL_CACHE_TTL: int = 300
+
+    @classmethod
+    def fetch_models(cls, host: str) -> list[dict]:
+        """Fetch available models from the Ollama API, with a 5-minute cache."""
+        host = host.rstrip("/")
+        now = time.monotonic()
+        if (
+            cls._model_cache["models"] is not None
+            and now - cls._model_cache["ts"] < cls._MODEL_CACHE_TTL
+        ):
+            return cls._model_cache["models"]
+        try:
+            resp = httpx.get(f"{host}/api/tags", timeout=3)
+            models = [
+                {"id": m["name"], "display_name": m["name"]} for m in resp.json().get("models", [])
+            ]
+        except Exception:
+            models = []
+        cls._model_cache["models"] = models
+        cls._model_cache["ts"] = now
+        return models
+
     def __init__(
         self,
         model: str,

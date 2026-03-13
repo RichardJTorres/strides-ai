@@ -45,6 +45,36 @@ SAVE_MEMORY_TOOL = types.Tool(
 
 
 class GeminiBackend(BaseBackend):
+    _model_cache: dict = {"models": None, "ts": 0.0}
+    _MODEL_CACHE_TTL: int = 300
+
+    @classmethod
+    def fetch_models(cls, api_key: str) -> list[dict]:
+        """Fetch available Gemini generateContent models from the API, with a 5-minute cache."""
+        if not api_key:
+            return []
+        now = time.monotonic()
+        if (
+            cls._model_cache["models"] is not None
+            and now - cls._model_cache["ts"] < cls._MODEL_CACHE_TTL
+        ):
+            return cls._model_cache["models"]
+        try:
+            client = genai.Client(api_key=api_key)
+            models = []
+            for m in client.models.list():
+                if "generateContent" not in (m.supported_actions or []):
+                    continue
+                model_id = m.name.removeprefix("models/")
+                if not model_id.startswith("gemini-"):
+                    continue
+                models.append({"id": model_id, "display_name": m.display_name or model_id})
+        except Exception:
+            models = []
+        cls._model_cache["models"] = models
+        cls._model_cache["ts"] = now
+        return models
+
     def __init__(
         self,
         api_key: str,

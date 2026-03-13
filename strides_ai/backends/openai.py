@@ -1,6 +1,7 @@
 """OpenAI ChatGPT backend."""
 
 import json
+import time
 
 import openai as _openai
 
@@ -40,6 +41,37 @@ SAVE_MEMORY_TOOL = {
 
 
 class OpenAIBackend(BaseBackend):
+    _model_cache: dict = {"models": None, "ts": 0.0}
+    _MODEL_CACHE_TTL: int = 300
+
+    @classmethod
+    def fetch_models(cls, api_key: str) -> list[dict]:
+        """Fetch available OpenAI chat models from the API, with a 5-minute cache."""
+        if not api_key:
+            return []
+        now = time.monotonic()
+        if (
+            cls._model_cache["models"] is not None
+            and now - cls._model_cache["ts"] < cls._MODEL_CACHE_TTL
+        ):
+            return cls._model_cache["models"]
+        try:
+            client = _openai.OpenAI(api_key=api_key)
+            models = sorted(
+                [
+                    {"id": m.id, "display_name": m.id}
+                    for m in client.models.list()
+                    if m.id.startswith("gpt-") or m.id.startswith("o1") or m.id.startswith("o3")
+                ],
+                key=lambda m: m["id"],
+                reverse=True,
+            )
+        except Exception:
+            models = []
+        cls._model_cache["models"] = models
+        cls._model_cache["ts"] = now
+        return models
+
     def __init__(
         self,
         api_key: str,
