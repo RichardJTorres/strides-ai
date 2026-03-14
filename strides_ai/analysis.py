@@ -516,4 +516,10 @@ def condense_streams_for_deep_dive(
 
         lines.append(f"{elapsed:>8} | {pace_str:>9} | {hr_str:>5} | {cad_str:>5} | {alt_str:>7}")
 
-    return "\n".join(lines)
+    text = "\n".join(lines)
+
+    notes = activity.get("user_notes", "")
+    if notes and notes.strip():
+        text += f"\n\nAthlete notes:\n{notes.strip()}"
+
+    return text

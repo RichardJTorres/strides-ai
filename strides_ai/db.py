@@ -56,6 +56,7 @@ class Activity(SQLModel, table=True):
     deep_dive_report: Optional[str] = None
     deep_dive_completed_at: Optional[str] = None
     analysis_status: Optional[str] = None
+    user_notes: Optional[str] = None
 
 
 class Conversation(SQLModel, table=True):

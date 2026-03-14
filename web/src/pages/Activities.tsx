@@ -34,6 +34,7 @@ interface Activity {
   suffer_score_mismatch_flag: number | null;
   deep_dive_report: string | null;
   deep_dive_completed_at: string | null;
+  user_notes: string | null;
 }
 
 interface Props {
@@ -176,6 +177,9 @@ export default function Activities({ mode, theme }: Props) {
   const [deepDiveReport, setDeepDiveReport] = useState<string>("");
   const [deepDiveLoading, setDeepDiveLoading] = useState(false);
   const [deepDiveError, setDeepDiveError] = useState("");
+  const [notes, setNotes] = useState<string>("");
+  const [notesSaving, setNotesSaving] = useState(false);
+  const [notesSaved, setNotesSaved] = useState(false);
 
   const selectedActivity = activities.find((a) => a.id === selectedId) ?? null;
 
@@ -193,6 +197,8 @@ export default function Activities({ mode, theme }: Props) {
     setDeepDiveReport(act?.deep_dive_report ?? "");
     setDeepDiveError("");
     setDeepDiveLoading(false);
+    setNotes(act?.user_notes ?? "");
+    setNotesSaved(false);
   }
 
   function closePanel() {
@@ -200,6 +206,8 @@ export default function Activities({ mode, theme }: Props) {
     setDeepDiveReport("");
     setDeepDiveError("");
     setDeepDiveLoading(false);
+    setNotes("");
+    setNotesSaved(false);
   }
 
   async function handleSync() {
@@ -248,6 +256,25 @@ export default function Activities({ mode, theme }: Props) {
       setDeepDiveError("Network error — could not complete deep dive.");
     } finally {
       setDeepDiveLoading(false);
+    }
+  }
+
+  async function saveNotes() {
+    if (selectedId === null) return;
+    setNotesSaving(true);
+    setNotesSaved(false);
+    try {
+      await fetch(`/api/activities/${selectedId}/notes`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes }),
+      });
+      setActivities((prev) =>
+        prev.map((a) => (a.id === selectedId ? { ...a, user_notes: notes } : a))
+      );
+      setNotesSaved(true);
+    } finally {
+      setNotesSaving(false);
     }
   }
 
@@ -614,6 +641,28 @@ export default function Activities({ mode, theme }: Props) {
                     : "Analysis pending — will run on next sync."}
                 </p>
               )}
+
+              {/* ── User Notes ───────────────────────────────────────── */}
+              <section className="space-y-2">
+                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Your Notes</h4>
+                <textarea
+                  value={notes}
+                  onChange={(e) => { setNotes(e.target.value); setNotesSaved(false); }}
+                  placeholder="Add context for the Deep Dive — how you felt, goals, weather, etc."
+                  rows={3}
+                  className="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-sm text-gray-200 placeholder-gray-600 resize-y focus:outline-none focus:border-gray-500"
+                />
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={saveNotes}
+                    disabled={notesSaving}
+                    className="px-3 py-1.5 rounded-md bg-gray-700 hover:bg-gray-600 text-sm text-gray-200 disabled:opacity-50 transition-colors"
+                  >
+                    {notesSaving ? "Saving…" : "Save Notes"}
+                  </button>
+                  {notesSaved && <span className="text-xs text-green-400">Saved</span>}
+                </div>
+              </section>
 
               {/* ── Deep Dive ─────────────────────────────────────────── */}
               <section className="space-y-3">

@@ -30,6 +30,18 @@ class DeepDiveResponse(BaseModel):
     completed_at: str | None
 
 
+class NotesRequest(BaseModel):
+    notes: str
+
+
+@router.patch("/activities/{activity_id}/notes", status_code=204)
+async def save_notes(activity_id: int, body: NotesRequest) -> None:
+    """Persist user-authored notes for an activity."""
+    if db.get_activity(activity_id) is None:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    db.save_analysis(activity_id, {"user_notes": body.notes})
+
+
 @router.post("/activities/{activity_id}/deep-dive", response_model=DeepDiveResponse)
 async def deep_dive(
     activity_id: int,
