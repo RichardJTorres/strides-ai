@@ -11,6 +11,7 @@ from ..config import UPLOADS_DIR, get_settings
 from .deps import init_backend
 from .routers import (
     activities,
+    analysis,
     calendar,
     charts,
     chat,
@@ -51,5 +52,6 @@ app.include_router(memories.router, prefix="/api")
 app.include_router(profile.router, prefix="/api")
 app.include_router(sync.router, prefix="/api")
 app.include_router(history.router, prefix="/api")
+app.include_router(analysis.router, prefix="/api")
 app.include_router(calendar.router, prefix="/api")
 app.include_router(status.router, prefix="/api")
