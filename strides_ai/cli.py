@@ -15,7 +15,7 @@ from .backends.claude import ClaudeBackend
 from .backends.ollama import OllamaBackend, DEFAULT_HOST
 from .charts_data import get_chart_data
 from .coach import chat, build_initial_history, RECALL_MESSAGES
-from .db import init_db, get_all_activities, get_recent_messages
+from .db import init_db, get_all_activities, get_activities_for_mode, get_recent_messages
 from .profile import get_default_fields, profile_to_text
 from .sync import sync_activities
 
@@ -338,8 +338,9 @@ def main() -> None:
     else:
         print("  Already up to date.")
 
+    activities = get_activities_for_mode(mode)
     prior_messages = get_recent_messages(RECALL_MESSAGES, mode=mode)
-    initial_history = build_initial_history(prior_messages)
+    initial_history = build_initial_history(activities, prior_messages, mode=mode)
 
     backend = _build_backend(initial_history)
     profile_fields = db.get_profile_fields(mode) or get_default_fields(mode)

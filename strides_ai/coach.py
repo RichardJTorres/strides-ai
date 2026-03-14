@@ -11,6 +11,9 @@ from .db import get_all_memories, get_recent_messages, get_activities_for_mode, 
 from . import db
 
 RECALL_MESSAGES = 40
+# Number of most-recent activities always pinned in the system prompt each turn.
+# The full training log is seeded once in conversation history via build_initial_history.
+RECENT_ACTIVITIES_IN_SYSTEM = 30
 
 RUNNING_SYSTEM_PROMPT = """\
 You are an experienced, data-driven running coach with access to the athlete's \
@@ -126,11 +129,13 @@ def build_system(
             + "\n".join(rows)
         )
 
-    if activities is not None:
-        training_log = build_training_log(activities, mode)
-    else:
-        training_log = build_training_log([], mode)
-    prompt += f"\n\n## Training Log\n\n```\n{training_log}\n```"
+    # Pin only the most recent activities every turn (cheap, always survives truncation).
+    # The full training log is seeded once in conversation history.
+    recent = (activities or [])[:RECENT_ACTIVITIES_IN_SYSTEM]
+    recent_log = build_training_log(recent, mode)
+    prompt += (
+        f"\n\n## Recent Activities (last {RECENT_ACTIVITIES_IN_SYSTEM})\n\n```\n{recent_log}\n```"
+    )
 
     return prompt
 
@@ -237,13 +242,32 @@ def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
     return "\n".join(lines)
 
 
-def build_initial_history(prior_messages: list[dict]) -> list[dict]:
+def build_initial_history(
+    activities: list, prior_messages: list[dict], mode: str = "running"
+) -> list[dict]:
     """
-    Build the seed history passed to each backend on construction.
-    The training log is now part of the system prompt (rebuilt each turn),
-    so only prior conversation messages are seeded here.
+    Seed the backend's conversation history with the full training log (once)
+    followed by any recalled prior messages.
+
+    The system prompt carries only the most recent RECENT_ACTIVITIES_IN_SYSTEM
+    activities on every turn, so this full-log seed is the only place older
+    history lives. It may be gracefully truncated by small-context models, but
+    only the oldest runs are dropped — recent ones are protected by the system prompt.
     """
-    return [{"role": m["role"], "content": m["content"]} for m in prior_messages]
+    training_log = build_training_log(activities, mode)
+    act_label = "runs" if mode == "running" else "rides" if mode == "cycling" else "activities"
+    log_message = f"Here is the athlete's complete training log:\n\n```\n{training_log}\n```"
+    return [
+        {"role": "user", "content": log_message},
+        {
+            "role": "assistant",
+            "content": (
+                f"Got it — I have your full training log loaded ({len(activities)} {act_label}). "
+                "What would you like to discuss?"
+            ),
+        },
+        *[{"role": m["role"], "content": m["content"]} for m in prior_messages],
+    ]
 
 
 def chat(backend: BaseBackend, profile: str, mode: str = "running") -> None:
