@@ -7,10 +7,13 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 
 from .backends.base import BaseBackend
-from .db import get_all_activities, get_all_memories, get_recent_messages, RUN_TYPES
+from .db import get_all_memories, get_recent_messages, get_activities_for_mode, RUN_TYPES
 from . import db
 
 RECALL_MESSAGES = 40
+# Number of most-recent activities always pinned in the system prompt each turn.
+# The full training log is seeded once in conversation history via build_initial_history.
+RECENT_ACTIVITIES_IN_SYSTEM = 30
 
 RUNNING_SYSTEM_PROMPT = """\
 You are an experienced, data-driven running coach with access to the athlete's \
@@ -28,8 +31,8 @@ key metrics (distance, pace, HR).
 preferred snacks in their profile, choose from those; otherwise use sensible \
 defaults based on run distance and intensity.
 
-The athlete's full training log is embedded in the next message as structured \
-text. Treat it as ground truth for all data-related questions.
+The athlete's complete training log is included below. Treat it as ground \
+truth for all data-related questions.
 
 **Memory:** Use the save_memory tool proactively whenever the athlete mentions \
 goals, upcoming races, injuries, preferences, or any key context that should \
@@ -52,8 +55,8 @@ key metrics (distance, speed, HR).
 preferred snacks in their profile, choose from those; otherwise use sensible \
 defaults based on ride duration and intensity.
 
-The athlete's full training log is embedded in the next message as structured \
-text. Treat it as ground truth for all data-related questions.
+The athlete's complete training log is included below. Treat it as ground \
+truth for all data-related questions.
 
 **Memory:** Use the save_memory tool proactively whenever the athlete mentions \
 goals, upcoming events, injuries, preferences, or any key context that should \
@@ -76,8 +79,8 @@ sport type, and key metrics.
 preferred snacks in their profile, choose from those; otherwise use sensible \
 defaults based on activity duration and intensity.
 
-The athlete's full training log is embedded in the next message as structured \
-text. Treat it as ground truth for all data-related questions.
+The athlete's complete training log is included below. Treat it as ground \
+truth for all data-related questions.
 
 **Memory:** Use the save_memory tool proactively whenever the athlete mentions \
 goals, upcoming events, injuries, preferences, or any key context that should \
@@ -91,7 +94,12 @@ _PROMPT_BY_MODE = {
 }
 
 
-def build_system(profile: str, memories: list[dict], mode: str = "running") -> str:
+def build_system(
+    profile: str,
+    memories: list[dict],
+    mode: str = "running",
+    activities: list | None = None,
+) -> str:
     prompt = _PROMPT_BY_MODE.get(mode, RUNNING_SYSTEM_PROMPT)
 
     if profile:
@@ -120,6 +128,14 @@ def build_system(profile: str, memories: list[dict], mode: str = "running") -> s
             + "\n"
             + "\n".join(rows)
         )
+
+    # Pin only the most recent activities every turn (cheap, always survives truncation).
+    # The full training log is seeded once in conversation history.
+    recent = (activities or [])[:RECENT_ACTIVITIES_IN_SYSTEM]
+    recent_log = build_training_log(recent, mode)
+    prompt += (
+        f"\n\n## Recent Activities (last {RECENT_ACTIVITIES_IN_SYSTEM})\n\n```\n{recent_log}\n```"
+    )
 
     return prompt
 
@@ -165,7 +181,7 @@ def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
 
     lines = [header, sep]
 
-    for r in rows:
+    for r in reversed(rows):
         dist_km = (r["distance_m"] or 0) / 1000
         sport = r["sport_type"] or ""
         is_run = sport in RUN_TYPES
@@ -227,15 +243,20 @@ def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
 
 
 def build_initial_history(
-    activities, prior_messages: list[dict], mode: str = "running"
+    activities: list, prior_messages: list[dict], mode: str = "running"
 ) -> list[dict]:
     """
-    Build the seed history passed to each backend on construction:
-    training-log injection followed by any recalled prior messages.
+    Seed the backend's conversation history with the full training log (once)
+    followed by any recalled prior messages.
+
+    The system prompt carries only the most recent RECENT_ACTIVITIES_IN_SYSTEM
+    activities on every turn, so this full-log seed is the only place older
+    history lives. It may be gracefully truncated by small-context models, but
+    only the oldest runs are dropped — recent ones are protected by the system prompt.
     """
     training_log = build_training_log(activities, mode)
-    log_message = f"Here is the athlete's complete training log:\n\n```\n{training_log}\n```"
     act_label = "runs" if mode == "running" else "rides" if mode == "cycling" else "activities"
+    log_message = f"Here is the athlete's complete training log:\n\n```\n{training_log}\n```"
     return [
         {"role": "user", "content": log_message},
         {
@@ -254,7 +275,8 @@ def chat(backend: BaseBackend, profile: str, mode: str = "running") -> None:
     console = Console()
 
     memories = get_all_memories()
-    system = build_system(profile, memories, mode=mode)
+    activities = get_activities_for_mode(mode)
+    system = build_system(profile, memories, mode=mode, activities=activities)
 
     prior_messages = get_recent_messages(RECALL_MESSAGES, mode=mode)
     mem_summary = (

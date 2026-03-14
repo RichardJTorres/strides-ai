@@ -81,7 +81,8 @@ async def chat(
     memories = db.get_all_memories()
     profile_fields = db.get_profile_fields(mode)
     profile = profile_to_text(profile_fields, mode)
-    system = build_system(profile, memories, mode=mode)
+    activities = db.get_activities_for_mode(mode)
+    system = build_system(profile, memories, mode=mode, activities=activities)
 
     token_queue: queue.SimpleQueue[str | None] = queue.SimpleQueue()
 
