@@ -12,6 +12,11 @@ interface Activity {
   max_hr: number | null;
   elevation_gain_m: number | null;
   sport_type: string | null;
+  analysis_summary: string | null;
+  cardiac_decoupling_pct: number | null;
+  effort_efficiency_score: number | null;
+  analysis_status: string | null;
+  deep_dive_report: string | null;
 }
 
 interface Props {
@@ -50,6 +55,24 @@ function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
   );
 }
 
+function DecouplingBadge({ val }: { val: number | null }) {
+  if (val === null) return null;
+  if (val < 5)
+    return <span className="px-1.5 py-0.5 rounded text-xs bg-green-900 text-green-300" title="Cardiac decoupling">{val.toFixed(1)}% CD</span>;
+  if (val < 10)
+    return <span className="px-1.5 py-0.5 rounded text-xs bg-yellow-900 text-yellow-300" title="Cardiac decoupling">{val.toFixed(1)}% CD</span>;
+  return <span className="px-1.5 py-0.5 rounded text-xs bg-red-900 text-red-300" title="Cardiac decoupling">{val.toFixed(1)}% CD</span>;
+}
+
+function EfficiencyBadge({ val }: { val: number | null }) {
+  if (val === null) return null;
+  if (val > 66)
+    return <span className="px-1.5 py-0.5 rounded text-xs bg-green-900 text-green-300" title="Effort efficiency score">{Math.round(val)} EFF</span>;
+  if (val >= 33)
+    return <span className="px-1.5 py-0.5 rounded text-xs bg-yellow-900 text-yellow-300" title="Effort efficiency score">{Math.round(val)} EFF</span>;
+  return <span className="px-1.5 py-0.5 rounded text-xs bg-red-900 text-red-300" title="Effort efficiency score">{Math.round(val)} EFF</span>;
+}
+
 export default function Activities({ mode, theme }: Props) {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [loading, setLoading] = useState(true);
@@ -65,6 +88,12 @@ export default function Activities({ mode, theme }: Props) {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [minDist, setMinDist] = useState("");
+
+  // Deep dive modal state
+  const [deepDiveId, setDeepDiveId] = useState<number | null>(null);
+  const [deepDiveReport, setDeepDiveReport] = useState<string>("");
+  const [deepDiveLoading, setDeepDiveLoading] = useState(false);
+  const [deepDiveError, setDeepDiveError] = useState("");
 
   useEffect(() => {
     setLoading(true);
@@ -91,6 +120,41 @@ export default function Activities({ mode, theme }: Props) {
       setSyncMsg("Sync failed.");
     } finally {
       setSyncing(false);
+    }
+  }
+
+  async function handleDeepDive(activityId: number, force = false) {
+    setDeepDiveId(activityId);
+    setDeepDiveReport("");
+    setDeepDiveError("");
+    setDeepDiveLoading(true);
+
+    // Check if there's already a cached report
+    const cached = activities.find((a) => a.id === activityId);
+    if (cached?.deep_dive_report && !force) {
+      setDeepDiveReport(cached.deep_dive_report);
+      setDeepDiveLoading(false);
+      return;
+    }
+
+    try {
+      const url = `/api/activities/${activityId}/deep-dive${force ? "?force=true" : ""}`;
+      const res = await fetch(url, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: "Request failed" }));
+        setDeepDiveError(err.detail || "Deep dive failed.");
+        return;
+      }
+      const data = await res.json();
+      setDeepDiveReport(data.report);
+      // Update the cached report in local state
+      setActivities((prev) =>
+        prev.map((a) => (a.id === activityId ? { ...a, deep_dive_report: data.report } : a))
+      );
+    } catch {
+      setDeepDiveError("Network error — could not complete deep dive.");
+    } finally {
+      setDeepDiveLoading(false);
     }
   }
 
@@ -147,6 +211,8 @@ export default function Activities({ mode, theme }: Props) {
   }
 
   const filtersActive = search || dateFrom || dateTo || minDist;
+
+  const deepDiveActivity = activities.find((a) => a.id === deepDiveId);
 
   return (
     <div className="flex flex-col h-full p-6 gap-3">
@@ -228,12 +294,13 @@ export default function Activities({ mode, theme }: Props) {
                 <Th label={paceLabel} col="avg_pace_s_per_km" right />
                 <Th label="Avg HR"    col="avg_hr"            right />
                 <Th label="Elev (m)"  col="elevation_gain_m"  right />
+                <th className="px-4 py-2 font-medium whitespace-nowrap text-right">Deep Dive</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-800">
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
+                  <td colSpan={8} className="px-4 py-8 text-center text-gray-500">
                     No activities match your filters.
                   </td>
                 </tr>
@@ -250,6 +317,15 @@ export default function Activities({ mode, theme }: Props) {
                       >
                         {a.name || "—"}
                       </a>
+                      {a.analysis_summary && (
+                        <p className="text-xs text-gray-500 mt-0.5 max-w-xs truncate">{a.analysis_summary}</p>
+                      )}
+                      {(a.cardiac_decoupling_pct !== null || a.effort_efficiency_score !== null) && (
+                        <div className="flex gap-1 mt-1 flex-wrap">
+                          <DecouplingBadge val={a.cardiac_decoupling_pct} />
+                          <EfficiencyBadge val={a.effort_efficiency_score} />
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-2 text-right text-gray-100">
                       {((a.distance_m || 0) / 1000).toFixed(2)}
@@ -272,11 +348,76 @@ export default function Activities({ mode, theme }: Props) {
                     <td className="px-4 py-2 text-right text-gray-400">
                       {a.elevation_gain_m != null ? Math.round(a.elevation_gain_m) : "—"}
                     </td>
+                    <td className="px-4 py-2 text-right">
+                      <button
+                        onClick={() => handleDeepDive(a.id)}
+                        className="px-2 py-1 rounded text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors whitespace-nowrap"
+                      >
+                        {a.deep_dive_report ? "View Dive" : "Deep Dive"}
+                      </button>
+                    </td>
                   </tr>
                 ))
               )}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Deep Dive Modal */}
+      {deepDiveId !== null && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
+          onClick={(e) => { if (e.target === e.currentTarget) setDeepDiveId(null); }}
+        >
+          <div className="bg-gray-900 border border-gray-700 rounded-xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col mx-4">
+            {/* Modal header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
+              <div>
+                <h3 className="text-gray-100 font-semibold">Deep Dive Analysis</h3>
+                {deepDiveActivity && (
+                  <p className="text-xs text-gray-500 mt-0.5">{deepDiveActivity.name} · {deepDiveActivity.date}</p>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {!deepDiveLoading && deepDiveReport && (
+                  <button
+                    onClick={() => handleDeepDive(deepDiveId, true)}
+                    className="px-2 py-1 rounded text-xs bg-gray-700 hover:bg-gray-600 text-gray-400 transition-colors"
+                  >
+                    Regenerate
+                  </button>
+                )}
+                <button
+                  onClick={() => setDeepDiveId(null)}
+                  className="text-gray-500 hover:text-gray-300 transition-colors text-lg leading-none"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+
+            {/* Modal body */}
+            <div className="overflow-y-auto flex-1 px-6 py-4">
+              {deepDiveLoading && (
+                <div className="flex items-center gap-3 text-gray-400">
+                  <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                  </svg>
+                  <span className="text-sm">Analyzing your run… this may take 10–20 seconds.</span>
+                </div>
+              )}
+              {deepDiveError && (
+                <p className="text-red-400 text-sm">{deepDiveError}</p>
+              )}
+              {deepDiveReport && !deepDiveLoading && (
+                <pre className="text-gray-300 text-sm whitespace-pre-wrap font-sans leading-relaxed">
+                  {deepDiveReport}
+                </pre>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>

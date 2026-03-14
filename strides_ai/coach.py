@@ -132,6 +132,24 @@ def build_system(
     # Pin only the most recent activities every turn (cheap, always survives truncation).
     # The full training log is seeded once in conversation history.
     recent = (activities or [])[:RECENT_ACTIVITIES_IN_SYSTEM]
+
+    # Inject metrics guide when any activity has been analyzed
+    has_analysis = any(a.get("analysis_summary") for a in recent)
+    if has_analysis:
+        prompt += (
+            "\n\n## Analysis Metrics Guide\n"
+            "The ANALYSIS column in the training log contains auto-generated summaries. "
+            "Key metrics to reason about:\n"
+            "- **Cardiac decoupling %**: aerobic efficiency; <5% = well-coupled (good), "
+            "5–10% = moderate stress, >10% = high cardiovascular drift\n"
+            "- **Effort efficiency score**: 0–100, normalized vs athlete's full history; "
+            "higher = more efficient pace for a given HR\n"
+            "- **HR zones**: Z1=recovery, Z2=aerobic base, Z3=tempo, "
+            "Z4=threshold, Z5=VO2max/max effort\n"
+            "- **Pace fade**: sec/mile change in final third vs first third; "
+            "positive = slowing (possible fatigue), negative = negative split"
+        )
+
     recent_log = build_training_log(recent, mode)
     prompt += (
         f"\n\n## Recent Activities (last {RECENT_ACTIVITIES_IN_SYSTEM})\n\n```\n{recent_log}\n```"
@@ -170,14 +188,14 @@ def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
         return "No activities found."
 
     if mode == "hybrid":
-        header = "DATE       | TYPE       | NAME                           | DIST(km) | DURATION | PACE/SPEED  | AVG HR | MAX HR | CADENCE | ELEV(m) | SUFFER | RPE"
-        sep = "-" * 150
+        header = "DATE       | TYPE       | NAME                           | DIST(km) | DURATION | PACE/SPEED  | AVG HR | MAX HR | CADENCE | ELEV(m) | SUFFER | RPE | ANALYSIS"
+        sep = "-" * 215
     elif mode == "cycling":
-        header = "DATE       | NAME                           | DIST(km) | DURATION | SPEED    | AVG HR | MAX HR | CADENCE(rpm) | ELEV(m) | SUFFER | RPE"
-        sep = "-" * 135
+        header = "DATE       | NAME                           | DIST(km) | DURATION | SPEED    | AVG HR | MAX HR | CADENCE(rpm) | ELEV(m) | SUFFER | RPE | ANALYSIS"
+        sep = "-" * 200
     else:
-        header = "DATE       | NAME                           | DIST(km) | DURATION | PACE     | AVG HR | MAX HR | CADENCE(spm) | ELEV(m) | SUFFER | RPE"
-        sep = "-" * 135
+        header = "DATE       | NAME                           | DIST(km) | DURATION | PACE     | AVG HR | MAX HR | CADENCE(spm) | ELEV(m) | SUFFER | RPE | ANALYSIS"
+        sep = "-" * 200
 
     lines = [header, sep]
 
@@ -185,6 +203,8 @@ def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
         dist_km = (r["distance_m"] or 0) / 1000
         sport = r["sport_type"] or ""
         is_run = sport in RUN_TYPES
+
+        analysis = (r.get("analysis_summary") or "")[:60]
 
         if mode == "hybrid":
             pace_speed = (
@@ -204,7 +224,8 @@ def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
                 f"{r['avg_cadence'] or '—':7} | "
                 f"{r['elevation_gain_m'] or '—':7} | "
                 f"{r['suffer_score'] or '—':6} | "
-                f"{r['perceived_exertion'] or '—'}"
+                f"{r['perceived_exertion'] or '—':3} | "
+                f"{analysis}"
             )
         elif mode == "cycling":
             lines.append(
@@ -218,7 +239,8 @@ def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
                 f"{r['avg_cadence'] or '—':12} | "
                 f"{r['elevation_gain_m'] or '—':7} | "
                 f"{r['suffer_score'] or '—':6} | "
-                f"{r['perceived_exertion'] or '—'}"
+                f"{r['perceived_exertion'] or '—':3} | "
+                f"{analysis}"
             )
         else:  # running
             lines.append(
@@ -232,7 +254,8 @@ def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
                 f"{r['avg_cadence'] or '—':12} | "
                 f"{r['elevation_gain_m'] or '—':7} | "
                 f"{r['suffer_score'] or '—':6} | "
-                f"{r['perceived_exertion'] or '—'}"
+                f"{r['perceived_exertion'] or '—':3} | "
+                f"{analysis}"
             )
 
     total_km = sum((r["distance_m"] or 0) / 1000 for r in rows)

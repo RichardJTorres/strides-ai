@@ -38,6 +38,25 @@ class Activity(SQLModel, table=True):
     sport_type: Optional[str] = None
     raw_json: Optional[str] = None
 
+    # Analysis columns (populated by analysis pipeline)
+    cardiac_decoupling_pct: Optional[float] = None
+    hr_zone_1_pct: Optional[float] = None
+    hr_zone_2_pct: Optional[float] = None
+    hr_zone_3_pct: Optional[float] = None
+    hr_zone_4_pct: Optional[float] = None
+    hr_zone_5_pct: Optional[float] = None
+    pace_fade_seconds: Optional[float] = None
+    cadence_std_dev: Optional[float] = None
+    effort_efficiency_raw: Optional[float] = None
+    effort_efficiency_score: Optional[float] = None
+    elevation_per_mile: Optional[float] = None
+    high_elevation_flag: Optional[int] = None
+    suffer_score_mismatch_flag: Optional[int] = None
+    analysis_summary: Optional[str] = None
+    deep_dive_report: Optional[str] = None
+    deep_dive_completed_at: Optional[str] = None
+    analysis_status: Optional[str] = None
+
 
 class Conversation(SQLModel, table=True):
     __tablename__ = "conversations"
@@ -270,6 +289,81 @@ def get_activities_for_mode(mode: str) -> list[dict]:
             stmt = select(Activity).order_by(Activity.date.desc())
         rows = session.exec(stmt).all()
     return [r.model_dump() for r in rows]
+
+
+def get_activity(activity_id: int) -> dict | None:
+    """Return a single activity by ID, or None if not found."""
+    with Session(_get_engine()) as session:
+        row = session.get(Activity, activity_id)
+    return row.model_dump() if row else None
+
+
+def save_analysis(activity_id: int, metrics: dict) -> None:
+    """Write computed analysis columns back to a single activity row."""
+    if not metrics:
+        return
+    with _get_engine().connect() as conn:
+        cols = ", ".join(f"{k} = :{k}" for k in metrics)
+        stmt = sa.text(f"UPDATE activities SET {cols} WHERE id = :_id")
+        conn.execute(stmt, {**metrics, "_id": activity_id})
+        conn.commit()
+
+
+def get_activities_pending_analysis(limit: int = 10) -> list[dict]:
+    """Return up to *limit* activities where analysis_status is 'pending' or NULL."""
+    with Session(_get_engine()) as session:
+        stmt = (
+            select(Activity)
+            .where(
+                sa.or_(
+                    Activity.analysis_status == "pending",
+                    Activity.analysis_status.is_(None),
+                )
+            )
+            .order_by(Activity.date.desc())
+            .limit(limit)
+        )
+        rows = session.exec(stmt).all()
+    return [r.model_dump() for r in rows]
+
+
+def renormalize_effort_efficiency() -> None:
+    """
+    Re-score effort_efficiency_score for all rows using inverted min-max normalization.
+    Lower raw ratio (faster pace / lower HR) = more efficient = higher score.
+    Formula: score = 100 * (max_raw - raw) / (max_raw - min_raw)
+    """
+    with _get_engine().connect() as conn:
+        result = conn.execute(
+            sa.text(
+                "SELECT MIN(effort_efficiency_raw), MAX(effort_efficiency_raw)"
+                " FROM activities WHERE effort_efficiency_raw IS NOT NULL"
+            )
+        ).one()
+        min_raw, max_raw = result
+
+        if min_raw is None:
+            return
+
+        if min_raw == max_raw:
+            conn.execute(
+                sa.text(
+                    "UPDATE activities SET effort_efficiency_score = 50.0"
+                    " WHERE effort_efficiency_raw IS NOT NULL"
+                )
+            )
+        else:
+            conn.execute(
+                sa.text(
+                    "UPDATE activities"
+                    " SET effort_efficiency_score = ROUND("
+                    "   100.0 * (:max_raw - effort_efficiency_raw) / (:max_raw - :min_raw), 2"
+                    " )"
+                    " WHERE effort_efficiency_raw IS NOT NULL"
+                ),
+                {"min_raw": min_raw, "max_raw": max_raw},
+            )
+        conn.commit()
 
 
 # ── Profiles ─────────────────────────────────────────────────────────────────

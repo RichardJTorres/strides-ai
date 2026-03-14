@@ -13,6 +13,7 @@ A local AI multisport coach that connects to your Strava account and lets you ha
 - **Conversation history** — the last 40 messages from previous sessions are reloaded so coaching advice stays consistent across conversations. History is scoped per mode.
 - **Training calendar** — plan upcoming workouts on a calendar, overlay your actual Strava activities, and get AI-powered nutrition recommendations per workout.
 - **Swappable backends** — run Claude, Gemini, or ChatGPT in the cloud, or a local model via Ollama. Switch providers live from the Settings tab without restarting the server.
+- **Run analysis pipeline** — every synced activity is automatically enriched with derived fitness metrics (cardiac decoupling, HR zone distribution, pace fade, cadence consistency, effort efficiency) and a natural language summary. The Activities tab shows colour-coded metric badges and an on-demand Deep Dive button that generates a full LLM coaching analysis for any individual run.
 
 ## Setup
 
@@ -65,7 +66,7 @@ On first run, a browser window opens to Strava's authorization page — approve 
 | Tab | What it does |
 |---|---|
 | Coach | Streaming chat with your AI coach; conversation persists across sessions and is scoped to the active mode |
-| Activities | Your full Strava history filtered by active mode — sortable, filterable, links to each activity on Strava |
+| Activities | Your full Strava history filtered by active mode — sortable, filterable, analysis badges, Deep Dive button |
 | Charts | Training visualisations: weekly volume with 4-week rolling average, ATL/CTL fitness & fatigue curves, aerobic efficiency scatter plot |
 | Calendar | Plan upcoming workouts, see actual Strava activities overlaid, and get AI nutrition advice per workout |
 | Profile | Structured editor for your athlete profile (per-mode) |
@@ -193,6 +194,59 @@ Tool use and memory saving work with models that support function calling (llama
 
 ---
 
+## Run Analysis Pipeline
+
+Every activity synced from Strava is automatically analysed using time-series stream data (heartrate, velocity, cadence, altitude). Results are stored as flat columns on each activity record and surfaced in the Activities tab and to the AI coach.
+
+### Computed metrics
+
+| Metric | Description | Threshold |
+|---|---|---|
+| **Cardiac decoupling %** | Aerobic efficiency — how much the HR/pace ratio drifts across the run | <5% excellent, 5–10% acceptable, >10% high stress |
+| **HR zones (Z1–Z5)** | Time distribution across HR intensity zones (based on `max_hr` setting, default 190) | Z1 recovery, Z2 aerobic, Z3 tempo, Z4 threshold, Z5 VO2max |
+| **Pace fade (sec/mile)** | Last-third avg pace minus first-third avg pace | Positive = slowing, negative = negative split |
+| **Cadence avg / std dev** | Mean and variability of step rate (spm for runs, rpm for rides) | — |
+| **Effort efficiency score** | 0–100, normalized across athlete history; higher = better pace for a given HR | — |
+| **Elevation per mile** | Total elevation gain in ft/mile; flags hilly courses (>100 ft/mile) | — |
+| **Suffer score validation** | Cross-checks Strava's suffer score against computed HR zone distribution | Flags potential HR sensor issues |
+
+### Analysis summary
+
+After computing metrics, a short rule-based natural language summary is generated (no LLM call, no cost). Example:
+
+> _"Strong aerobic run — 3.2% cardiac decoupling. 81% time in Z1/Z2. Pace held steady throughout."_
+
+This summary appears as a subtitle under the activity name in the Activities tab and as an ANALYSIS column in the training log the coach reads.
+
+### Configuring max HR
+
+The HR zone thresholds use `max_hr` from the settings table (default 190 bpm). To set your actual max HR, use the Strava API or set it via a future settings UI. The DB key is `max_hr`.
+
+### Backfilling existing activities
+
+On every sync, the pipeline also backfills up to 10 activities that were previously synced without analysis. To trigger a full backfill:
+
+```bash
+# From Settings tab — use the "Full Sync" button
+# Or via API:
+curl -X POST "http://localhost:8000/api/sync?full=true"
+```
+
+Rate limits are handled gracefully: if Strava returns 429, remaining activities are marked `analysis_status='pending'` and retried on the next sync.
+
+### Deep Dive
+
+Click **Deep Dive** on any activity row to generate a detailed LLM coaching analysis for that specific run. The deep dive:
+
+1. Fetches the full time-series stream from Strava
+2. Downsamples to 60-second intervals plus key inflection points (pace surges, HR spikes)
+3. Sends to the active LLM backend (Claude, Gemini, Ollama, or ChatGPT) with a coaching analysis prompt
+4. Returns a 4–6 paragraph analysis covering pacing strategy, HR drift, cadence patterns, elevation impact, and actionable coaching notes
+
+Results are cached — clicking the button again shows the saved report instantly. Use **Regenerate** to force a fresh analysis.
+
+---
+
 ## How it works
 
 ```
@@ -206,6 +260,7 @@ strides_ai/
 │   ├── gemini.py   # Google Gemini SDK, function calling loop
 │   ├── openai.py   # OpenAI SDK, streaming + tool calling loop
 │   └── ollama.py   # httpx → Ollama /api/chat, streaming + tools
+├── analysis.py     # Stream fetching, metric computation, NL summary, deep-dive formatting
 ├── auth.py         # Strava OAuth2 — token exchange, storage, auto-refresh
 ├── db.py           # SQLite — activities, history, memories, profiles, calendar
 ├── sync.py         # Strava API pagination, incremental sync (runs + rides)
