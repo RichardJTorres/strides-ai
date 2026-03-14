@@ -719,7 +719,7 @@ export default function Activities({ mode, theme }: Props) {
                         </p>
                       )}
                       {(deepDiveModel || selectedActivity.deep_dive_model) && (
-                        <span className="text-xs font-mono px-1.5 py-0.5 rounded bg-gray-800 text-gray-500 border border-gray-700">
+                        <span className="text-[10px] text-gray-700 font-mono">
                           {deepDiveModel || selectedActivity.deep_dive_model}
                         </span>
                       )}
