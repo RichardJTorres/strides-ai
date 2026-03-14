@@ -176,7 +176,7 @@ def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
 
     lines = [header, sep]
 
-    for r in rows:
+    for r in reversed(rows):
         dist_km = (r["distance_m"] or 0) / 1000
         sport = r["sport_type"] or ""
         is_run = sport in RUN_TYPES
