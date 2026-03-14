@@ -16,6 +16,7 @@ from ...analysis import (
     fetch_activity_streams,
 )
 from ...auth import get_access_token
+from ...config import get_settings
 from ..deps import get_backend
 
 router = APIRouter()
@@ -55,8 +56,11 @@ async def deep_dive(
         )
 
     # Fetch streams
+    settings = get_settings()
+    if not settings.strava_client_id or not settings.strava_client_secret:
+        raise HTTPException(status_code=500, detail="Strava credentials not configured")
     try:
-        access_token = get_access_token()
+        access_token = get_access_token(settings.strava_client_id, settings.strava_client_secret)
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Could not get Strava token: {exc}")
 
