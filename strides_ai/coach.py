@@ -7,7 +7,7 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 
 from .backends.base import BaseBackend
-from .db import get_all_activities, get_all_memories, get_recent_messages, RUN_TYPES
+from .db import get_all_memories, get_recent_messages, get_activities_for_mode, RUN_TYPES
 from . import db
 
 RECALL_MESSAGES = 40
@@ -28,8 +28,8 @@ key metrics (distance, pace, HR).
 preferred snacks in their profile, choose from those; otherwise use sensible \
 defaults based on run distance and intensity.
 
-The athlete's full training log is embedded in the next message as structured \
-text. Treat it as ground truth for all data-related questions.
+The athlete's complete training log is included below. Treat it as ground \
+truth for all data-related questions.
 
 **Memory:** Use the save_memory tool proactively whenever the athlete mentions \
 goals, upcoming races, injuries, preferences, or any key context that should \
@@ -52,8 +52,8 @@ key metrics (distance, speed, HR).
 preferred snacks in their profile, choose from those; otherwise use sensible \
 defaults based on ride duration and intensity.
 
-The athlete's full training log is embedded in the next message as structured \
-text. Treat it as ground truth for all data-related questions.
+The athlete's complete training log is included below. Treat it as ground \
+truth for all data-related questions.
 
 **Memory:** Use the save_memory tool proactively whenever the athlete mentions \
 goals, upcoming events, injuries, preferences, or any key context that should \
@@ -76,8 +76,8 @@ sport type, and key metrics.
 preferred snacks in their profile, choose from those; otherwise use sensible \
 defaults based on activity duration and intensity.
 
-The athlete's full training log is embedded in the next message as structured \
-text. Treat it as ground truth for all data-related questions.
+The athlete's complete training log is included below. Treat it as ground \
+truth for all data-related questions.
 
 **Memory:** Use the save_memory tool proactively whenever the athlete mentions \
 goals, upcoming events, injuries, preferences, or any key context that should \
@@ -91,7 +91,12 @@ _PROMPT_BY_MODE = {
 }
 
 
-def build_system(profile: str, memories: list[dict], mode: str = "running") -> str:
+def build_system(
+    profile: str,
+    memories: list[dict],
+    mode: str = "running",
+    activities: list | None = None,
+) -> str:
     prompt = _PROMPT_BY_MODE.get(mode, RUNNING_SYSTEM_PROMPT)
 
     if profile:
@@ -120,6 +125,12 @@ def build_system(profile: str, memories: list[dict], mode: str = "running") -> s
             + "\n"
             + "\n".join(rows)
         )
+
+    if activities is not None:
+        training_log = build_training_log(activities, mode)
+    else:
+        training_log = build_training_log([], mode)
+    prompt += f"\n\n## Training Log\n\n```\n{training_log}\n```"
 
     return prompt
 
@@ -226,27 +237,13 @@ def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
     return "\n".join(lines)
 
 
-def build_initial_history(
-    activities, prior_messages: list[dict], mode: str = "running"
-) -> list[dict]:
+def build_initial_history(prior_messages: list[dict]) -> list[dict]:
     """
-    Build the seed history passed to each backend on construction:
-    training-log injection followed by any recalled prior messages.
+    Build the seed history passed to each backend on construction.
+    The training log is now part of the system prompt (rebuilt each turn),
+    so only prior conversation messages are seeded here.
     """
-    training_log = build_training_log(activities, mode)
-    log_message = f"Here is the athlete's complete training log:\n\n```\n{training_log}\n```"
-    act_label = "runs" if mode == "running" else "rides" if mode == "cycling" else "activities"
-    return [
-        {"role": "user", "content": log_message},
-        {
-            "role": "assistant",
-            "content": (
-                f"Got it — I have your full training log loaded ({len(activities)} {act_label}). "
-                "What would you like to discuss?"
-            ),
-        },
-        *[{"role": m["role"], "content": m["content"]} for m in prior_messages],
-    ]
+    return [{"role": m["role"], "content": m["content"]} for m in prior_messages]
 
 
 def chat(backend: BaseBackend, profile: str, mode: str = "running") -> None:
@@ -254,7 +251,8 @@ def chat(backend: BaseBackend, profile: str, mode: str = "running") -> None:
     console = Console()
 
     memories = get_all_memories()
-    system = build_system(profile, memories, mode=mode)
+    activities = get_activities_for_mode(mode)
+    system = build_system(profile, memories, mode=mode, activities=activities)
 
     prior_messages = get_recent_messages(RECALL_MESSAGES, mode=mode)
     mem_summary = (

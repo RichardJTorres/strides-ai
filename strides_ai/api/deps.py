@@ -96,9 +96,8 @@ def init_backend(app: FastAPI, mode: str | None = None, provider: str | None = N
     settings = get_settings()
     current_provider = (getattr(app.state, "provider", None) or settings.provider).lower()
 
-    activities = db.get_activities_for_mode(current_mode)
     prior_messages = db.get_recent_messages(RECALL_MESSAGES, mode=current_mode)
-    initial_history = build_initial_history(activities, prior_messages, mode=current_mode)
+    initial_history = build_initial_history(prior_messages)
 
     if current_provider == "ollama":
         available = _get_provider_models("ollama")
