@@ -1,5 +1,6 @@
 """Chat route with SSE streaming."""
 
+import asyncio
 import base64
 import json
 import queue
@@ -84,9 +85,12 @@ async def chat(
     activities = db.get_activities_for_mode(mode)
     system = build_system(profile, memories, mode=mode, activities=activities)
 
-    token_queue: queue.SimpleQueue[str | None] = queue.SimpleQueue()
+    token_queue: queue.Queue[str | None] = queue.Queue()
+    cancel_event = threading.Event()
 
     def on_token(chunk: str) -> None:
+        if cancel_event.is_set():
+            raise InterruptedError("client disconnected")
         token_queue.put(chunk)
 
     def run_turn():
@@ -100,21 +104,36 @@ async def chat(
                     "[MEMORIES]"
                     + json.dumps([{"category": c, "content": t} for c, t in memories_saved])
                 )
-            db.save_message("user", saved_message, mode=mode)
             db.save_message("assistant", response_text, mode=mode, model=backend.label)
+        except InterruptedError:
+            db.save_message(
+                "assistant",
+                "_Chat interrupted — resend your message to generate a full response._",
+                mode=mode,
+            )
         except Exception as exc:
             token_queue.put(f"[ERROR]{exc}")
         finally:
             token_queue.put(None)  # sentinel
 
+    db.save_message("user", saved_message, mode=mode)
     threading.Thread(target=run_turn, daemon=True).start()
 
     async def event_stream() -> AsyncIterator[str]:
-        while True:
-            chunk = token_queue.get()
-            if chunk is None:
-                break
-            yield f"data: {chunk.replace(chr(10), chr(92) + 'n')}\n\n"
-        yield "data: [DONE]\n\n"
+        loop = asyncio.get_event_loop()
+        try:
+            while True:
+                try:
+                    chunk = await loop.run_in_executor(None, lambda: token_queue.get(timeout=1.0))
+                except queue.Empty:
+                    if await request.is_disconnected():
+                        break
+                    continue
+                if chunk is None:
+                    break
+                yield f"data: {chunk.replace(chr(10), chr(92) + 'n')}\n\n"
+            yield "data: [DONE]\n\n"
+        finally:
+            cancel_event.set()
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
