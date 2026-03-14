@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { Mode, ThemeConfig } from "../App";
 
 interface Activity {
@@ -482,7 +484,7 @@ export default function Activities({ mode, theme }: Props) {
           />
 
           {/* Panel */}
-          <div className="fixed right-0 top-0 h-full w-full max-w-lg z-50 bg-gray-950 border-l border-gray-800 flex flex-col shadow-2xl">
+          <div className="fixed right-0 top-0 h-full w-full max-w-2xl z-50 bg-gray-950 border-l border-gray-800 flex flex-col shadow-2xl">
 
             {/* Panel header */}
             <div className="px-5 py-4 border-b border-gray-800 flex items-start justify-between gap-3">
@@ -657,9 +659,11 @@ export default function Activities({ mode, theme }: Props) {
                         Generated {new Date(selectedActivity.deep_dive_completed_at).toLocaleString()}
                       </p>
                     )}
-                    <pre className="text-sm text-gray-300 whitespace-pre-wrap font-sans leading-relaxed">
-                      {deepDiveReport || selectedActivity.deep_dive_report}
-                    </pre>
+                    <div className="prose prose-invert prose-sm max-w-none text-gray-300 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_ul]:pl-4 [&_ol]:pl-4 [&_li]:my-0.5 [&_p]:my-1.5 [&_strong]:text-gray-100 [&_hr]:border-gray-700">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {deepDiveReport || selectedActivity.deep_dive_report || ""}
+                      </ReactMarkdown>
+                    </div>
                   </>
                 )}
               </section>
