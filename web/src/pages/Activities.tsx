@@ -34,6 +34,7 @@ interface Activity {
   suffer_score_mismatch_flag: number | null;
   deep_dive_report: string | null;
   deep_dive_completed_at: string | null;
+  deep_dive_model: string | null;
   user_notes: string | null;
 }
 
@@ -175,6 +176,7 @@ export default function Activities({ mode, theme }: Props) {
   // Slide-out panel state
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [deepDiveReport, setDeepDiveReport] = useState<string>("");
+  const [deepDiveModel, setDeepDiveModel] = useState<string>("");
   const [deepDiveLoading, setDeepDiveLoading] = useState(false);
   const [deepDiveError, setDeepDiveError] = useState("");
   const [notes, setNotes] = useState<string>("");
@@ -195,6 +197,7 @@ export default function Activities({ mode, theme }: Props) {
     const act = activities.find((a) => a.id === id);
     setSelectedId(id);
     setDeepDiveReport(act?.deep_dive_report ?? "");
+    setDeepDiveModel(act?.deep_dive_model ?? "");
     setDeepDiveError("");
     setDeepDiveLoading(false);
     setNotes(act?.user_notes ?? "");
@@ -204,6 +207,7 @@ export default function Activities({ mode, theme }: Props) {
   function closePanel() {
     setSelectedId(null);
     setDeepDiveReport("");
+    setDeepDiveModel("");
     setDeepDiveError("");
     setDeepDiveLoading(false);
     setNotes("");
@@ -249,8 +253,13 @@ export default function Activities({ mode, theme }: Props) {
       }
       const data = await res.json();
       setDeepDiveReport(data.report);
+      setDeepDiveModel(data.model ?? "");
       setActivities((prev) =>
-        prev.map((a) => (a.id === selectedId ? { ...a, deep_dive_report: data.report } : a))
+        prev.map((a) =>
+          a.id === selectedId
+            ? { ...a, deep_dive_report: data.report, deep_dive_model: data.model ?? null }
+            : a
+        )
       );
     } catch {
       setDeepDiveError("Network error — could not complete deep dive.");
@@ -703,11 +712,18 @@ export default function Activities({ mode, theme }: Props) {
 
                 {!deepDiveLoading && (deepDiveReport || selectedActivity.deep_dive_report) && (
                   <>
-                    {selectedActivity.deep_dive_completed_at && !deepDiveReport && (
-                      <p className="text-xs text-gray-600">
-                        Generated {new Date(selectedActivity.deep_dive_completed_at).toLocaleString()}
-                      </p>
-                    )}
+                    <div className="flex items-center gap-3 flex-wrap">
+                      {selectedActivity.deep_dive_completed_at && !deepDiveReport && (
+                        <p className="text-xs text-gray-600">
+                          Generated {new Date(selectedActivity.deep_dive_completed_at).toLocaleString()}
+                        </p>
+                      )}
+                      {(deepDiveModel || selectedActivity.deep_dive_model) && (
+                        <span className="text-xs font-mono px-1.5 py-0.5 rounded bg-gray-800 text-gray-500 border border-gray-700">
+                          {deepDiveModel || selectedActivity.deep_dive_model}
+                        </span>
+                      )}
+                    </div>
                     <div className="prose prose-invert prose-sm max-w-none text-gray-300 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_ul]:pl-4 [&_ol]:pl-4 [&_li]:my-0.5 [&_p]:my-1.5 [&_strong]:text-gray-100 [&_hr]:border-gray-700">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
                         {deepDiveReport || selectedActivity.deep_dive_report || ""}

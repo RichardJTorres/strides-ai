@@ -55,6 +55,7 @@ class Activity(SQLModel, table=True):
     analysis_summary: Optional[str] = None
     deep_dive_report: Optional[str] = None
     deep_dive_completed_at: Optional[str] = None
+    deep_dive_model: Optional[str] = None
     analysis_status: Optional[str] = None
     user_notes: Optional[str] = None
 

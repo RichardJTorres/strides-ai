@@ -28,6 +28,7 @@ class DeepDiveResponse(BaseModel):
     report: str
     cached: bool
     completed_at: str | None
+    model: str | None = None
 
 
 class NotesRequest(BaseModel):
@@ -65,6 +66,7 @@ async def deep_dive(
             report=activity["deep_dive_report"],
             cached=True,
             completed_at=activity.get("deep_dive_completed_at"),
+            model=activity.get("deep_dive_model"),
         )
 
     # Fetch streams
@@ -109,9 +111,14 @@ async def deep_dive(
         raise HTTPException(status_code=500, detail="LLM analysis failed")
 
     completed_at = datetime.now(timezone.utc).isoformat()
+    model_label = backend.label
     db.save_analysis(
         activity_id,
-        {"deep_dive_report": report, "deep_dive_completed_at": completed_at},
+        {
+            "deep_dive_report": report,
+            "deep_dive_completed_at": completed_at,
+            "deep_dive_model": model_label,
+        },
     )
 
     return DeepDiveResponse(
@@ -119,4 +126,5 @@ async def deep_dive(
         report=report,
         cached=False,
         completed_at=completed_at,
+        model=model_label,
     )
