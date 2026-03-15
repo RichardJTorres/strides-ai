@@ -1,14 +1,13 @@
 """Deep-dive analysis endpoint."""
 
 import asyncio
-import functools
 import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from sqlmodel import Session
 
-from ... import db
 from ...analysis import (
     DEEP_DIVE_SYSTEM_PROMPT,
     RateLimitError,
@@ -17,6 +16,8 @@ from ...analysis import (
 )
 from ...auth import get_access_token
 from ...config import get_settings
+from ...db import activities as crud
+from ...db.engine import get_session
 from ..deps import get_backend
 
 router = APIRouter()
@@ -36,11 +37,15 @@ class NotesRequest(BaseModel):
 
 
 @router.patch("/activities/{activity_id}/notes", status_code=204)
-async def save_notes(activity_id: int, body: NotesRequest) -> None:
+async def save_notes(
+    activity_id: int,
+    body: NotesRequest,
+    session: Session = Depends(get_session),
+) -> None:
     """Persist user-authored notes for an activity."""
-    if db.get_activity(activity_id) is None:
+    if crud.get(session, activity_id) is None:
         raise HTTPException(status_code=404, detail="Activity not found")
-    db.save_analysis(activity_id, {"user_notes": body.notes})
+    crud.update_analysis(session, activity_id, {"user_notes": body.notes})
 
 
 @router.post("/activities/{activity_id}/deep-dive", response_model=DeepDiveResponse)
@@ -48,6 +53,7 @@ async def deep_dive(
     activity_id: int,
     request: Request,
     force: bool = False,
+    session: Session = Depends(get_session),
     backend=Depends(get_backend),
 ) -> DeepDiveResponse:
     """
@@ -55,21 +61,20 @@ async def deep_dive(
 
     Set force=true to regenerate even if a cached report exists.
     """
-    activity = db.get_activity(activity_id)
+    activity = crud.get(session, activity_id)
     if activity is None:
         raise HTTPException(status_code=404, detail="Activity not found")
 
     # Return cached report unless force=true
-    if activity.get("deep_dive_report") and not force:
+    if activity.deep_dive_report and not force:
         return DeepDiveResponse(
             activity_id=activity_id,
-            report=activity["deep_dive_report"],
+            report=activity.deep_dive_report,
             cached=True,
-            completed_at=activity.get("deep_dive_completed_at"),
-            model=activity.get("deep_dive_model"),
+            completed_at=activity.deep_dive_completed_at,
+            model=activity.deep_dive_model,
         )
 
-    # Fetch streams
     settings = get_settings()
     if not settings.strava_client_id or not settings.strava_client_secret:
         raise HTTPException(status_code=500, detail="Strava credentials not configured")
@@ -92,10 +97,8 @@ async def deep_dive(
             detail="No stream data available for this activity (manual entry or GPS disabled)",
         )
 
-    # Build condensed stream representation
-    condensed = condense_streams_for_deep_dive(streams, activity)
+    condensed = condense_streams_for_deep_dive(streams, activity.model_dump())
 
-    # Run the (sync) LLM call in a thread pool so we don't block the event loop
     def _run_llm():
         text, _ = backend.stream_turn(
             DEEP_DIVE_SYSTEM_PROMPT,
@@ -112,7 +115,8 @@ async def deep_dive(
 
     completed_at = datetime.now(timezone.utc).isoformat()
     model_label = backend.label
-    db.save_analysis(
+    crud.update_analysis(
+        session,
         activity_id,
         {
             "deep_dive_report": report,

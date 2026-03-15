@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from strides_ai import db
+from strides_ai.db import engine as db_engine
 
 
 @pytest.fixture
@@ -13,6 +14,7 @@ def tmp_db(tmp_path, monkeypatch):
     """Redirect DB_PATH to a temp file and initialise the schema."""
     db_file = tmp_path / "test.db"
     monkeypatch.setattr(db, "DB_PATH", db_file)
+    monkeypatch.setattr(db_engine, "DB_PATH", db_file)
     db.init_db()
     return db_file
 

@@ -11,10 +11,15 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
+from sqlmodel import Session
 
-from ... import db
 from ...coach import build_system
 from ...config import MAX_FILE_BYTES, SUPPORTED_IMAGE_TYPES, UPLOADS_DIR
+from ...db import activities as act_crud
+from ...db import conversations as conv_crud
+from ...db import memories as mem_crud
+from ...db import profiles as prof_crud
+from ...db.engine import get_engine, get_session
 from ...profile import profile_to_text
 from ..deps import get_backend
 
@@ -64,6 +69,7 @@ async def chat(
     message: str = Form(...),
     mode: str = Form("running"),
     files: list[UploadFile] = File(default=[]),
+    session: Session = Depends(get_session),
     backend=Depends(get_backend),
 ) -> StreamingResponse:
     llm_blocks: list[dict] = []
@@ -79,11 +85,18 @@ async def chat(
     if db_parts:
         saved_message += "\n\n" + "\n".join(db_parts)
 
-    memories = db.get_all_memories()
-    profile_fields = db.get_profile_fields(mode)
+    memories = mem_crud.get_all(session)
+    profile_fields = prof_crud.get_fields(session, mode)
     profile = profile_to_text(profile_fields, mode)
-    activities = db.get_activities_for_mode(mode)
-    system = build_system(profile, memories, mode=mode, activities=activities)
+    activities = [r.model_dump() for r in act_crud.get_for_mode(session, mode)]
+    system = build_system(
+        profile,
+        [r.model_dump() for r in memories],
+        mode=mode,
+        activities=activities,
+    )
+
+    conv_crud.save(session, "user", saved_message, mode=mode)
 
     token_queue: queue.Queue[str | None] = queue.Queue()
     cancel_event = threading.Event()
@@ -94,29 +107,34 @@ async def chat(
         token_queue.put(chunk)
 
     def run_turn():
-        try:
-            response_text, memories_saved = backend.stream_turn(
-                system, message, on_token, attachments=llm_blocks or None
-            )
-            token_queue.put(f"[MODEL]{backend.label}")
-            if memories_saved:
-                token_queue.put(
-                    "[MEMORIES]"
-                    + json.dumps([{"category": c, "content": t} for c, t in memories_saved])
+        # Background thread — needs its own session since the request-scoped
+        # session is not safe to share across threads.
+        with Session(get_engine()) as thread_session:
+            try:
+                response_text, memories_saved = backend.stream_turn(
+                    system, message, on_token, attachments=llm_blocks or None
                 )
-            db.save_message("assistant", response_text, mode=mode, model=backend.label)
-        except InterruptedError:
-            db.save_message(
-                "assistant",
-                "_Chat interrupted — resend your message to generate a full response._",
-                mode=mode,
-            )
-        except Exception as exc:
-            token_queue.put(f"[ERROR]{exc}")
-        finally:
-            token_queue.put(None)  # sentinel
+                token_queue.put(f"[MODEL]{backend.label}")
+                if memories_saved:
+                    token_queue.put(
+                        "[MEMORIES]"
+                        + json.dumps([{"category": c, "content": t} for c, t in memories_saved])
+                    )
+                conv_crud.save(
+                    thread_session, "assistant", response_text, mode=mode, model=backend.label
+                )
+            except InterruptedError:
+                conv_crud.save(
+                    thread_session,
+                    "assistant",
+                    "_Chat interrupted — resend your message to generate a full response._",
+                    mode=mode,
+                )
+            except Exception as exc:
+                token_queue.put(f"[ERROR]{exc}")
+            finally:
+                token_queue.put(None)  # sentinel
 
-    db.save_message("user", saved_message, mode=mode)
     threading.Thread(target=run_turn, daemon=True).start()
 
     async def event_stream() -> AsyncIterator[str]:
