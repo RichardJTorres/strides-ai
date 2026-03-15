@@ -7,7 +7,7 @@ from sqlmodel import Session
 from ...config import VALID_MODES, VALID_PROVIDERS, get_settings
 from ...db import settings as crud
 from ...db.engine import get_session
-from ..deps import _get_provider_models, _provider_statuses, init_backend
+from ..deps import get_provider_models, provider_statuses, init_backend
 
 router = APIRouter()
 
@@ -58,11 +58,11 @@ def put_settings(
 
 @router.get("/providers")
 def get_providers():
-    return _provider_statuses()
+    return provider_statuses()
 
 
 @router.get("/providers/{provider}/models")
-def get_provider_models(provider: str):
+def get_models_for_provider(provider: str):
     if provider not in VALID_PROVIDERS:
         raise HTTPException(status_code=404, detail=f"Unknown provider: {provider}")
-    return _get_provider_models(provider)
+    return get_provider_models(provider)
