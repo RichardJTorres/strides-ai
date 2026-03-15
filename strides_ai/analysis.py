@@ -2,7 +2,6 @@
 
 import logging
 import statistics
-from datetime import datetime, timezone
 
 import httpx
 
