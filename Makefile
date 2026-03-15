@@ -13,8 +13,6 @@ help:
 	@echo "  make dev       Run API + frontend together  (Ctrl+C stops both)"
 	@echo "  make api       Run the FastAPI server only  (localhost:8000)"
 	@echo "  make web       Run the Vite frontend only   (localhost:5173)"
-	@echo "  make cli       Launch the terminal coaching app"
-	@echo "  make profile   Edit your athlete profile in \$$EDITOR"
 	@echo ""
 
 # ── Install ───────────────────────────────────────────────────────────────────
@@ -28,7 +26,7 @@ $(VENV)/bin/activate:
 	$(VENV)/bin/pre-commit install
 
 # Re-run pip if pyproject.toml is newer than the venv marker
-$(VENV)/bin/strides-ai: pyproject.toml $(VENV)/bin/activate
+$(VENV)/bin/strides-ai-web: pyproject.toml $(VENV)/bin/activate
 	$(PIP) install -e .
 
 web/node_modules: web/package.json
@@ -36,7 +34,7 @@ web/node_modules: web/package.json
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 .PHONY: dev
-dev: _check_env $(VENV)/bin/strides-ai web/node_modules
+dev: _check_env $(VENV)/bin/strides-ai-web web/node_modules
 	@echo "Starting API on :8000 and frontend on :5173 — press Ctrl+C to stop both"
 	@trap 'kill 0' INT; \
 	 $(VENV)/bin/strides-ai-web & \
@@ -44,25 +42,12 @@ dev: _check_env $(VENV)/bin/strides-ai web/node_modules
 	 wait
 
 .PHONY: api
-api: _check_env $(VENV)/bin/strides-ai
+api: _check_env $(VENV)/bin/strides-ai-web
 	$(VENV)/bin/strides-ai-web
 
 .PHONY: web
 web: web/node_modules
 	cd web && npm run dev
-
-.PHONY: cli
-cli: _check_env $(VENV)/bin/strides-ai
-	$(VENV)/bin/strides-ai
-
-.PHONY: profile
-profile: $(VENV)/bin/strides-ai
-	$(VENV)/bin/strides-ai --setup-profile
-
-# ── Test ──────────────────────────────────────────────────────────────────────
-.PHONY: test
-test: $(VENV)/bin/activate
-	$(PY) -m pytest tests/ -v
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 .PHONY: _check_env

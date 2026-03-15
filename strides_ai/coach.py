@@ -1,13 +1,8 @@
-"""Coaching chat loop — backend-agnostic."""
+"""Coaching system prompt assembly and history utilities."""
 
 import sqlite3
 
-from rich.console import Console
-from rich.panel import Panel
-from rich.prompt import Prompt
-
-from .backends.base import BaseBackend
-from .db import get_all_activities, get_all_memories, get_recent_messages, RUN_TYPES
+from .db import RUN_TYPES
 from . import db
 
 RECALL_MESSAGES = 40
@@ -247,57 +242,3 @@ def build_initial_history(
         },
         *[{"role": m["role"], "content": m["content"]} for m in prior_messages],
     ]
-
-
-def chat(backend: BaseBackend, profile: str, mode: str = "running") -> None:
-    """Interactive coaching chat loop."""
-    console = Console()
-
-    memories = get_all_memories()
-    system = build_system(profile, memories, mode=mode)
-
-    prior_messages = get_recent_messages(RECALL_MESSAGES, mode=mode)
-    mem_summary = (
-        f"{len(memories)} memor{'y' if len(memories) == 1 else 'ies'}"
-        if memories
-        else "no memories yet"
-    )
-    hist_summary = f"{len(prior_messages)} messages recalled" if prior_messages else "new session"
-
-    console.print(
-        Panel(
-            f"[bold green]Strides AI Coach[/bold green]\n"
-            f"[dim]{mem_summary} · {hist_summary} · {backend.label}[/dim]\n\n"
-            "Type your question and press Enter. "
-            "Type [bold]exit[/bold] or [bold]quit[/bold] to leave.",
-            expand=False,
-        )
-    )
-
-    while True:
-        try:
-            user_input = Prompt.ask("\n[bold cyan]You[/bold cyan]").strip()
-        except (EOFError, KeyboardInterrupt):
-            console.print("\n[dim]Goodbye![/dim]")
-            break
-
-        if user_input.lower() in {"exit", "quit", "q"}:
-            console.print("[dim]Goodbye![/dim]")
-            break
-        if not user_input:
-            continue
-
-        console.print("\n[bold magenta]Coach[/bold magenta]")
-
-        def on_token(chunk: str) -> None:
-            console.print(chunk, end="", markup=False)
-
-        response_text, memories_saved = backend.stream_turn(system, user_input, on_token)
-        console.print()
-
-        if memories_saved:
-            tags = " · ".join(f"[{cat}] {content}" for cat, content in memories_saved)
-            console.print(f"[dim italic]Remembered: {tags}[/dim italic]")
-
-        db.save_message("user", user_input, mode=mode)
-        db.save_message("assistant", response_text, mode=mode)

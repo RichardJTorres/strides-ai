@@ -7,7 +7,6 @@ A local AI multisport coach that connects to your Strava account and lets you ha
 - **Strava sync** — authenticates via OAuth2 and pulls your full activity history into a local SQLite database. Incremental sync on every startup keeps it current.
 - **Multi-mode coaching** — switch between **Running**, **Cycling**, and **Hybrid** (multisport) modes. Each mode has its own coaching persona, filtered activity history, and separate conversation history and athlete profile.
 - **Web UI** — a browser-based interface with a sidebar nav for chat, activities, training charts, calendar, profile editing, and settings.
-- **Terminal chat** — a CLI alternative for coaching conversations directly in the terminal.
 - **Athlete profile** — fill in your background, PBs, goals, injuries, and gear via the web UI. Profiles are per-mode (running vs. cycling), loaded fresh every session.
 - **Persistent memory** — the coach proactively saves key facts (goals, injuries, preferences, upcoming races) and recalls them at the start of every session.
 - **Conversation history** — the last 40 messages from previous sessions are reloaded so coaching advice stays consistent across conversations. History is scoped per mode.
@@ -49,9 +48,7 @@ ANTHROPIC_API_KEY=sk-ant-...
 ### 4. Run
 
 ```bash
-make dev      # web UI: API on :8000, frontend on :5173
-# or
-make cli      # terminal-only coaching app
+make dev      # API on :8000, frontend on :5173
 ```
 
 On first run, a browser window opens to Strava's authorization page — approve it and the token is saved locally.
@@ -211,8 +208,7 @@ strides_ai/
 ├── sync.py         # Strava API pagination, incremental sync (runs + rides)
 ├── profile.py      # Profile fields — defaults per mode, serialization
 ├── schedule.py     # Nutrition analysis — Claude Haiku, structured JSON output
-├── coach.py        # System prompt assembly, training log formatting, CLI chat loop
-└── cli.py          # CLI entry point: auth → sync → backend → chat
+└── coach.py        # System prompt assembly, training log formatting
 web/
 └── src/pages/
     ├── Chat.tsx        # Streaming chat UI, mode-aware history
@@ -241,7 +237,6 @@ web/
 | Ollama API | `httpx` |
 | Web framework | `fastapi` + `uvicorn` |
 | Database | `sqlite3` (stdlib) |
-| Terminal UI | `rich` |
 | Config | `python-dotenv` |
 | Frontend | React 18, TypeScript, Tailwind CSS, Vite |
 | Charts | Recharts |
