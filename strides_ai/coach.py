@@ -6,6 +6,9 @@ from .db import RUN_TYPES
 from . import db
 
 RECALL_MESSAGES = 40
+# Number of most-recent activities always pinned in the system prompt each turn.
+# The full training log is seeded once in conversation history via build_initial_history.
+RECENT_ACTIVITIES_IN_SYSTEM = 30
 
 RUNNING_SYSTEM_PROMPT = """\
 You are an experienced, data-driven running coach with access to the athlete's \
@@ -23,8 +26,8 @@ key metrics (distance, pace, HR).
 preferred snacks in their profile, choose from those; otherwise use sensible \
 defaults based on run distance and intensity.
 
-The athlete's full training log is embedded in the next message as structured \
-text. Treat it as ground truth for all data-related questions.
+The athlete's complete training log is included below. Treat it as ground \
+truth for all data-related questions.
 
 **Memory:** Use the save_memory tool proactively whenever the athlete mentions \
 goals, upcoming races, injuries, preferences, or any key context that should \
@@ -47,8 +50,8 @@ key metrics (distance, speed, HR).
 preferred snacks in their profile, choose from those; otherwise use sensible \
 defaults based on ride duration and intensity.
 
-The athlete's full training log is embedded in the next message as structured \
-text. Treat it as ground truth for all data-related questions.
+The athlete's complete training log is included below. Treat it as ground \
+truth for all data-related questions.
 
 **Memory:** Use the save_memory tool proactively whenever the athlete mentions \
 goals, upcoming events, injuries, preferences, or any key context that should \
@@ -71,8 +74,8 @@ sport type, and key metrics.
 preferred snacks in their profile, choose from those; otherwise use sensible \
 defaults based on activity duration and intensity.
 
-The athlete's full training log is embedded in the next message as structured \
-text. Treat it as ground truth for all data-related questions.
+The athlete's complete training log is included below. Treat it as ground \
+truth for all data-related questions.
 
 **Memory:** Use the save_memory tool proactively whenever the athlete mentions \
 goals, upcoming events, injuries, preferences, or any key context that should \
@@ -86,7 +89,12 @@ _PROMPT_BY_MODE = {
 }
 
 
-def build_system(profile: str, memories: list[dict], mode: str = "running") -> str:
+def build_system(
+    profile: str,
+    memories: list[dict],
+    mode: str = "running",
+    activities: list | None = None,
+) -> str:
     prompt = _PROMPT_BY_MODE.get(mode, RUNNING_SYSTEM_PROMPT)
 
     if profile:
@@ -115,6 +123,32 @@ def build_system(profile: str, memories: list[dict], mode: str = "running") -> s
             + "\n"
             + "\n".join(rows)
         )
+
+    # Pin only the most recent activities every turn (cheap, always survives truncation).
+    # The full training log is seeded once in conversation history.
+    recent = (activities or [])[:RECENT_ACTIVITIES_IN_SYSTEM]
+
+    # Inject metrics guide when any activity has been analyzed
+    has_analysis = any(a.get("analysis_summary") for a in recent)
+    if has_analysis:
+        prompt += (
+            "\n\n## Analysis Metrics Guide\n"
+            "The ANALYSIS column in the training log contains auto-generated summaries. "
+            "Key metrics to reason about:\n"
+            "- **Cardiac decoupling %**: aerobic efficiency; <5% = well-coupled (good), "
+            "5–10% = moderate stress, >10% = high cardiovascular drift\n"
+            "- **Effort efficiency score**: 0–100, normalized vs athlete's full history; "
+            "higher = more efficient pace for a given HR\n"
+            "- **HR zones**: Z1=recovery, Z2=aerobic base, Z3=tempo, "
+            "Z4=threshold, Z5=VO2max/max effort\n"
+            "- **Pace fade**: sec/mile change in final third vs first third; "
+            "positive = slowing (possible fatigue), negative = negative split"
+        )
+
+    recent_log = build_training_log(recent, mode)
+    prompt += (
+        f"\n\n## Recent Activities (last {RECENT_ACTIVITIES_IN_SYSTEM})\n\n```\n{recent_log}\n```"
+    )
 
     return prompt
 
@@ -149,21 +183,23 @@ def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
         return "No activities found."
 
     if mode == "hybrid":
-        header = "DATE       | TYPE       | NAME                           | DIST(km) | DURATION | PACE/SPEED  | AVG HR | MAX HR | CADENCE | ELEV(m) | SUFFER | RPE"
-        sep = "-" * 150
+        header = "DATE       | TYPE       | NAME                           | DIST(km) | DURATION | PACE/SPEED  | AVG HR | MAX HR | CADENCE | ELEV(m) | SUFFER | RPE | ANALYSIS"
+        sep = "-" * 215
     elif mode == "cycling":
-        header = "DATE       | NAME                           | DIST(km) | DURATION | SPEED    | AVG HR | MAX HR | CADENCE(rpm) | ELEV(m) | SUFFER | RPE"
-        sep = "-" * 135
+        header = "DATE       | NAME                           | DIST(km) | DURATION | SPEED    | AVG HR | MAX HR | CADENCE(rpm) | ELEV(m) | SUFFER | RPE | ANALYSIS"
+        sep = "-" * 200
     else:
-        header = "DATE       | NAME                           | DIST(km) | DURATION | PACE     | AVG HR | MAX HR | CADENCE(spm) | ELEV(m) | SUFFER | RPE"
-        sep = "-" * 135
+        header = "DATE       | NAME                           | DIST(km) | DURATION | PACE     | AVG HR | MAX HR | CADENCE(spm) | ELEV(m) | SUFFER | RPE | ANALYSIS"
+        sep = "-" * 200
 
     lines = [header, sep]
 
-    for r in rows:
+    for r in reversed(rows):
         dist_km = (r["distance_m"] or 0) / 1000
         sport = r["sport_type"] or ""
         is_run = sport in RUN_TYPES
+
+        analysis = (r.get("analysis_summary") or "")[:60]
 
         if mode == "hybrid":
             pace_speed = (
@@ -183,7 +219,8 @@ def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
                 f"{r['avg_cadence'] or '—':7} | "
                 f"{r['elevation_gain_m'] or '—':7} | "
                 f"{r['suffer_score'] or '—':6} | "
-                f"{r['perceived_exertion'] or '—'}"
+                f"{r['perceived_exertion'] or '—':3} | "
+                f"{analysis}"
             )
         elif mode == "cycling":
             lines.append(
@@ -197,7 +234,8 @@ def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
                 f"{r['avg_cadence'] or '—':12} | "
                 f"{r['elevation_gain_m'] or '—':7} | "
                 f"{r['suffer_score'] or '—':6} | "
-                f"{r['perceived_exertion'] or '—'}"
+                f"{r['perceived_exertion'] or '—':3} | "
+                f"{analysis}"
             )
         else:  # running
             lines.append(
@@ -211,7 +249,8 @@ def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
                 f"{r['avg_cadence'] or '—':12} | "
                 f"{r['elevation_gain_m'] or '—':7} | "
                 f"{r['suffer_score'] or '—':6} | "
-                f"{r['perceived_exertion'] or '—'}"
+                f"{r['perceived_exertion'] or '—':3} | "
+                f"{analysis}"
             )
 
     total_km = sum((r["distance_m"] or 0) / 1000 for r in rows)
@@ -222,15 +261,20 @@ def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
 
 
 def build_initial_history(
-    activities, prior_messages: list[dict], mode: str = "running"
+    activities: list, prior_messages: list[dict], mode: str = "running"
 ) -> list[dict]:
     """
-    Build the seed history passed to each backend on construction:
-    training-log injection followed by any recalled prior messages.
+    Seed the backend's conversation history with the full training log (once)
+    followed by any recalled prior messages.
+
+    The system prompt carries only the most recent RECENT_ACTIVITIES_IN_SYSTEM
+    activities on every turn, so this full-log seed is the only place older
+    history lives. It may be gracefully truncated by small-context models, but
+    only the oldest runs are dropped — recent ones are protected by the system prompt.
     """
     training_log = build_training_log(activities, mode)
-    log_message = f"Here is the athlete's complete training log:\n\n```\n{training_log}\n```"
     act_label = "runs" if mode == "running" else "rides" if mode == "cycling" else "activities"
+    log_message = f"Here is the athlete's complete training log:\n\n```\n{training_log}\n```"
     return [
         {"role": "user", "content": log_message},
         {

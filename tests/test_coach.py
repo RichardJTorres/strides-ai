@@ -81,7 +81,8 @@ def test_format_duration_full():
 
 def test_build_system_no_profile_no_memories(tmp_db):
     result = build_system("", [])
-    assert result == RUNNING_SYSTEM_PROMPT
+    assert RUNNING_SYSTEM_PROMPT in result
+    assert "## Recent Activities" in result
 
 
 def test_build_system_with_profile(tmp_db):
@@ -124,6 +125,13 @@ def test_build_system_injects_upcoming_workouts(tmp_db):
 def test_build_system_no_upcoming_workouts_section_when_empty(tmp_db):
     result = build_system("", [])
     assert "Upcoming Planned Workouts" not in result
+
+
+def test_build_system_embeds_recent_activities(tmp_db):
+    rows = [_make_row()]
+    result = build_system("", [], activities=rows)
+    assert "## Recent Activities" in result
+    assert "Morning Run" in result  # name from _make_row
 
 
 # ── build_training_log ────────────────────────────────────────────────────────
@@ -215,10 +223,21 @@ def test_build_training_log_none_fields_show_dash():
 def test_build_initial_history_structure():
     rows = [_make_row()]
     history = build_initial_history(rows, [])
-    # First two messages are always the log injection exchange
+    # First two messages are the log injection exchange
     assert history[0]["role"] == "user"
     assert history[1]["role"] == "assistant"
     assert "training log" in history[0]["content"].lower()
+
+
+def test_build_initial_history_empty_activities():
+    history = build_initial_history([], [])
+    assert "No activities found" in history[0]["content"]
+
+
+def test_build_initial_history_activity_count_in_reply():
+    rows = [_make_row(), _make_row()]
+    history = build_initial_history(rows, [])
+    assert "2 runs" in history[1]["content"]
 
 
 def test_build_initial_history_includes_prior_messages():
@@ -232,15 +251,15 @@ def test_build_initial_history_includes_prior_messages():
     assert history[3]["content"] == "Great effort!"
 
 
-def test_build_initial_history_activity_count_in_reply():
-    rows = [_make_row(), _make_row()]
-    history = build_initial_history(rows, [])
-    assert "2 runs" in history[1]["content"]
+def test_build_initial_history_cycling_label():
+    history = build_initial_history([_make_row(sport_type="Ride")], [], mode="cycling")
+    assert "rides" in history[1]["content"]
 
 
-def test_build_initial_history_empty_activities():
-    history = build_initial_history([], [])
-    assert "No activities found" in history[0]["content"]
+def test_build_initial_history_hybrid_label():
+    rows = [_make_row(sport_type="Run"), _make_row(sport_type="Ride")]
+    history = build_initial_history(rows, [], mode="hybrid")
+    assert "activities" in history[1]["content"]
 
 
 # ── _format_speed ─────────────────────────────────────────────────────────────
@@ -273,17 +292,20 @@ def test_format_speed_fast():
 
 def test_build_system_cycling_mode(tmp_db):
     result = build_system("", [], mode="cycling")
-    assert result == CYCLING_SYSTEM_PROMPT
+    assert CYCLING_SYSTEM_PROMPT in result
+    assert "## Recent Activities" in result
 
 
 def test_build_system_hybrid_mode(tmp_db):
     result = build_system("", [], mode="hybrid")
-    assert result == HYBRID_SYSTEM_PROMPT
+    assert HYBRID_SYSTEM_PROMPT in result
+    assert "## Recent Activities" in result
 
 
 def test_build_system_invalid_mode_falls_back_to_running(tmp_db):
     result = build_system("", [], mode="triathlon")
-    assert result == RUNNING_SYSTEM_PROMPT
+    assert RUNNING_SYSTEM_PROMPT in result
+    assert "## Recent Activities" in result
 
 
 # ── build_training_log cycling and hybrid modes ───────────────────────────────
@@ -313,17 +335,3 @@ def test_build_training_log_hybrid_header_has_type_column():
     log = build_training_log([_make_row()], mode="hybrid")
     header = log.split("\n")[0]
     assert "TYPE" in header
-
-
-# ── build_initial_history mode labels ─────────────────────────────────────────
-
-
-def test_build_initial_history_cycling_label():
-    history = build_initial_history([_make_row(sport_type="Ride")], [], mode="cycling")
-    assert "rides" in history[1]["content"]
-
-
-def test_build_initial_history_hybrid_label():
-    rows = [_make_row(sport_type="Run"), _make_row(sport_type="Ride")]
-    history = build_initial_history(rows, [], mode="hybrid")
-    assert "activities" in history[1]["content"]

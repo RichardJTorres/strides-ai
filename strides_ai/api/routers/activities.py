@@ -1,17 +1,19 @@
 """Activities route."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from sqlmodel import Session
 
-from ... import db
 from ...config import VALID_MODES
+from ...db import activities as crud
+from ...db.engine import get_session
 
 router = APIRouter()
 
 
 @router.get("/activities")
-def activities(mode: str | None = None):
+def get_activities(mode: str | None = None, session: Session = Depends(get_session)):
     if mode and mode in VALID_MODES:
-        rows = db.get_activities_for_mode(mode)
+        rows = crud.get_for_mode(session, mode)
     else:
-        rows = db.get_all_activities()
-    return [dict(r) for r in rows]
+        rows = crud.get_all(session)
+    return [r.model_dump() for r in rows]
