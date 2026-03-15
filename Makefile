@@ -13,6 +13,7 @@ help:
 	@echo "  make dev       Run API + frontend together  (Ctrl+C stops both)"
 	@echo "  make api       Run the FastAPI server only  (localhost:8000)"
 	@echo "  make web       Run the Vite frontend only   (localhost:5173)"
+	@echo "  make test      Run the test suite"
 	@echo ""
 
 # ── Install ───────────────────────────────────────────────────────────────────
@@ -48,6 +49,11 @@ api: _check_env $(VENV)/bin/strides-ai-web
 .PHONY: web
 web: web/node_modules
 	cd web && npm run dev
+
+# ── Test ──────────────────────────────────────────────────────────────────────
+.PHONY: test
+test: $(VENV)/bin/activate
+	$(PY) -m pytest tests/ -v
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 .PHONY: _check_env

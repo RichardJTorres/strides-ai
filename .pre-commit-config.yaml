@@ -5,3 +5,11 @@ repos:
       - id: black
         language_version: python3
 
+  - repo: local
+    hooks:
+      - id: tests
+        name: run tests
+        entry: make test
+        language: system
+        pass_filenames: false
+        always_run: true
