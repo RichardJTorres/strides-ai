@@ -18,6 +18,7 @@ dependencies = [
     "sqlmodel>=0.0.21",
     "alembic>=1.13",
     "pydantic-settings>=2.0",
+    "python-multipart>=0.0.9",
 ]
 
 [project.scripts]
