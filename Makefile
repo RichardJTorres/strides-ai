@@ -14,7 +14,6 @@ help:
 	@echo "  make api       Run the FastAPI server only  (localhost:8000)"
 	@echo "  make web       Run the Vite frontend only   (localhost:5173)"
 	@echo "  make cli       Launch the terminal coaching app"
-	@echo "  make profile   Edit your athlete profile in \$$EDITOR"
 	@echo ""
 
 # ── Install ───────────────────────────────────────────────────────────────────
@@ -54,10 +53,6 @@ web: web/node_modules
 .PHONY: cli
 cli: _check_env $(VENV)/bin/strides-ai
 	$(VENV)/bin/strides-ai
-
-.PHONY: profile
-profile: $(VENV)/bin/strides-ai
-	$(VENV)/bin/strides-ai --setup-profile
 
 # ── Test ──────────────────────────────────────────────────────────────────────
 .PHONY: test

@@ -1,7 +1,6 @@
 """Athlete profile — stored per-mode in the database."""
 
 import copy
-import re
 
 # ── Per-mode default field schemas ────────────────────────────────────────────
 
@@ -227,66 +226,3 @@ def profile_to_text(fields: dict | None, mode: str) -> str:
         return ""
 
     return "## Athlete Profile\n\n" + "\n\n".join(sections)
-
-
-# ── Legacy migration helper ───────────────────────────────────────────────────
-# Used once on server startup to import an existing profile.md into the DB.
-
-
-def _get_section(text: str, name: str) -> str:
-    pattern = rf"##\s+{re.escape(name)}\s*\n(.*?)(?=\n---|\n##|\Z)"
-    m = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
-    return m.group(1).strip() if m else ""
-
-
-def _strip_comments(s: str) -> str:
-    return re.sub(r"<!--.*?-->", "", s, flags=re.DOTALL).strip()
-
-
-def _get_bullet(section_text: str, field_name: str) -> str:
-    pattern = rf"^\s*-\s+\*\*{re.escape(field_name)}:\*\*[ \t]*(.*?)$"
-    m = re.search(pattern, section_text, re.MULTILINE | re.IGNORECASE)
-    if not m:
-        return ""
-    return _strip_comments(m.group(1)).strip()
-
-
-def _get_pb(pbs_text: str, label: str) -> str:
-    pattern = rf"\|\s*{re.escape(label)}\s*\|\s*(.*?)\s*\|"
-    for m in re.finditer(pattern, pbs_text, re.IGNORECASE):
-        val = m.group(1).strip()
-        if not re.fullmatch(r"[-:]+", val):
-            return val
-    return ""
-
-
-def parse_legacy_profile(text: str) -> dict:
-    """Parse the old profile.md Markdown format into a running-schema fields dict."""
-    personal = _get_section(text, "Personal")
-    background = _get_section(text, "Running Background")
-    pbs = _get_section(text, "Personal Bests")
-
-    return {
-        "personal": {
-            "name": _get_bullet(personal, "Name"),
-            "gender": _get_bullet(personal, "Gender"),
-            "date_of_birth": _get_bullet(personal, "Date of birth"),
-            "height": _get_bullet(personal, "Height"),
-            "weight": _get_bullet(personal, "Weight"),
-        },
-        "running_background": {
-            "running_since": _get_bullet(background, "Running since"),
-            "weekly_volume": _get_bullet(background, "Typical weekly volume"),
-            "background": _get_bullet(background, "Background"),
-        },
-        "personal_bests": {
-            "5k": _get_pb(pbs, "5K"),
-            "10k": _get_pb(pbs, "10K"),
-            "half_marathon": _get_pb(pbs, "Half marathon"),
-            "marathon": _get_pb(pbs, "Marathon"),
-        },
-        "goals": _strip_comments(_get_section(text, "Goals")),
-        "injuries_and_health": _strip_comments(_get_section(text, "Injuries & Health")),
-        "gear": _strip_comments(_get_section(text, "Gear")),
-        "other_notes": _strip_comments(_get_section(text, "Other Notes")),
-    }

@@ -16,8 +16,6 @@ make api              # FastAPI only (uvicorn, :8000)
 make web              # Vite dev server only (:5173)
 make cli              # terminal coaching app
 
-# One-off
-make profile          # open profile.md in $EDITOR
 ```
 
 `make install` is idempotent — it uses file-based Make targets (`$(VENV)/bin/activate`, `web/node_modules`) so it only re-runs what's stale.
@@ -61,15 +59,15 @@ Select backend with `PROVIDER=claude` (default, uses `ANTHROPIC_API_KEY`), `PROV
 
 ### System prompt assembly
 
-On every turn: `BASE_SYSTEM_PROMPT + profile text (from ~/.strides_ai/profile.md) + memories (from DB)`. The profile is a structured Markdown file with sections parsed/serialized by `profile.py`. The web UI reads/writes it via `GET|PUT /api/profile`.
+On every turn: `BASE_SYSTEM_PROMPT + profile text (from DB) + memories (from DB)`. The profile is stored as a JSON fields dict in the `profiles` table, keyed by mode (`running`, `cycling`, `hybrid`). `profile.py` converts it to readable text for the system prompt. The web UI reads/writes it via `GET|PUT /api/profile`.
 
 ### Conversation persistence
 
 - **Conversation history**: last 40 messages (`RECALL_MESSAGES`) stored in SQLite, re-injected at session start.
 - **Memories**: structured facts (category + content) saved by LLM tool calls, always injected into system prompt.
-- **Profile**: plain Markdown read fresh each session — never cached in DB.
+- **Profile**: structured fields stored in the `profiles` DB table, keyed by mode. Read fresh on each request.
 
-All local data lives in `~/.strides_ai/` (`activities.db`, `profile.md`, `token.json`).
+All local data lives in `~/.strides_ai/` (`activities.db`, `token.json`).
 
 ### Web API (`strides_ai/api/app.py`)
 
