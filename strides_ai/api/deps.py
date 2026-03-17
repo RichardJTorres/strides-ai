@@ -11,7 +11,7 @@ from ..coach import build_initial_history, RECALL_MESSAGES
 from ..config import get_settings
 
 
-def _get_provider_models(provider_id: str) -> list[dict]:
+def get_provider_models(provider_id: str) -> list[dict]:
     """Return available models for a provider."""
     settings = get_settings()
     if provider_id == "claude":
@@ -31,19 +31,19 @@ def _stored_model(provider_id: str, default: str = "") -> str:
     return db.get_setting(f"{provider_id}_model") or env_default
 
 
-def _provider_statuses() -> list[dict]:
+def provider_statuses() -> list[dict]:
     """Return the list of providers with their configuration and active status."""
     settings = get_settings()
     current = db.get_setting("provider", settings.provider) or "claude"
 
-    ollama_models = _get_provider_models("ollama")
+    ollama_models = get_provider_models("ollama")
     ollama_configured = len(ollama_models) > 0
     ollama_default = ollama_models[0]["id"] if ollama_models else ""
 
-    gemini_models = _get_provider_models("gemini")
+    gemini_models = get_provider_models("gemini")
     gemini_default = gemini_models[0]["id"] if gemini_models else ""
 
-    openai_models = _get_provider_models("openai")
+    openai_models = get_provider_models("openai")
     openai_default = openai_models[0]["id"] if openai_models else ""
 
     return [
@@ -101,17 +101,17 @@ def init_backend(app: FastAPI, mode: str | None = None, provider: str | None = N
     initial_history = build_initial_history(activities, prior_messages, mode=current_mode)
 
     if current_provider == "ollama":
-        available = _get_provider_models("ollama")
+        available = get_provider_models("ollama")
         auto_default = available[0]["id"] if available else ""
         model = _stored_model("ollama", auto_default)
         app.state.backend = OllamaBackend(model, initial_history, settings.ollama_host)
     elif current_provider == "gemini":
-        available = _get_provider_models("gemini")
+        available = get_provider_models("gemini")
         auto_default = available[0]["id"] if available else ""
         model = _stored_model("gemini", auto_default)
         app.state.backend = GeminiBackend(settings.gemini_api_key, initial_history, model)
     elif current_provider == "openai":
-        available = _get_provider_models("openai")
+        available = get_provider_models("openai")
         auto_default = available[0]["id"] if available else "gpt-4o"
         model = _stored_model("openai", auto_default)
         app.state.backend = OpenAIBackend(settings.openai_api_key, initial_history, model)
