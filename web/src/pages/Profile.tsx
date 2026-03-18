@@ -364,6 +364,7 @@ export default function Profile({ mode, theme }: Props) {
               <Field label="Date of birth" value={fields.personal?.date_of_birth ?? ""} onChange={(v) => setNested("personal", "date_of_birth", v)} placeholder="e.g. 1990-05-15" focusClass={focusClass} />
               <Field label="Height" value={fields.personal?.height ?? ""} onChange={(v) => setNested("personal", "height", v)} placeholder="e.g. 175 cm" focusClass={focusClass} />
               <Field label="Weight" value={fields.personal?.weight ?? ""} onChange={(v) => setNested("personal", "weight", v)} placeholder="e.g. 70 kg" focusClass={focusClass} />
+              <Field label="Max heart rate" value={fields.personal?.max_hr ?? ""} onChange={(v) => setNested("personal", "max_hr", v)} placeholder="e.g. 185" focusClass={focusClass} />
             </div>
           </Section>
 
