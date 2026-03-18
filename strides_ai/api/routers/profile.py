@@ -51,7 +51,10 @@ def reset_profile(
     session: Session = Depends(get_session),
 ):
     m = mode or request.app.state.mode
-    fields = get_default_fields(m)
-    crud.save_fields(session, m, fields)
+    defaults = get_default_fields(m)
+    mode_defaults = {k: v for k, v in defaults.items() if k != "personal"}
+    current = crud.get_fields(session, m) or {}
+    merged = {**mode_defaults, "personal": current.get("personal", {})}
+    crud.save_fields(session, m, merged)
     init_backend(request.app)
-    return {"fields": fields}
+    return {"fields": merged}
