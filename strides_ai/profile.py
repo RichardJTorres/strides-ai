@@ -11,6 +11,7 @@ RUNNING_DEFAULTS: dict = {
         "date_of_birth": "",
         "height": "",
         "weight": "",
+        "max_hr": "",
     },
     "running_background": {
         "running_since": "",
@@ -37,6 +38,7 @@ CYCLING_DEFAULTS: dict = {
         "date_of_birth": "",
         "height": "",
         "weight": "",
+        "max_hr": "",
     },
     "cycling_background": {
         "cycling_since": "",
@@ -63,6 +65,7 @@ HYBRID_DEFAULTS: dict = {
         "date_of_birth": "",
         "height": "",
         "weight": "",
+        "max_hr": "",
     },
     "running_background": {
         "running_since": "",
@@ -134,6 +137,7 @@ def profile_to_text(fields: dict | None, mode: str) -> str:
         f"Date of birth: {_v(p.get('date_of_birth'))}" if _v(p.get("date_of_birth")) else "",
         f"Height: {_v(p.get('height'))}" if _v(p.get("height")) else "",
         f"Weight: {_v(p.get('weight'))}" if _v(p.get("weight")) else "",
+        f"Max heart rate: {_v(p.get('max_hr'))} bpm" if _v(p.get("max_hr")) else "",
     ]
     s = _section("Personal", personal_lines)
     if s:
