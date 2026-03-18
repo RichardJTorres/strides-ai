@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from ...db import profiles as crud
+from ...db import settings as settings_crud
 from ...db.engine import get_session
 from ...profile import get_default_fields
 from ..deps import init_backend
@@ -36,6 +37,9 @@ def put_profile(
 ):
     m = mode or request.app.state.mode
     crud.save_fields(session, m, body.fields)
+    max_hr_val = str(body.fields.get("personal", {}).get("max_hr", "")).strip()
+    if max_hr_val.isdigit():
+        settings_crud.set(session, "max_hr", max_hr_val)
     init_backend(request.app)
     return {"status": "ok"}
 
