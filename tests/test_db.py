@@ -234,11 +234,15 @@ def test_save_and_get_profile_fields(tmp_db):
     assert result["goals"] == "sub-3"
 
 
-def test_profile_fields_isolated_per_mode(tmp_db):
-    db.save_profile_fields("running", {"personal": {"name": "Runner"}})
-    db.save_profile_fields("cycling", {"personal": {"name": "Cyclist"}})
-    assert db.get_profile_fields("running")["personal"]["name"] == "Runner"
+def test_personal_section_shared_across_modes(tmp_db):
+    # personal is shared — last write wins regardless of mode
+    db.save_profile_fields("running", {"personal": {"name": "Runner"}, "goals": "sub-3"})
+    db.save_profile_fields("cycling", {"personal": {"name": "Cyclist"}, "goals": "century"})
+    assert db.get_profile_fields("running")["personal"]["name"] == "Cyclist"
     assert db.get_profile_fields("cycling")["personal"]["name"] == "Cyclist"
+    # mode-specific fields remain isolated
+    assert db.get_profile_fields("running")["goals"] == "sub-3"
+    assert db.get_profile_fields("cycling")["goals"] == "century"
 
 
 def test_save_profile_fields_replaces_existing(tmp_db):
