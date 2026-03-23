@@ -404,7 +404,7 @@ export default function Calendar() {
               }, 0);
 
               return (
-                <div key={wi} className="flex gap-1 mb-1">
+                <div key={wi} className="flex gap-1 mb-3">
                   {weekDays.map((day, di) => {
                     if (!day) return <div key={`pad-${wi}-${di}`} className="flex-1" />;
                     const dateStr = cellDateStr(day);
@@ -453,18 +453,20 @@ export default function Calendar() {
                   })}
 
                   {/* Weekly totals */}
-                  <div className="w-20 flex-shrink-0 flex flex-col justify-center gap-1.5 pl-2 border-l border-zinc-800">
+                  <div className="w-20 flex-shrink-0 flex flex-col justify-center gap-3 px-3 ml-1 rounded bg-zinc-800/40 border border-zinc-700/50">
                     <div>
-                      <div className="text-[10px] text-zinc-600 uppercase tracking-wide">Planned</div>
-                      <div className="text-xs text-zinc-400 font-medium">
-                        {plannedKm > 0 ? `${plannedKm.toFixed(1)} km` : "—"}
+                      <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Planned</div>
+                      <div className="text-sm text-zinc-300 font-semibold">
+                        {plannedKm > 0 ? `${plannedKm.toFixed(1)}` : "—"}
                       </div>
+                      {plannedKm > 0 && <div className="text-[10px] text-zinc-500">km</div>}
                     </div>
                     <div>
-                      <div className="text-[10px] text-zinc-600 uppercase tracking-wide">Actual</div>
-                      <div className={`text-xs font-medium ${actualKm > 0 ? "text-green-400" : "text-zinc-600"}`}>
-                        {actualKm > 0 ? `${actualKm.toFixed(1)} km` : "—"}
+                      <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Actual</div>
+                      <div className={`text-sm font-semibold ${actualKm > 0 ? "text-green-400" : "text-zinc-600"}`}>
+                        {actualKm > 0 ? `${actualKm.toFixed(1)}` : "—"}
                       </div>
+                      {actualKm > 0 && <div className="text-[10px] text-zinc-500">km</div>}
                     </div>
                   </div>
                 </div>
