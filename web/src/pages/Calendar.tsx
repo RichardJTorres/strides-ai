@@ -260,6 +260,20 @@ export default function Calendar() {
   const daysInMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).getDate();
   const firstDow = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1).getDay();
 
+  // Build week rows: arrays of 7 (day number | null for padding)
+  const weeks: (number | null)[][] = [];
+  {
+    let week: (number | null)[] = Array(firstDow).fill(null);
+    for (let day = 1; day <= daysInMonth; day++) {
+      week.push(day);
+      if (week.length === 7) { weeks.push(week); week = []; }
+    }
+    if (week.length > 0) {
+      while (week.length < 7) week.push(null);
+      weeks.push(week);
+    }
+  }
+
   const cellDateStr = (day: number) =>
     new Date(currentMonth.getFullYear(), currentMonth.getMonth(), day)
       .toISOString().slice(0, 10);
@@ -366,60 +380,96 @@ export default function Calendar() {
             >›</button>
           </div>
 
-          <div className="p-3 pr-16">
-            <div className="grid grid-cols-7 mb-1">
+          <div className="p-3">
+            {/* Day-of-week headers */}
+            <div className="flex gap-1 mb-1">
               {DAYS_OF_WEEK.map(d => (
-                <div key={d} className="text-center text-xs text-zinc-500 font-medium py-1">{d}</div>
+                <div key={d} className="flex-1 text-center text-xs text-zinc-500 font-medium py-1">{d}</div>
               ))}
+              <div className="w-20 flex-shrink-0" />
             </div>
-            <div className="grid grid-cols-7 gap-1">
-              {Array.from({ length: firstDow }).map((_, i) => <div key={`pad-${i}`} />)}
-              {Array.from({ length: daysInMonth }, (_, i) => i + 1).map(dayNum => {
-                const dateStr = cellDateStr(dayNum);
-                const workout = plan[dateStr];
-                const dayActivities = activities[dateStr] ?? [];
-                const isToday = dateStr === todayStr;
-                const isSelected = selectedDate === dateStr;
-                const isBlocked = prefs.blocked_days.includes(dateStr);
-                const race = raceOnDate(dateStr);
 
-                return (
-                  <div
-                    key={dateStr}
-                    onClick={() => openDay(dateStr)}
-                    className={[
-                      "min-h-16 p-1.5 rounded cursor-pointer border transition-colors",
-                      isSelected ? "border-zinc-400 bg-zinc-700/60" : "border-zinc-800 hover:border-zinc-600",
-                      isBlocked ? "opacity-40" : "",
-                      "bg-zinc-800/20",
-                    ].join(" ")}
-                  >
-                    <div className={`text-xs font-medium mb-1 flex items-center gap-1 ${isToday ? "text-green-400" : "text-zinc-400"}`}>
-                      {dayNum}
-                      {isToday && <span className="w-1.5 h-1.5 bg-green-400 rounded-full" />}
-                    </div>
-                    {race && (
-                      <div className="text-xs px-1 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 truncate mb-0.5">
-                        🏁 {race.name}
-                      </div>
-                    )}
-                    {workout && (
-                      <div className={`text-xs px-1 py-0.5 rounded border truncate mb-0.5 ${WORKOUT_COLORS[workout.workout_type] ?? "bg-zinc-700/50 text-zinc-400 border-zinc-600/30"}`}>
-                        {workout.workout_type}
-                        {workout.distance_km && (
-                          <span className="ml-1 opacity-70">{workout.distance_km}k</span>
-                        )}
-                      </div>
-                    )}
-                    {dayActivities.map(a => (
-                      <div key={a.id} className="text-xs px-1 py-0.5 rounded bg-zinc-600/40 text-zinc-300 border border-zinc-600/40 truncate mb-0.5">
-                        ✓ {((a.distance_m ?? 0) / 1000).toFixed(1)}k {a.sport_type}
-                      </div>
-                    ))}
-                  </div>
+            {/* Week rows */}
+            {weeks.map((weekDays, wi) => {
+              const plannedKm = weekDays.reduce<number>((sum, day) => {
+                if (!day) return sum;
+                const w = plan[cellDateStr(day)];
+                return sum + (w && w.workout_type !== "Rest" ? (w.distance_km ?? 0) : 0);
+              }, 0);
+              const actualKm = weekDays.reduce<number>((sum, day) => {
+                if (!day) return sum;
+                return sum + (activities[cellDateStr(day)] ?? []).reduce<number>(
+                  (s, a) => s + (a.distance_m ?? 0) / 1000, 0
                 );
-              })}
-            </div>
+              }, 0);
+
+              return (
+                <div key={wi} className="flex gap-1 mb-1">
+                  {weekDays.map((day, di) => {
+                    if (!day) return <div key={`pad-${wi}-${di}`} className="flex-1" />;
+                    const dateStr = cellDateStr(day);
+                    const workout = plan[dateStr];
+                    const dayActivities = activities[dateStr] ?? [];
+                    const isToday = dateStr === todayStr;
+                    const isSelected = selectedDate === dateStr;
+                    const isBlocked = prefs.blocked_days.includes(dateStr);
+                    const race = raceOnDate(dateStr);
+
+                    return (
+                      <div
+                        key={dateStr}
+                        onClick={() => openDay(dateStr)}
+                        className={[
+                          "flex-1 min-h-16 p-1.5 rounded cursor-pointer border transition-colors",
+                          isSelected ? "border-zinc-400 bg-zinc-700/60" : "border-zinc-800 hover:border-zinc-600",
+                          isBlocked ? "opacity-40" : "",
+                          "bg-zinc-800/20",
+                        ].join(" ")}
+                      >
+                        <div className={`text-xs font-medium mb-1 flex items-center gap-1 ${isToday ? "text-green-400" : "text-zinc-400"}`}>
+                          {day}
+                          {isToday && <span className="w-1.5 h-1.5 bg-green-400 rounded-full" />}
+                        </div>
+                        {race && (
+                          <div className="text-xs px-1 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 truncate mb-0.5">
+                            🏁 {race.name}
+                          </div>
+                        )}
+                        {workout && (
+                          <div className={`text-xs px-1 py-0.5 rounded border truncate mb-0.5 ${WORKOUT_COLORS[workout.workout_type] ?? "bg-zinc-700/50 text-zinc-400 border-zinc-600/30"}`}>
+                            {workout.workout_type}
+                            {workout.distance_km && (
+                              <span className="ml-1 opacity-70">{workout.distance_km}k</span>
+                            )}
+                          </div>
+                        )}
+                        {dayActivities.map(a => (
+                          <div key={a.id} className="text-xs px-1 py-0.5 rounded bg-zinc-600/40 text-zinc-300 border border-zinc-600/40 truncate mb-0.5">
+                            ✓ {((a.distance_m ?? 0) / 1000).toFixed(1)}k {a.sport_type}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+
+                  {/* Weekly totals */}
+                  <div className="w-20 flex-shrink-0 flex flex-col justify-center gap-1.5 pl-2 border-l border-zinc-800">
+                    <div>
+                      <div className="text-[10px] text-zinc-600 uppercase tracking-wide">Planned</div>
+                      <div className="text-xs text-zinc-400 font-medium">
+                        {plannedKm > 0 ? `${plannedKm.toFixed(1)} km` : "—"}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-zinc-600 uppercase tracking-wide">Actual</div>
+                      <div className={`text-xs font-medium ${actualKm > 0 ? "text-green-400" : "text-zinc-600"}`}>
+                        {actualKm > 0 ? `${actualKm.toFixed(1)} km` : "—"}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
 
