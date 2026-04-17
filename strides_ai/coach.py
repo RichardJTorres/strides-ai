@@ -1,6 +1,7 @@
 """Coaching system prompt assembly and history utilities."""
 
 import sqlite3
+from datetime import datetime
 
 from .db import RUN_TYPES
 from . import db
@@ -96,6 +97,17 @@ def build_system(
     activities: list | None = None,
 ) -> str:
     prompt = _PROMPT_BY_MODE.get(mode, RUNNING_SYSTEM_PROMPT)
+
+    now = datetime.now().astimezone()
+    day_str = now.strftime("%A, %B %-d, %Y")
+    time_str = now.strftime("%-I:%M %p %Z")
+    prompt += (
+        f"\n\n## Current Date & Time\n"
+        f"Today is {day_str} at {time_str}. "
+        "Use this to reason about training timing, upcoming workouts, recovery windows, "
+        "and time elapsed since past activities. "
+        "Do not mention the date or time in responses unless directly relevant to the athlete's question."
+    )
 
     if profile:
         prompt += f"\n\n{profile}"
