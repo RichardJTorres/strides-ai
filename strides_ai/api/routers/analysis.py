@@ -10,14 +10,18 @@ from sqlmodel import Session
 
 from ...analysis import (
     DEEP_DIVE_SYSTEM_PROMPT,
+    DEEP_DIVE_SYSTEM_PROMPT_LOCAL,
     RateLimitError,
+    build_precomputed_brief,
     condense_streams_for_deep_dive,
     fetch_activity_streams,
 )
 from ...auth import get_access_token
 from ...config import get_settings
 from ...db import activities as crud
+from ...db import get_all_memories, get_profile_fields
 from ...db.engine import get_session
+from ...profile import profile_to_text
 from ..deps import get_backend
 
 router = APIRouter()
@@ -97,15 +101,31 @@ async def deep_dive(
             detail="No stream data available for this activity (manual entry or GPS disabled)",
         )
 
-    condensed = condense_streams_for_deep_dive(streams, activity.model_dump())
+    activity_dict = activity.model_dump()
+    mode = getattr(request.app.state, "mode", "running")
+
+    if backend.prefers_precomputed_brief:
+        system_prompt = DEEP_DIVE_SYSTEM_PROMPT_LOCAL
+        user_content = build_precomputed_brief(streams, activity_dict)
+    else:
+        system_prompt = DEEP_DIVE_SYSTEM_PROMPT
+        user_content = condense_streams_for_deep_dive(streams, activity_dict)
+
+    profile_text = profile_to_text(get_profile_fields(mode), mode)
+    if profile_text:
+        system_prompt += f"\n\n{profile_text}"
+
+    memories = get_all_memories()
+    if memories:
+        mem_lines = "\n".join(f"  [{m['category']}] {m['content']}" for m in memories)
+        system_prompt += f"\n\n## Coaching Notes (remembered from previous sessions)\n{mem_lines}"
 
     def _run_llm():
-        text, _ = backend.stream_turn(
-            DEEP_DIVE_SYSTEM_PROMPT,
-            condensed,
+        return backend.stateless_turn(
+            system_prompt,
+            user_content,
             on_token=lambda _: None,
         )
-        return text
 
     try:
         report = await asyncio.get_event_loop().run_in_executor(None, _run_llm)

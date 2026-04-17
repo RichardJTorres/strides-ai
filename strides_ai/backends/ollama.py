@@ -87,6 +87,10 @@ class OllamaBackend(BaseBackend):
     def supports_attachments(self) -> bool:
         return False
 
+    @property
+    def prefers_precomputed_brief(self) -> bool:
+        return True
+
     def stream_turn(self, system, user_input, on_token, attachments=None):
         if attachments:
             raise NotImplementedError("Ollama backend does not support file attachments")
@@ -153,3 +157,25 @@ class OllamaBackend(BaseBackend):
                     self._history.append({"role": "tool", "content": result})
 
         return response_text, memories_saved
+
+    def stateless_turn(self, system, user_input, on_token):
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_input},
+        ]
+        body = {"model": self._model, "messages": messages, "stream": True}
+        response_text = ""
+        with httpx.Client(timeout=120) as client:
+            with client.stream("POST", f"{self._host}/api/chat", json=body) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    if not line:
+                        continue
+                    chunk = json.loads(line)
+                    text = chunk.get("message", {}).get("content", "")
+                    if text:
+                        on_token(text)
+                        response_text += text
+                    if chunk.get("done"):
+                        break
+        return response_text
