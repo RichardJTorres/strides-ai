@@ -12,12 +12,45 @@ log = logging.getLogger(__name__)
 STRAVA_STREAMS_URL = "https://www.strava.com/api/v3/activities/{id}/streams"
 STREAM_KEYS = "time,heartrate,velocity_smooth,cadence,altitude,watts"
 
-DEEP_DIVE_SYSTEM_PROMPT = (
-    "You are analyzing a single training activity in detail. "
-    "Stream data is sampled at 60-second intervals with key inflection points included. "
-    "Analyze: pacing strategy, HR drift, cadence patterns, elevation impact, and fatigue signs. "
-    "Be specific, cite elapsed times, and provide 3-5 actionable coaching notes in 4-6 paragraphs."
-)
+DEEP_DIVE_SYSTEM_PROMPT = """\
+You are a coach performing a detailed analysis of a single training activity.
+
+The data table has these columns:
+- ELAPSED: time since the start of the activity in HH:MM:SS format (NOT a clock time)
+- PACE: running pace in min:sec per mile where LOWER numbers mean FASTER running, or SPEED: cycling speed in km/h
+- HR: heart rate in beats per minute (BPM)
+- CAD: cadence in steps per minute (running) or RPM (cycling)
+- ALT(m): altitude in metres above sea level
+- "-" in any column means the sensor did not record a value at that moment
+
+Rows appear at roughly 60-second intervals plus extra rows wherever HR or pace changed sharply.
+
+Do not ask follow-up questions. Analyse only the data provided and write your report now.
+
+Cover each of these dimensions, citing ELAPSED times for specific observations:
+1. Pacing strategy: is it even, a positive split (slowing), or a negative split (speeding up)?
+2. HR drift: does heart rate climb while pace stays flat? This indicates cardiac decoupling and fatigue.
+3. Cadence: does it stay consistent or drop in the later stages?
+4. Elevation: how do climbs and descents affect pace and heart rate?
+5. Fatigue signs: look for pace fade, HR spike, or cadence collapse in the final third.
+
+End with 3-5 specific, actionable coaching notes the athlete can apply to their next session.\
+"""
+
+
+DEEP_DIVE_SYSTEM_PROMPT_LOCAL = """\
+You are a running and cycling coach. You will be given pre-computed metrics for a single training activity.
+
+Write a coaching analysis in 4-6 paragraphs covering:
+1. Pacing strategy - even effort, positive split (slowing), or negative split?
+2. Heart rate drift - what does it reveal about aerobic fitness and fatigue?
+3. Cadence - consistent or dropping under fatigue?
+4. Overall fatigue signs and what they suggest about training load
+
+End with 3-5 specific, actionable coaching notes the athlete can apply in their next session.
+
+Use only the numbers provided. Do not ask follow-up questions.\
+"""
 
 
 class RateLimitError(Exception):
@@ -445,19 +478,19 @@ def condense_streams_for_deep_dive(
 
     def fmt_pace(v):
         if v is None or v <= 0:
-            return "—"
+            return "-"
         pace_s = METERS_PER_MILE / v
         m, s = divmod(int(pace_s), 60)
         return f"{m}:{s:02d}/mi"
 
     def fmt_speed(v):
         if v is None or v <= 0:
-            return "—"
+            return "-"
         return f"{v * 3.6:.1f}km/h"
 
     def fmt_cadence(c):
         if c is None:
-            return "—"
+            return "-"
         val = c * 2 if is_run else c
         return str(int(val))
 
@@ -502,16 +535,22 @@ def condense_streams_for_deep_dive(
 
     for i in rows:
         t = time_stream[i]
-        elapsed = f"{t // 3600:02d}:{(t % 3600) // 60:02d}:{t % 60:02d}"
         v = safe_get(velocity_stream, i)
+
+        # Skip rows where the athlete is effectively stopped — velocity < 0.5 m/s
+        # produces extreme pace values (e.g. 268:13/mi) that confuse LLMs.
+        if v is not None and v < 0.5:
+            continue
+
+        elapsed = f"{t // 3600:02d}:{(t % 3600) // 60:02d}:{t % 60:02d}"
         hr = safe_get(hr_stream, i)
         cad = safe_get(cadence_stream, i)
         alt = safe_get(altitude_stream, i)
 
         pace_str = fmt_pace(v) if is_run else fmt_speed(v)
-        hr_str = str(int(hr)) if hr else "—"
+        hr_str = str(int(hr)) if hr else "-"
         cad_str = fmt_cadence(cad)
-        alt_str = f"{alt:.0f}" if alt is not None else "—"
+        alt_str = f"{alt:.0f}" if alt is not None else "-"
 
         lines.append(f"{elapsed:>8} | {pace_str:>9} | {hr_str:>5} | {cad_str:>5} | {alt_str:>7}")
 
@@ -522,3 +561,137 @@ def condense_streams_for_deep_dive(
         text += f"\n\nAthlete notes:\n{notes.strip()}"
 
     return text
+
+
+# ── Pre-computed brief for local models ───────────────────────────────────────
+
+
+def build_precomputed_brief(streams: dict[str, list], activity: dict) -> str:
+    """
+    Derive key metrics from the stream data and return a structured prose brief.
+
+    Used with local models (Ollama) that struggle to reason over raw tables.
+    The model receives computed facts rather than raw data, reducing the task
+    to generating coaching commentary instead of performing the analysis itself.
+    """
+    METERS_PER_MILE = 1609.34
+
+    time_s = streams.get("time", [])
+    hr = streams.get("heartrate", [])
+    velocity = streams.get("velocity_smooth", [])
+    cadence = streams.get("cadence", [])
+    altitude = streams.get("altitude", [])
+
+    sport_type = activity.get("sport_type", "")
+    is_run = sport_type in db.RUN_TYPES
+    distance_m = activity.get("distance_m") or 0
+    distance_mi = distance_m / METERS_PER_MILE
+
+    # Duration
+    duration_s = time_s[-1] if time_s else (activity.get("moving_time_s") or 0)
+    h, rem = divmod(int(duration_s), 3600)
+    m, s = divmod(rem, 60)
+    duration_str = f"{h}h {m:02d}m {s:02d}s" if h else f"{m}m {s:02d}s"
+
+    # Moving velocity samples for split analysis
+    moving_v = [v for v in velocity if v is not None and v >= 0.5]
+    third = max(1, len(moving_v) // 3)
+
+    def _fmt_pace(v: float | None) -> str:
+        if not v or v <= 0:
+            return "-"
+        ps = METERS_PER_MILE / v
+        mm, ss = divmod(int(ps), 60)
+        return f"{mm}:{ss:02d}/mi"
+
+    def _mean(lst: list) -> float | None:
+        return statistics.mean(lst) if lst else None
+
+    # Pace lines
+    avg_pace_str = _fmt_pace(_mean(moving_v))
+    first_pace_str = _fmt_pace(_mean(moving_v[:third])) if len(moving_v) >= 3 else "-"
+    last_pace_str = _fmt_pace(_mean(moving_v[-third:])) if len(moving_v) >= 3 else "-"
+    pace_fade = _pace_fade_seconds(velocity)
+    if pace_fade is not None:
+        if pace_fade > 30:
+            fade_label = f"+{pace_fade:.0f} sec/mi (positive split — slowing)"
+        elif pace_fade < -30:
+            fade_label = f"{pace_fade:.0f} sec/mi (negative split — speeding up)"
+        else:
+            fade_label = f"{pace_fade:+.0f} sec/mi (even pace)"
+    else:
+        fade_label = "-"
+
+    # HR lines
+    valid_hr = [x for x in hr if x and x > 0]
+    avg_hr = round(_mean(valid_hr)) if valid_hr else None
+    hr_third = max(1, len(valid_hr) // 3)
+    first_hr = round(_mean(valid_hr[:hr_third])) if len(valid_hr) >= 3 else None
+    last_hr = round(_mean(valid_hr[-hr_third:])) if len(valid_hr) >= 3 else None
+    if first_hr and last_hr and first_hr > 0:
+        delta_bpm = last_hr - first_hr
+        delta_pct = delta_bpm / first_hr * 100
+        hr_drift_str = (
+            f"+{delta_bpm} bpm ({delta_pct:.1f}% rise)"
+            if delta_bpm >= 0
+            else f"{delta_bpm} bpm ({delta_pct:.1f}%)"
+        )
+    else:
+        hr_drift_str = "-"
+
+    # Cardiac decoupling
+    cd = _cardiac_decoupling(hr, velocity)
+    if cd is not None:
+        if cd < 5:
+            cd_str = f"{cd:.1f}% (well-coupled — good aerobic efficiency)"
+        elif cd < 10:
+            cd_str = f"{cd:.1f}% (moderate cardiovascular stress)"
+        else:
+            cd_str = f"{cd:.1f}% (high cardiovascular drift — significant fatigue)"
+    else:
+        cd_str = "-"
+
+    # Cadence lines
+    cad_mean, _ = _cadence_stats(cadence, is_run)
+    multiplier = 2 if is_run else 1
+    valid_cad = [c * multiplier for c in cadence if c and c > 0]
+    cad_third = max(1, len(valid_cad) // 3)
+    first_cad = round(_mean(valid_cad[:cad_third])) if len(valid_cad) >= 3 else None
+    last_cad = round(_mean(valid_cad[-cad_third:])) if len(valid_cad) >= 3 else None
+    unit = "spm" if is_run else "rpm"
+    if cad_mean:
+        cad_str = f"{cad_mean:.0f} {unit} avg"
+        if first_cad and last_cad:
+            cad_str += f" | First third: {first_cad} {unit} | Last third: {last_cad} {unit} ({last_cad - first_cad:+d})"
+    else:
+        cad_str = "-"
+
+    # Elevation
+    elev_gain_m = activity.get("elevation_gain_m") or 0
+    elev_per_mile, _ = (
+        _elevation_metrics(altitude, distance_m) if altitude and distance_m else (None, None)
+    )
+    elev_str = f"{elev_gain_m:.0f}m total gain"
+    if elev_per_mile:
+        elev_str += f" ({elev_per_mile:.0f} ft/mi)"
+
+    sport_label = "Running" if is_run else "Cycling"
+    pace_label = "Pace" if is_run else "Speed"
+
+    lines = [
+        f"Activity: {activity.get('name', 'Unknown')} | {activity.get('date', '')}",
+        f"Sport: {sport_label} | Distance: {distance_mi:.2f} mi | Duration: {duration_str}",
+        "",
+        "Pre-computed metrics:",
+        f"- Avg {pace_label}: {avg_pace_str} | First third: {first_pace_str} | Last third: {last_pace_str} | Trend: {fade_label}",
+        f"- Avg HR: {avg_hr or '-'} bpm | First third: {first_hr or '-'} bpm | Last third: {last_hr or '-'} bpm | Drift: {hr_drift_str}",
+        f"- Cardiac decoupling: {cd_str}",
+        f"- Cadence: {cad_str}",
+        f"- Elevation: {elev_str}",
+    ]
+
+    notes = activity.get("user_notes", "")
+    if notes and notes.strip():
+        lines += ["", f"Athlete notes: {notes.strip()}"]
+
+    return "\n".join(lines)

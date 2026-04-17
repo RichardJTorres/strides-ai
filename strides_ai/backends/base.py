@@ -23,6 +23,15 @@ class BaseBackend(ABC):
     def supports_attachments(self) -> bool:
         """Whether this backend can accept file/image attachments."""
 
+    @property
+    def prefers_precomputed_brief(self) -> bool:
+        """
+        When True the deep-dive endpoint sends pre-computed metric summaries
+        instead of a raw data table.  Override in backends whose models
+        struggle to reason over tabular stream data (e.g. small local models).
+        """
+        return False
+
     @abstractmethod
     def stream_turn(
         self,
@@ -39,4 +48,22 @@ class BaseBackend(ABC):
 
         attachments: optional list of Anthropic-format content blocks (image or text)
           to prepend before the user's text in the message.
+        """
+
+    @abstractmethod
+    def stateless_turn(
+        self,
+        system: str,
+        user_input: str,
+        on_token: Callable[[str], None],
+    ) -> str:
+        """
+        Send a single [system + user] exchange to the LLM with no conversation
+        history and no tool calls.  Does NOT modify self._history.
+
+        Used for one-shot analysis tasks (e.g. deep-dive) where carrying the
+        full chat history would overflow small-context local models and is
+        irrelevant to the task at hand.
+
+        Returns the full response text.
         """

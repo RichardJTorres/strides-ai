@@ -127,3 +127,16 @@ class ClaudeBackend(BaseBackend):
             self._history.append({"role": "user", "content": tool_results})
 
         return response_text, memories_saved
+
+    def stateless_turn(self, system, user_input, on_token):
+        response_text = ""
+        with self._client.messages.stream(
+            model=self._model,
+            max_tokens=2048,
+            system=system,
+            messages=[{"role": "user", "content": user_input}],
+        ) as stream:
+            for chunk in stream.text_stream:
+                on_token(chunk)
+                response_text += chunk
+        return response_text

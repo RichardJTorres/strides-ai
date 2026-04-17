@@ -187,3 +187,21 @@ class OpenAIBackend(BaseBackend):
                     )
 
         return response_text, memories_saved
+
+    def stateless_turn(self, system, user_input, on_token):
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_input},
+        ]
+        response_text = ""
+        with self._client.chat.completions.create(
+            model=self._model,
+            messages=messages,
+            stream=True,
+        ) as stream:
+            for chunk in stream:
+                delta = chunk.choices[0].delta if chunk.choices else None
+                if delta and delta.content:
+                    on_token(delta.content)
+                    response_text += delta.content
+        return response_text

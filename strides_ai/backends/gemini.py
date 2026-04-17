@@ -204,3 +204,24 @@ class GeminiBackend(BaseBackend):
             self._history.append(types.Content(role="user", parts=tool_response_parts))
 
         return response_text, memories_saved
+
+    def stateless_turn(self, system, user_input, on_token):
+        config = types.GenerateContentConfig(system_instruction=system)
+        contents = [types.Content(role="user", parts=[types.Part.from_text(text=user_input)])]
+        response_text = ""
+        for attempt in range(_MAX_RETRIES):
+            try:
+                for chunk in self._client.models.generate_content_stream(
+                    model=self._model,
+                    contents=contents,
+                    config=config,
+                ):
+                    if chunk.text:
+                        on_token(chunk.text)
+                        response_text += chunk.text
+                break
+            except ClientError as exc:
+                if exc.code != 429 or attempt == _MAX_RETRIES - 1:
+                    raise
+                time.sleep(_RETRY_DELAY_S)
+        return response_text
