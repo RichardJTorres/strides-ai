@@ -146,7 +146,6 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
       // best-effort; switch mode locally regardless
     }
     setMode(newMode);
-    location.hash = "chat";
   }
 
   async function handleProviderChange(providerId: string) {
@@ -259,9 +258,10 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
             <p className="text-xs text-gray-600 mb-3">
               Adjust how your coach communicates. Each mode can have a different voice.
             </p>
-            <div className="space-y-3">
-              {MODE_CARDS.map((card) => (
-                <div key={card.id} className="p-4 rounded-lg border border-gray-700 bg-gray-900">
+            {(() => {
+              const card = MODE_CARDS.find((c) => c.id === mode)!;
+              return (
+                <div className="p-4 rounded-lg border border-gray-700 bg-gray-900">
                   <div className="flex items-center gap-2 mb-2">
                     <span className={`w-2 h-2 rounded-full shrink-0 ${card.dotClass}`} />
                     <span className={`text-xs font-medium ${card.accentClass}`}>{card.label}</span>
@@ -279,8 +279,8 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
                     ))}
                   </select>
                 </div>
-              ))}
-            </div>
+              );
+            })()}
           </section>
 
           <section>
