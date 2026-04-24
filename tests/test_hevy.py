@@ -18,7 +18,7 @@ def test_estimate_1rm_basic():
 
 
 def test_estimate_1rm_single_rep():
-    # 1 rep = the weight itself (approximately)
+    # 1 rep: 140 * (1 + 1/30) ≈ 144.7
     result = estimate_1rm(140.0, 1)
     assert result == pytest.approx(140.0 * (1 + 1 / 30), abs=0.1)
 
@@ -119,9 +119,8 @@ _SAMPLE_WORKOUT = {
 }
 
 
-def test_transform_workout_sport_type():
+def test_transform_workout_exercises_json():
     row = _transform_workout(_SAMPLE_WORKOUT)
-    # sport_type is set in upsert_hevy, not transform — check exercises_json present
     assert row["exercises_json"] is not None
 
 

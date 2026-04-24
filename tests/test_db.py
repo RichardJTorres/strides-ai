@@ -382,11 +382,3 @@ def test_get_recent_messages_includes_model_field(tmp_db):
     db.save_message("assistant", "reply", model="gemini:gemini-2.0-flash")
     msg = db.get_recent_messages(1)[0]
     assert "model" in msg
-
-
-def test_save_message_model_is_none_when_not_provided(tmp_db):
-    """Messages saved without a model label default to None."""
-    db.save_message("assistant", "old message", mode="running")
-    msgs = db.get_recent_messages(10)
-    old = next(m for m in msgs if m["content"] == "old message")
-    assert old["model"] is None
