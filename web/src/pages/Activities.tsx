@@ -302,7 +302,7 @@ export default function Activities({ mode, theme }: Props) {
     setSyncing(true);
     setSyncMsg("");
     try {
-      const url = isLifting ? "/api/hevy/sync" : "/api/sync";
+      const url = isLifting ? "/api/hevy/sync" : "/api/strava/sync";
       const res = await fetch(url, { method: "POST" });
       const data = await res.json();
       const count = data.new_activities ?? data.new_workouts ?? 0;
