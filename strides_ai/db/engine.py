@@ -6,7 +6,9 @@ from typing import Generator
 import sqlalchemy as sa
 from sqlmodel import Session, create_engine
 
-DB_PATH = Path.home() / ".strides_ai" / "activities.db"
+from strides_ai.config import DATA_DIR
+
+DB_PATH = DATA_DIR / "activities.db"
 
 _engine: sa.engine.Engine | None = None
 

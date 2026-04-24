@@ -10,7 +10,9 @@ from urllib.parse import urlparse, parse_qs, urlencode
 
 import httpx
 
-TOKEN_FILE = Path.home() / ".strides_ai" / "token.json"
+from strides_ai.config import DATA_DIR
+
+TOKEN_FILE = DATA_DIR / "token.json"
 AUTH_URL = "https://www.strava.com/oauth/authorize"
 TOKEN_URL = "https://www.strava.com/oauth/token"
 REDIRECT_PORT = 8282

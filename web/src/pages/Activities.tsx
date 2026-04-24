@@ -36,6 +36,10 @@ interface Activity {
   deep_dive_completed_at: string | null;
   deep_dive_model: string | null;
   user_notes: string | null;
+  // Lifting fields
+  exercises_json?: string | null;
+  total_volume_kg?: number | null;
+  total_sets?: number | null;
 }
 
 interface Props {
@@ -43,7 +47,9 @@ interface Props {
   theme: ThemeConfig;
 }
 
-type SortKey = "date" | "name" | "distance_m" | "moving_time_s" | "avg_pace_s_per_km" | "avg_hr" | "elevation_gain_m";
+type SortKey =
+  | "date" | "name" | "distance_m" | "moving_time_s" | "avg_pace_s_per_km" | "avg_hr" | "elevation_gain_m"
+  | "total_volume_kg" | "total_sets";
 type SortDir = "asc" | "desc";
 
 function formatPace(s: number | null): string {
@@ -70,6 +76,15 @@ function formatPaceFade(s: number | null): string {
   if (s === null) return "—";
   const abs = Math.round(Math.abs(s));
   return s > 0 ? `+${abs}s/mi` : `−${abs}s/mi`;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function formatSet(s: any): string {
+  const weight = s.weight_kg != null ? `${s.weight_kg} kg` : "BW";
+  if (s.reps != null) return `${weight} × ${s.reps}`;
+  if (s.duration_seconds != null) return `${weight} × ${s.duration_seconds}s`;
+  if (s.distance_meters != null) return `${weight} × ${s.distance_meters}m`;
+  return weight;
 }
 
 function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
@@ -157,11 +172,74 @@ function HrZonesBar({ a }: { a: Activity }) {
   );
 }
 
+/** Exercise breakdown panel section for lifting workouts. */
+function ExerciseBreakdown({ exercises_json }: { exercises_json: string }) {
+  const [showAll, setShowAll] = useState(false);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let exercises: any[] = [];
+  try {
+    exercises = JSON.parse(exercises_json);
+  } catch {
+    return null;
+  }
+  if (exercises.length === 0) return null;
+
+  const visible = showAll ? exercises : exercises.slice(0, 3);
+  const hasMore = exercises.length > 3;
+
+  return (
+    <section className="space-y-3">
+      <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Exercises</h4>
+      <div className="space-y-4">
+        {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+        {visible.map((ex: any, i: number) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const warmupSets = (ex.sets ?? []).filter((s: any) => s.type === "warmup");
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const workingSets = (ex.sets ?? []).filter((s: any) => s.type !== "warmup");
+          const muscleGroup = ex.muscle_group ?? ex.primary_muscle_group ?? "";
+          return (
+            <div key={i} className="border-l-2 border-gray-700 pl-3">
+              <div className="flex items-baseline justify-between gap-2 mb-1.5">
+                <span className="text-sm font-medium text-gray-200">{ex.title ?? ex.name ?? "Exercise"}</span>
+                {muscleGroup && (
+                  <span className="text-xs text-gray-500 shrink-0">{muscleGroup}</span>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-x-3 gap-y-1">
+                {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                {warmupSets.map((s: any, j: number) => (
+                  <span key={`w${j}`} className="text-xs text-gray-600 italic">{formatSet(s)}</span>
+                ))}
+                {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                {workingSets.map((s: any, j: number) => (
+                  <span key={j} className="text-xs text-gray-400">{formatSet(s)}</span>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {hasMore && !showAll && (
+        <button
+          onClick={() => setShowAll(true)}
+          className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+        >
+          Show all {exercises.length} exercises
+        </button>
+      )}
+    </section>
+  );
+}
+
 export default function Activities({ mode, theme }: Props) {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState("");
+
+  const isLifting = mode === "lifting";
 
   // Sorting
   const [sortKey, setSortKey] = useState<SortKey>("date");
@@ -193,6 +271,12 @@ export default function Activities({ mode, theme }: Props) {
       .finally(() => setLoading(false));
   }, [mode]);
 
+  // Reset sort key when switching modes to avoid invalid keys
+  useEffect(() => {
+    setSortKey("date");
+    setSortDir("desc");
+  }, [mode]);
+
   function openPanel(id: number) {
     const act = activities.find((a) => a.id === id);
     setSelectedId(id);
@@ -218,13 +302,12 @@ export default function Activities({ mode, theme }: Props) {
     setSyncing(true);
     setSyncMsg("");
     try {
-      const res = await fetch("/api/sync", { method: "POST" });
+      const url = isLifting ? "/api/hevy/sync" : "/api/sync";
+      const res = await fetch(url, { method: "POST" });
       const data = await res.json();
-      setSyncMsg(
-        data.new_activities > 0
-          ? `${data.new_activities} new activit${data.new_activities === 1 ? "y" : "ies"} synced.`
-          : "Already up to date."
-      );
+      const count = data.new_activities ?? data.new_workouts ?? 0;
+      const noun = isLifting ? "session" : "activit";
+      setSyncMsg(count > 0 ? `${count} new ${noun}${isLifting ? (count === 1 ? "" : "s") : (count === 1 ? "y" : "ies")} synced.` : "Already up to date.");
       const rows = await fetch(`/api/activities?mode=${mode}`).then((r) => r.json());
       setActivities(rows);
     } catch {
@@ -304,16 +387,18 @@ export default function Activities({ mode, theme }: Props) {
     }
     if (dateFrom) rows = rows.filter((a) => a.date >= dateFrom);
     if (dateTo)   rows = rows.filter((a) => a.date <= dateTo);
-    if (minDist)  rows = rows.filter((a) => (a.distance_m ?? 0) / 1000 >= parseFloat(minDist));
+    if (!isLifting && minDist) rows = rows.filter((a) => (a.distance_m ?? 0) / 1000 >= parseFloat(minDist));
 
     return [...rows].sort((a, b) => {
-      const av = a[sortKey] ?? (sortKey === "name" ? "" : -Infinity);
-      const bv = b[sortKey] ?? (sortKey === "name" ? "" : -Infinity);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const av = (a as any)[sortKey] ?? (sortKey === "name" ? "" : -Infinity);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const bv = (b as any)[sortKey] ?? (sortKey === "name" ? "" : -Infinity);
       if (av < bv) return sortDir === "asc" ? -1 : 1;
       if (av > bv) return sortDir === "asc" ? 1 : -1;
       return 0;
     });
-  }, [activities, search, dateFrom, dateTo, minDist, sortKey, sortDir]);
+  }, [activities, search, dateFrom, dateTo, minDist, sortKey, sortDir, isLifting]);
 
   const paceLabel = mode === "cycling" ? "Speed" : mode === "hybrid" ? "Pace/Speed" : "Pace";
   const focusClass = "focus:outline-none focus:border-gray-500";
@@ -330,7 +415,7 @@ export default function Activities({ mode, theme }: Props) {
     );
   }
 
-  const filtersActive = search || dateFrom || dateTo || minDist;
+  const filtersActive = search || dateFrom || dateTo || (!isLifting && minDist);
 
   // ── Panel helpers ────────────────────────────────────────────────────────
 
@@ -363,12 +448,18 @@ export default function Activities({ mode, theme }: Props) {
     selectedActivity.hr_zone_1_pct !== null
   );
 
+  // Count distinct exercises from exercises_json
+  function exerciseCount(a: Activity): number {
+    if (!a.exercises_json) return 0;
+    try { return JSON.parse(a.exercises_json).length; } catch { return 0; }
+  }
+
   return (
     <div className="flex flex-col h-full p-6 gap-3">
       {/* Header */}
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-gray-100">
-          Activities{" "}
+          {isLifting ? "Sessions" : "Activities"}{" "}
           <span className="text-sm font-normal text-gray-400">
             ({filtered.length}{filtersActive ? ` of ${activities.length}` : ""})
           </span>
@@ -380,7 +471,7 @@ export default function Activities({ mode, theme }: Props) {
             disabled={syncing}
             className={`px-3 py-1.5 rounded-md ${theme.accentButton} text-white text-sm disabled:opacity-50 transition-colors`}
           >
-            {syncing ? "Syncing…" : "Sync Strava"}
+            {syncing ? "Syncing…" : isLifting ? "Sync HEVY" : "Sync Strava"}
           </button>
         </div>
       </div>
@@ -409,15 +500,17 @@ export default function Activities({ mode, theme }: Props) {
           title="To date"
           className={`rounded-md bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-gray-100 ${focusClass}`}
         />
-        <input
-          type="number"
-          placeholder="Min km"
-          value={minDist}
-          onChange={(e) => setMinDist(e.target.value)}
-          min="0"
-          step="1"
-          className={`rounded-md bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-gray-100 placeholder-gray-500 ${focusClass} w-24`}
-        />
+        {!isLifting && (
+          <input
+            type="number"
+            placeholder="Min km"
+            value={minDist}
+            onChange={(e) => setMinDist(e.target.value)}
+            min="0"
+            step="1"
+            className={`rounded-md bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-gray-100 placeholder-gray-500 ${focusClass} w-24`}
+          />
+        )}
         {filtersActive && (
           <button
             onClick={() => { setSearch(""); setDateFrom(""); setDateTo(""); setMinDist(""); }}
@@ -436,21 +529,35 @@ export default function Activities({ mode, theme }: Props) {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-900 text-gray-400 text-left sticky top-0">
-                <Th label="Date"      col="date" />
-                <Th label="Name"      col="name" />
-                <Th label="Dist (km)" col="distance_m"       right />
-                <Th label="Time"      col="moving_time_s"     right />
-                <Th label={paceLabel} col="avg_pace_s_per_km" right />
-                <Th label="Avg HR"    col="avg_hr"            right />
-                <Th label="Elev (m)"  col="elevation_gain_m"  right />
-                <th className="px-4 py-2 font-medium whitespace-nowrap text-right"></th>
+                {isLifting ? (
+                  <>
+                    <Th label="Date"        col="date" />
+                    <Th label="Name"        col="name" />
+                    <Th label="Volume (kg)" col="total_volume_kg"  right />
+                    <Th label="Time"        col="moving_time_s"    right />
+                    <Th label="Sets"        col="total_sets"       right />
+                    <th className="px-4 py-2 font-medium whitespace-nowrap text-right text-gray-400">Exercises</th>
+                    <th className="px-4 py-2 font-medium whitespace-nowrap text-right"></th>
+                  </>
+                ) : (
+                  <>
+                    <Th label="Date"      col="date" />
+                    <Th label="Name"      col="name" />
+                    <Th label="Dist (km)" col="distance_m"       right />
+                    <Th label="Time"      col="moving_time_s"     right />
+                    <Th label={paceLabel} col="avg_pace_s_per_km" right />
+                    <Th label="Avg HR"    col="avg_hr"            right />
+                    <Th label="Elev (m)"  col="elevation_gain_m"  right />
+                    <th className="px-4 py-2 font-medium whitespace-nowrap text-right"></th>
+                  </>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-800">
               {filtered.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="px-4 py-8 text-center text-gray-500">
-                    No activities match your filters.
+                    No {isLifting ? "sessions" : "activities"} match your filters.
                   </td>
                 </tr>
               ) : (
@@ -466,34 +573,53 @@ export default function Activities({ mode, theme }: Props) {
                       {a.analysis_summary && (
                         <p className="text-xs text-gray-500 mt-0.5 max-w-xs truncate">{a.analysis_summary}</p>
                       )}
-                      {(a.cardiac_decoupling_pct !== null || a.effort_efficiency_score !== null) && (
+                      {!isLifting && (a.cardiac_decoupling_pct !== null || a.effort_efficiency_score !== null) && (
                         <div className="flex gap-1 mt-1 flex-wrap">
                           <DecouplingBadge val={a.cardiac_decoupling_pct} />
                           <EfficiencyBadge val={a.effort_efficiency_score} />
                         </div>
                       )}
                     </td>
-                    <td className="px-4 py-2 text-right text-gray-100">
-                      {((a.distance_m || 0) / 1000).toFixed(2)}
-                    </td>
-                    <td className="px-4 py-2 text-right text-gray-400">
-                      {formatDuration(a.moving_time_s)}
-                    </td>
-                    <td className="px-4 py-2 text-right text-gray-400">
-                      {mode === "cycling"
-                        ? formatSpeed(a.avg_pace_s_per_km)
-                        : mode === "hybrid"
-                        ? (a.sport_type === "Ride" || a.sport_type === "VirtualRide" || a.sport_type === "GravelRide"
+                    {isLifting ? (
+                      <>
+                        <td className="px-4 py-2 text-right text-gray-100">
+                          {a.total_volume_kg != null ? a.total_volume_kg.toFixed(0) : "—"}
+                        </td>
+                        <td className="px-4 py-2 text-right text-gray-400">
+                          {formatDuration(a.moving_time_s)}
+                        </td>
+                        <td className="px-4 py-2 text-right text-gray-400">
+                          {a.total_sets ?? "—"}
+                        </td>
+                        <td className="px-4 py-2 text-right text-gray-400">
+                          {exerciseCount(a) || "—"}
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="px-4 py-2 text-right text-gray-100">
+                          {((a.distance_m || 0) / 1000).toFixed(2)}
+                        </td>
+                        <td className="px-4 py-2 text-right text-gray-400">
+                          {formatDuration(a.moving_time_s)}
+                        </td>
+                        <td className="px-4 py-2 text-right text-gray-400">
+                          {mode === "cycling"
                             ? formatSpeed(a.avg_pace_s_per_km)
-                            : formatPace(a.avg_pace_s_per_km))
-                        : formatPace(a.avg_pace_s_per_km)}
-                    </td>
-                    <td className="px-4 py-2 text-right text-gray-400">
-                      {a.avg_hr ?? "—"}
-                    </td>
-                    <td className="px-4 py-2 text-right text-gray-400">
-                      {a.elevation_gain_m != null ? Math.round(a.elevation_gain_m) : "—"}
-                    </td>
+                            : mode === "hybrid"
+                            ? (a.sport_type === "Ride" || a.sport_type === "VirtualRide" || a.sport_type === "GravelRide"
+                                ? formatSpeed(a.avg_pace_s_per_km)
+                                : formatPace(a.avg_pace_s_per_km))
+                            : formatPace(a.avg_pace_s_per_km)}
+                        </td>
+                        <td className="px-4 py-2 text-right text-gray-400">
+                          {a.avg_hr ?? "—"}
+                        </td>
+                        <td className="px-4 py-2 text-right text-gray-400">
+                          {a.elevation_gain_m != null ? Math.round(a.elevation_gain_m) : "—"}
+                        </td>
+                      </>
+                    )}
                     <td className="px-4 py-2 text-right" onClick={(e) => e.stopPropagation()}>
                       <button
                         onClick={() => openPanel(a.id)}
@@ -527,15 +653,17 @@ export default function Activities({ mode, theme }: Props) {
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <h3 className="text-gray-100 font-semibold truncate">{selectedActivity.name || "Activity"}</h3>
-                  <a
-                    href={`https://www.strava.com/activities/${selectedActivity.id}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    onClick={(e) => e.stopPropagation()}
-                    className="text-xs text-orange-500 hover:text-orange-400 transition-colors shrink-0"
-                  >
-                    Strava ↗
-                  </a>
+                  {!isLifting && (
+                    <a
+                      href={`https://www.strava.com/activities/${selectedActivity.id}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="text-xs text-orange-500 hover:text-orange-400 transition-colors shrink-0"
+                    >
+                      Strava ↗
+                    </a>
+                  )}
                 </div>
                 <p className="text-xs text-gray-500 mt-0.5">
                   {selectedActivity.date}
@@ -554,24 +682,50 @@ export default function Activities({ mode, theme }: Props) {
             <div className="overflow-y-auto flex-1 p-5 space-y-6">
 
               {/* Basic stats row */}
-              <div className="grid grid-cols-4 gap-2">
-                <MetricTile
-                  label="Distance"
-                  value={`${((selectedActivity.distance_m || 0) / 1000).toFixed(2)} km`}
-                />
-                <MetricTile
-                  label="Time"
-                  value={formatDuration(selectedActivity.moving_time_s)}
-                />
-                <MetricTile
-                  label={mode === "cycling" ? "Speed" : "Pace"}
-                  value={paceLabel2(selectedActivity)}
-                />
-                <MetricTile
-                  label="Avg HR"
-                  value={selectedActivity.avg_hr ? `${Math.round(selectedActivity.avg_hr)} bpm` : "—"}
-                />
-              </div>
+              {isLifting ? (
+                <div className="grid grid-cols-4 gap-2">
+                  <MetricTile
+                    label="Volume (kg)"
+                    value={selectedActivity.total_volume_kg != null ? selectedActivity.total_volume_kg.toFixed(0) : "—"}
+                  />
+                  <MetricTile
+                    label="Time"
+                    value={formatDuration(selectedActivity.moving_time_s)}
+                  />
+                  <MetricTile
+                    label="Sets"
+                    value={selectedActivity.total_sets != null ? String(selectedActivity.total_sets) : "—"}
+                  />
+                  <MetricTile
+                    label="Exercises"
+                    value={String(exerciseCount(selectedActivity) || "—")}
+                  />
+                </div>
+              ) : (
+                <div className="grid grid-cols-4 gap-2">
+                  <MetricTile
+                    label="Distance"
+                    value={`${((selectedActivity.distance_m || 0) / 1000).toFixed(2)} km`}
+                  />
+                  <MetricTile
+                    label="Time"
+                    value={formatDuration(selectedActivity.moving_time_s)}
+                  />
+                  <MetricTile
+                    label={mode === "cycling" ? "Speed" : "Pace"}
+                    value={paceLabel2(selectedActivity)}
+                  />
+                  <MetricTile
+                    label="Avg HR"
+                    value={selectedActivity.avg_hr ? `${Math.round(selectedActivity.avg_hr)} bpm` : "—"}
+                  />
+                </div>
+              )}
+
+              {/* Exercise breakdown — lifting only */}
+              {isLifting && selectedActivity.exercises_json && (
+                <ExerciseBreakdown exercises_json={selectedActivity.exercises_json} />
+              )}
 
               {/* Analysis summary */}
               {selectedActivity.analysis_summary && (
@@ -581,8 +735,8 @@ export default function Activities({ mode, theme }: Props) {
                 </div>
               )}
 
-              {/* Metrics grid */}
-              {hasMetrics && (
+              {/* Cardio metrics grid — running/cycling only */}
+              {!isLifting && hasMetrics && (
                 <section className="space-y-3">
                   <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Computed Metrics</h4>
 
@@ -640,8 +794,8 @@ export default function Activities({ mode, theme }: Props) {
                 </section>
               )}
 
-              {/* No analysis yet */}
-              {!hasMetrics && selectedActivity.analysis_status !== "done" && (
+              {/* No analysis yet — running/cycling only */}
+              {!isLifting && !hasMetrics && selectedActivity.analysis_status !== "done" && (
                 <p className="text-sm text-gray-600">
                   {selectedActivity.analysis_status === "skipped"
                     ? "No stream data available for this activity."

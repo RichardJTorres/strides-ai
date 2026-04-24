@@ -7,7 +7,7 @@ import Profile from "./pages/Profile";
 import Settings from "./pages/Settings";
 
 type Tab = "chat" | "activities" | "charts" | "calendar" | "profile" | "settings";
-export type Mode = "running" | "cycling" | "hybrid";
+export type Mode = "running" | "cycling" | "hybrid" | "lifting";
 
 export interface ThemeConfig {
   accentClass: string;
@@ -47,6 +47,15 @@ export const THEMES: Record<Mode, ThemeConfig> = {
     accentFocus: "focus:border-purple-500/40 focus:ring-purple-500/10",
     accentActive: "bg-purple-500/20 text-purple-400",
     label: "Hybrid Coach",
+  },
+  lifting: {
+    accentClass: "text-orange-400",
+    accentBg: "bg-orange-500/20",
+    accentBorder: "border-orange-500/30",
+    accentButton: "bg-orange-600 hover:bg-orange-500",
+    accentFocus: "focus:border-orange-500/40 focus:ring-orange-500/10",
+    accentActive: "bg-orange-500/20 text-orange-400",
+    label: "Lifting Coach",
   },
 };
 
@@ -97,6 +106,7 @@ const TABS: { id: Tab; label: string }[] = [
 ];
 
 const VALID_TABS = new Set<string>([...TABS.map((t) => t.id), "settings"]);
+const HIDDEN_IN_LIFTING = new Set<Tab>(["charts", "calendar"]);
 
 function tabFromHash(): Tab {
   const hash = location.hash.slice(1);
@@ -144,6 +154,13 @@ export default function App() {
 
   const theme = THEMES[mode];
 
+  // Redirect away from tabs that aren't available in the current mode
+  useEffect(() => {
+    if (mode === "lifting" && HIDDEN_IN_LIFTING.has(tab)) {
+      navigate("chat");
+    }
+  }, [mode]);
+
   if (!modeLoaded) {
     return (
       <div className="flex h-screen bg-gray-950 items-center justify-center text-gray-500 text-sm">
@@ -152,7 +169,8 @@ export default function App() {
     );
   }
 
-  const allNavTabs: { id: Tab; label: string }[] = [...TABS, { id: "settings", label: "Settings" }];
+  const visibleTabs = TABS.filter((t) => mode !== "lifting" || !HIDDEN_IN_LIFTING.has(t.id));
+  const allNavTabs: { id: Tab; label: string }[] = [...visibleTabs, { id: "settings", label: "Settings" }];
   const mobileNavTabs = allNavTabs.filter((t) => t.id !== "calendar");
 
   return (
@@ -164,7 +182,7 @@ export default function App() {
           <p className="text-xs text-gray-500 mt-0.5">{theme.label}</p>
         </div>
         <ul className="flex-1 p-2 space-y-1">
-          {TABS.map((t) => (
+          {visibleTabs.map((t) => (
             <li key={t.id}>
               <button
                 onClick={() => navigate(t.id)}

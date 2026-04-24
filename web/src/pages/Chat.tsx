@@ -78,6 +78,10 @@ const MessageList = memo(function MessageList({
       heading: "How can I help with your training?",
       sub: "Ask about your running and cycling, cross-training load, or anything else.",
     },
+    lifting: {
+      heading: "How can I help with your lifting?",
+      sub: "Ask about your recent sessions, volume, strength progress, or programming.",
+    },
   }[mode];
 
   return (

@@ -96,10 +96,39 @@ HYBRID_DEFAULTS: dict = {
     "other_notes": "",
 }
 
+LIFTING_DEFAULTS: dict = {
+    "personal": {
+        "name": "",
+        "gender": "",
+        "date_of_birth": "",
+        "height": "",
+        "weight": "",
+    },
+    "lifting_background": {
+        "lifting_since": "",
+        "sessions_per_week": "",
+        "training_style": "",  # e.g. powerlifting, bodybuilding, general strength
+        "background": "",
+    },
+    "lifting_bests": {
+        "squat_1rm": "",
+        "deadlift_1rm": "",
+        "bench_press_1rm": "",
+        "overhead_press_1rm": "",
+        "other": "",
+    },
+    "goals": "",
+    "injuries_and_health": "",
+    "equipment": "",  # home gym, commercial gym, etc.
+    "nutrition_snacks": [],
+    "other_notes": "",
+}
+
 _DEFAULTS = {
     "running": RUNNING_DEFAULTS,
     "cycling": CYCLING_DEFAULTS,
     "hybrid": HYBRID_DEFAULTS,
+    "lifting": LIFTING_DEFAULTS,
 }
 
 
@@ -173,6 +202,50 @@ def profile_to_text(fields: dict | None, mode: str) -> str:
         if s:
             sections.append(s)
 
+    if mode == "lifting":
+        lb = fields.get("lifting_background", {})
+        lb_lines = [
+            f"Lifting since: {_v(lb.get('lifting_since'))}" if _v(lb.get("lifting_since")) else "",
+            (
+                f"Sessions per week: {_v(lb.get('sessions_per_week'))}"
+                if _v(lb.get("sessions_per_week"))
+                else ""
+            ),
+            (
+                f"Training style: {_v(lb.get('training_style'))}"
+                if _v(lb.get("training_style"))
+                else ""
+            ),
+            f"Background: {_v(lb.get('background'))}" if _v(lb.get("background")) else "",
+        ]
+        s = _section("Lifting Background", lb_lines)
+        if s:
+            sections.append(s)
+
+        lbests = fields.get("lifting_bests", {})
+        lbest_lines = [
+            f"Squat 1RM: {_v(lbests.get('squat_1rm'))}" if _v(lbests.get("squat_1rm")) else "",
+            (
+                f"Deadlift 1RM: {_v(lbests.get('deadlift_1rm'))}"
+                if _v(lbests.get("deadlift_1rm"))
+                else ""
+            ),
+            (
+                f"Bench press 1RM: {_v(lbests.get('bench_press_1rm'))}"
+                if _v(lbests.get("bench_press_1rm"))
+                else ""
+            ),
+            (
+                f"Overhead press 1RM: {_v(lbests.get('overhead_press_1rm'))}"
+                if _v(lbests.get("overhead_press_1rm"))
+                else ""
+            ),
+            f"Other: {_v(lbests.get('other'))}" if _v(lbests.get("other")) else "",
+        ]
+        s = _section("Lifting Bests", lbest_lines)
+        if s:
+            sections.append(s)
+
     if mode in ("cycling", "hybrid"):
         cb = fields.get("cycling_background", {})
         cb_lines = [
@@ -211,6 +284,7 @@ def profile_to_text(fields: dict | None, mode: str) -> str:
         ("goals", "Goals"),
         ("injuries_and_health", "Injuries & Health"),
         ("gear", "Gear"),
+        ("equipment", "Equipment"),
         ("other_notes", "Other Notes"),
     ]:
         val = _v(fields.get(key))
