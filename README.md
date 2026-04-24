@@ -1,11 +1,12 @@
 # strides-ai
 
-A local AI multisport coach that connects to your Strava account and lets you have coaching conversations about your training. Supports Claude, Gemini, and ChatGPT (cloud APIs) and any model running locally via Ollama.
+A local AI multisport coach that connects to your Strava account and lets you have coaching conversations about your training. Also integrates with [HEVY](https://hevy.com) for weightlifting sessions. Supports Claude, Gemini, and ChatGPT (cloud APIs) and any model running locally via Ollama.
 
 ## What it does
 
 - **Strava sync** — authenticates via OAuth2 and pulls your full activity history into a local SQLite database. Incremental sync on every startup keeps it current.
-- **Multi-mode coaching** — switch between **Running**, **Cycling**, and **Hybrid** (multisport) modes. Each mode has its own coaching persona, filtered activity history, and separate conversation history and athlete profile.
+- **HEVY sync** — connects to the HEVY API (Pro subscription required) to pull your weightlifting sessions. Each workout is automatically analysed for volume, estimated 1RMs, and muscle group breakdown.
+- **Multi-mode coaching** — switch between **Running**, **Cycling**, **Hybrid** (multisport), and **Lifting** modes. Each mode has its own coaching persona, filtered activity history, and separate conversation history and athlete profile.
 - **Web UI** — a browser-based interface with a sidebar nav for chat, activities, training charts, calendar, profile editing, and settings.
 - **Athlete profile** — fill in your background, PBs, goals, injuries, and gear via the web UI. Profiles are per-mode (running vs. cycling), loaded fresh every session.
 - **Persistent memory** — the coach proactively saves key facts (goals, injuries, preferences, upcoming races) and recalls them at the start of every session.
@@ -13,6 +14,7 @@ A local AI multisport coach that connects to your Strava account and lets you ha
 - **Training calendar** — plan upcoming workouts on a calendar, overlay your actual Strava activities, and get AI-powered nutrition recommendations per workout.
 - **Swappable backends** — run Claude, Gemini, or ChatGPT in the cloud, or a local model via Ollama. Switch providers live from the Settings tab without restarting the server.
 - **Run analysis pipeline** — every synced activity is automatically enriched with derived fitness metrics (cardiac decoupling, HR zone distribution, pace fade, cadence consistency, effort efficiency) and a natural language summary. The Activities tab shows colour-coded metric badges and an on-demand Deep Dive button that generates a full LLM coaching analysis for any individual run.
+- **Lifting analysis pipeline** — every HEVY workout is automatically analysed for total volume, set count, avg RPE, estimated 1RMs (Epley formula), and primary muscle groups. A natural language summary is generated with no LLM call. Deep Dive generates a full strength coaching analysis from the raw set data.
 
 ## Setup
 
@@ -22,6 +24,7 @@ A local AI multisport coach that connects to your Strava account and lets you ha
 - Node.js 18+ (for the web UI)
 - A [Strava API app](https://www.strava.com/settings/api) — set **Authorization Callback Domain** to `localhost`
 - An Anthropic API key, a Google Gemini API key, an OpenAI API key, **or** a local [Ollama](https://ollama.com) installation (see [Backends](#backends) below)
+- _(Optional)_ A [HEVY Pro](https://hevy.com) subscription and API key for weightlifting mode
 
 ### 2. Install
 
@@ -44,6 +47,9 @@ STRAVA_CLIENT_SECRET=your_client_secret
 
 PROVIDER=claude
 ANTHROPIC_API_KEY=sk-ant-...
+
+# Optional: HEVY weightlifting integration (requires HEVY Pro)
+# HEVY_API_KEY=your_hevy_api_key
 ```
 
 ### 4. Run
@@ -79,12 +85,17 @@ To run only the backend: `make api`. To run only the frontend: `make web`.
 
 Switch between modes from the **Settings** tab. The active mode affects:
 
-- **Activities shown** — Running shows runs only; Cycling shows rides only; Hybrid shows everything
+- **Activities shown** — Running shows runs only; Cycling shows rides only; Hybrid shows everything; Lifting shows HEVY weightlifting sessions only
 - **Coaching persona** — the coach's framing, metrics, and terminology adapt to the sport
 - **Conversation history** — each mode has its own separate history so advice stays contextually relevant
-- **Athlete profile** — running and cycling profiles can be filled in independently
+- **Athlete profile** — running, cycling, and lifting profiles can be filled in independently
+- **Visible tabs** — Lifting mode hides Charts and Calendar (not applicable to strength training)
 
-After switching modes for the first time, use the **Full Sync** button in the **Settings** tab to fetch your complete Strava history and ensure all sport types are in the database.
+After switching modes for the first time, use the **Full Sync** button in the **Settings** tab to fetch your complete activity history. For Lifting mode this triggers a full HEVY sync.
+
+### Lifting mode
+
+Requires a [HEVY Pro](https://hevy.com) subscription and `HEVY_API_KEY` set in `.env`. The lifting coach has access to your full session log including exercise names, sets, reps, weights, and RPE. It can track progressive overload, estimate 1RMs, analyse fatigue across a session, and give programming advice.
 
 ---
 
@@ -244,34 +255,76 @@ Results are cached — clicking the button again shows the saved report instantl
 
 ---
 
+## Lifting Analysis Pipeline
+
+Every workout synced from HEVY is automatically analysed from its raw exercise/set data. No LLM call is made — the summary is generated from rules so it's instant and free.
+
+### Computed metrics
+
+| Metric | Description |
+|---|---|
+| **Total volume (kg)** | Sum of weight × reps across all working sets (warmups excluded) |
+| **Total sets** | Number of working sets across the session |
+| **Avg RPE** | Mean rate of perceived exertion across all sets that have it recorded |
+| **Estimated 1RMs** | Per-exercise best estimated 1-rep max using the Epley formula (`weight × (1 + reps/30)`), limited to sets ≤ 12 reps |
+| **Muscle group volume** | Total volume broken down by primary muscle group |
+
+### Analysis summary
+
+A concise NL summary is generated immediately after sync. Example:
+
+> _"Bench Press: 4×8 @ 100.0 kg, Squat: 5×5 @ 120.0 kg (+3 more) | 32 working sets | 8640 kg total volume | avg RPE 7.5 | primary: Chest/Legs/Shoulders"_
+
+### Deep Dive
+
+Click **Deep Dive** on any lifting session to generate a full strength coaching analysis. The deep dive:
+
+1. Formats the raw exercise log (set type, weight, reps, RPE) into a structured prompt
+2. Sends to the active LLM backend as a one-shot stateless call
+3. Returns a detailed analysis covering volume/intensity appropriateness, exercise sequencing, set quality, estimated 1RM trends, and fatigue signs
+4. Ends with 3–5 specific, actionable coaching notes for the next session
+
+Results are cached — use **Regenerate** to force a fresh analysis.
+
+---
+
 ## How it works
 
 ```
 strides_ai/
 ├── api/
-│   ├── app.py      # FastAPI routes, SSE streaming for /api/chat
-│   └── server.py   # uvicorn entry point (strides-ai-web)
+│   ├── app.py          # FastAPI routes, SSE streaming for /api/chat
+│   ├── server.py       # uvicorn entry point (strides-ai-web)
+│   └── routers/
+│       └── hevy.py     # /api/hevy/sync endpoint
 ├── backends/
-│   ├── base.py     # BaseBackend ABC — stream_turn(system, input, on_token)
-│   ├── claude.py   # Anthropic SDK, tool_use loop
-│   ├── gemini.py   # Google Gemini SDK, function calling loop
-│   ├── openai.py   # OpenAI SDK, streaming + tool calling loop
-│   └── ollama.py   # httpx → Ollama /api/chat, streaming + tools
-├── analysis.py     # Stream fetching, metric computation, NL summary, deep-dive formatting
-├── auth.py         # Strava OAuth2 — token exchange, storage, auto-refresh
-├── db.py           # SQLite — activities, history, memories, profiles, calendar
-├── sync.py         # Strava API pagination, incremental sync (runs + rides)
-├── profile.py      # Profile fields — defaults per mode, serialization
-├── schedule.py     # Nutrition analysis — Claude Haiku, structured JSON output
-└── coach.py        # System prompt assembly, training log formatting
+│   ├── base.py         # BaseBackend ABC — stream_turn(system, input, on_token)
+│   ├── claude.py       # Anthropic SDK, tool_use loop
+│   ├── gemini.py       # Google Gemini SDK, function calling loop
+│   ├── openai.py       # OpenAI SDK, streaming + tool calling loop
+│   └── ollama.py       # httpx → Ollama /api/chat, streaming + tools
+├── sources/
+│   ├── base.py         # DataSource protocol / error types
+│   ├── strava.py       # Strava DataSource (wraps sync.py + analysis.py)
+│   └── hevy.py         # HEVY DataSource (wraps hevy_sync.py + hevy_analysis.py)
+├── analysis.py         # Cardio stream fetching, metric computation, NL summary, deep-dive
+├── hevy_analysis.py    # Lifting metric computation (volume, 1RM, muscle groups), NL summary
+├── auth.py             # Strava OAuth2 — token exchange, storage, auto-refresh
+├── db.py               # SQLite — activities, history, memories, profiles, calendar
+├── sync.py             # Strava API pagination, incremental sync (runs + rides)
+├── hevy_sync.py        # HEVY API pagination, incremental + full sync
+├── modes.py            # ModeConfig registry — per-mode prompts, log format, profile sections
+├── profile.py          # Profile fields — defaults per mode, serialization
+├── schedule.py         # Nutrition analysis — Claude Haiku, structured JSON output
+└── coach.py            # System prompt assembly, training log formatting
 web/
 └── src/pages/
     ├── Chat.tsx        # Streaming chat UI, mode-aware history
-    ├── Activities.tsx  # Strava activity table, mode-filtered
+    ├── Activities.tsx  # Activity table (Strava + HEVY), mode-filtered
     ├── Charts.tsx      # Weekly volume, ATL/CTL, aerobic efficiency
     ├── Calendar.tsx    # Planned workouts, Strava overlay, nutrition advice
     ├── Profile.tsx     # Athlete profile editor (per-mode)
-    └── Settings.tsx    # Mode selector (Running / Cycling / Hybrid)
+    └── Settings.tsx    # Mode selector (Running / Cycling / Hybrid / Lifting)
 ```
 
 **Data stored locally** in `~/.strides_ai/`:
@@ -286,6 +339,7 @@ web/
 | Concern | Library |
 |---|---|
 | Strava API | `httpx` |
+| HEVY API | `httpx` |
 | Anthropic API | `anthropic` |
 | Gemini API | `google-genai` |
 | OpenAI API | `openai` |
