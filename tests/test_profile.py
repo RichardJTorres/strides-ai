@@ -72,6 +72,7 @@ def test_get_default_fields_lifting_keys():
         "equipment",
         "nutrition_snacks",
         "other_notes",
+        "coach_voice",
     }
 
 

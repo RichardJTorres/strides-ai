@@ -63,6 +63,8 @@ def build_system(
     prompt = cfg.system_prompt
 
     voice_block = VOICE_INSTRUCTIONS.get(coach_voice, "")
+    if not voice_block and coach_voice:
+        voice_block = f"## Coaching Voice\n{coach_voice}"
     if voice_block:
         prompt += f"\n\n{voice_block}"
 

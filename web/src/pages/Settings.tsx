@@ -74,7 +74,10 @@ const VOICE_OPTIONS: { value: string; label: string; description: string }[] = [
   { value: "aggressive", label: "Aggressive", description: "Direct, demanding, no sugarcoating" },
   { value: "beginner_friendly", label: "Beginner Friendly", description: "Patient, educational, jargon-free" },
   { value: "conversational", label: "Conversational", description: "Casual, relaxed, like a training buddy" },
+  { value: "custom", label: "Custom", description: "Write your own coaching voice instruction" },
 ];
+
+const PRESET_VOICE_VALUES = new Set(VOICE_OPTIONS.map((o) => o.value).filter((v) => v !== "custom"));
 
 export default function Settings({ mode, setMode, theme, onProviderChanged }: Props) {
   const [syncState, setSyncState] = useState<SyncState>("idle");
@@ -86,6 +89,8 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
   const [providerModels, setProviderModels] = useState<Record<string, ProviderModel[]>>({});
   const [changingModel, setChangingModel] = useState(false);
   const [voiceByMode, setVoiceByMode] = useState<Record<string, string>>({});
+  const [customText, setCustomText] = useState<Record<string, string>>({});
+  const [customSelected, setCustomSelected] = useState<Record<string, boolean>>({});
   const [voiceSaving, setVoiceSaving] = useState(false);
 
   useEffect(() => {
@@ -97,7 +102,12 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
           .then(({ fields }) => [m, (fields?.coach_voice as string) ?? ""] as [string, string])
           .catch(() => [m, ""] as [string, string])
       )
-    ).then((entries) => setVoiceByMode(Object.fromEntries(entries)));
+    ).then((entries) => {
+      setVoiceByMode(Object.fromEntries(entries));
+      const customEntries = entries.filter(([, v]) => v && !PRESET_VOICE_VALUES.has(v));
+      setCustomText(Object.fromEntries(customEntries.map(([m, v]) => [m, v])));
+      setCustomSelected(Object.fromEntries(customEntries.map(([m]) => [m, true])));
+    });
   }, []);
 
   useEffect(() => {
@@ -260,6 +270,9 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
             </p>
             {(() => {
               const card = MODE_CARDS.find((c) => c.id === mode)!;
+              const stored = voiceByMode[card.id] ?? "";
+              const isCustom = customSelected[card.id] ?? false;
+              const selectValue = isCustom ? "custom" : stored;
               return (
                 <div className="p-4 rounded-lg border border-gray-700 bg-gray-900">
                   <div className="flex items-center gap-2 mb-2">
@@ -267,8 +280,15 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
                     <span className={`text-xs font-medium ${card.accentClass}`}>{card.label}</span>
                   </div>
                   <select
-                    value={voiceByMode[card.id] ?? ""}
-                    onChange={(e) => handleVoiceChange(card.id, e.target.value)}
+                    value={selectValue}
+                    onChange={(e) => {
+                      if (e.target.value === "custom") {
+                        setCustomSelected((prev) => ({ ...prev, [card.id]: true }));
+                      } else {
+                        setCustomSelected((prev) => ({ ...prev, [card.id]: false }));
+                        handleVoiceChange(card.id, e.target.value);
+                      }
+                    }}
                     disabled={voiceSaving}
                     className="w-full bg-gray-800 text-gray-300 text-xs rounded px-2 py-1.5 border border-gray-700 focus:outline-none focus:border-gray-500 disabled:opacity-50"
                   >
@@ -278,6 +298,19 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
                       </option>
                     ))}
                   </select>
+                  {(selectValue === "custom") && (
+                    <textarea
+                      value={customText[card.id] ?? ""}
+                      onChange={(e) =>
+                        setCustomText((prev) => ({ ...prev, [card.id]: e.target.value }))
+                      }
+                      onBlur={() => handleVoiceChange(card.id, customText[card.id] ?? "")}
+                      disabled={voiceSaving}
+                      placeholder="Describe how your coach should communicate…"
+                      rows={3}
+                      className="mt-2 w-full bg-gray-800 text-gray-300 text-xs rounded px-2 py-1.5 border border-gray-700 focus:outline-none focus:border-gray-500 disabled:opacity-50 resize-none placeholder-gray-600"
+                    />
+                  )}
                 </div>
               );
             })()}
