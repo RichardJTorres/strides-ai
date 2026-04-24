@@ -18,6 +18,7 @@ RUNNING_DEFAULTS: dict = {
     "running_background": {
         "running_since": "",
         "weekly_volume": "",
+        "running_focus": "",
         "background": "",
     },
     "personal_bests": {
@@ -45,6 +46,7 @@ CYCLING_DEFAULTS: dict = {
     "cycling_background": {
         "cycling_since": "",
         "weekly_distance": "",
+        "cycling_focus": "",
         "background": "",
     },
     "cycling_bests": {
@@ -166,12 +168,27 @@ def _render_personal(fields: dict) -> str:
     return _section("Personal", lines)
 
 
+_RUNNING_FOCUS_LABELS = {
+    "fitness": "Fitness & General Health",
+    "road_racing": "Road Racing (5K – Marathon)",
+    "marathon": "Marathon Training",
+    "trail": "Trail Running",
+    "ultra": "Ultra Running",
+    "track": "Track & Speed",
+    "beginner": "Beginner / Return to Running",
+    "multi_sport": "Multi-Sport / Triathlon",
+}
+
+
 def _render_running_background(fields: dict) -> str:
     rb = fields.get("running_background", {})
     weekly = _v(rb.get("weekly_volume") or rb.get("weekly_run_volume"))
+    focus_key = _v(rb.get("running_focus"))
+    focus_label = _RUNNING_FOCUS_LABELS.get(focus_key, focus_key)
     lines = [
         f"Running since: {_v(rb.get('running_since'))}" if _v(rb.get("running_since")) else "",
         f"Weekly volume: {weekly}" if weekly else "",
+        f"Running focus: {focus_label}" if focus_key else "",
         f"Background: {_v(rb.get('background'))}" if _v(rb.get("background")) else "",
     ]
     return _section("Running Background", lines)
@@ -199,12 +216,38 @@ def _render_running_bests(fields: dict) -> str:
     return _section("Running Personal Bests", lines)
 
 
+_CYCLING_FOCUS_LABELS = {
+    "fitness": "Fitness & General Health",
+    "road_racing": "Road Racing / Criteriums",
+    "gran_fondo": "Gran Fondo / Sportive",
+    "time_trial": "Time Trial",
+    "mountain_biking": "Mountain Biking",
+    "gravel": "Gravel & Adventure",
+    "triathlon": "Triathlon / Multi-Sport",
+    "beginner": "Beginner / Return to Cycling",
+}
+
+_LIFTING_STYLE_LABELS = {
+    "general_strength": "General Strength",
+    "powerlifting": "Powerlifting",
+    "bodybuilding": "Bodybuilding / Hypertrophy",
+    "olympic": "Olympic Weightlifting",
+    "crossfit": "CrossFit / Functional Fitness",
+    "calisthenics": "Calisthenics / Bodyweight",
+    "athletic": "Athletic Performance",
+    "beginner": "Beginner / Getting Started",
+}
+
+
 def _render_cycling_background(fields: dict) -> str:
     cb = fields.get("cycling_background", {})
     weekly = _v(cb.get("weekly_distance") or cb.get("weekly_ride_distance"))
+    focus_key = _v(cb.get("cycling_focus"))
+    focus_label = _CYCLING_FOCUS_LABELS.get(focus_key, focus_key)
     lines = [
         f"Cycling since: {_v(cb.get('cycling_since'))}" if _v(cb.get("cycling_since")) else "",
         f"Weekly distance: {weekly}" if weekly else "",
+        f"Cycling focus: {focus_label}" if focus_key else "",
         f"Background: {_v(cb.get('background'))}" if _v(cb.get("background")) else "",
     ]
     return _section("Cycling Background", lines)
@@ -231,6 +274,8 @@ def _render_cycling_bests(fields: dict) -> str:
 
 def _render_lifting_background(fields: dict) -> str:
     lb = fields.get("lifting_background", {})
+    style_key = _v(lb.get("training_style"))
+    style_label = _LIFTING_STYLE_LABELS.get(style_key, style_key)
     lines = [
         f"Lifting since: {_v(lb.get('lifting_since'))}" if _v(lb.get("lifting_since")) else "",
         (
@@ -238,7 +283,7 @@ def _render_lifting_background(fields: dict) -> str:
             if _v(lb.get("sessions_per_week"))
             else ""
         ),
-        f"Training style: {_v(lb.get('training_style'))}" if _v(lb.get("training_style")) else "",
+        f"Training style: {style_label}" if style_key else "",
         f"Background: {_v(lb.get('background'))}" if _v(lb.get("background")) else "",
     ]
     return _section("Lifting Background", lines)

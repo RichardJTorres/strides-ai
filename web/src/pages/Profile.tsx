@@ -387,6 +387,26 @@ export default function Profile({ mode, theme }: Props) {
                     placeholder="e.g. 50 km/week"
                     focusClass={focusClass}
                   />
+                  {mode === "running" && (
+                    <div className="col-span-2 flex flex-col gap-1">
+                      <label className="text-xs font-medium text-gray-400">Running Focus</label>
+                      <select
+                        value={fields.running_background?.running_focus ?? ""}
+                        onChange={(e) => setNested("running_background", "running_focus", e.target.value)}
+                        className={`rounded-md bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-100 focus:outline-none ${focusClass}`}
+                      >
+                        <option value="">Select…</option>
+                        <option value="fitness">Fitness &amp; General Health</option>
+                        <option value="road_racing">Road Racing (5K – Marathon)</option>
+                        <option value="marathon">Marathon Training</option>
+                        <option value="trail">Trail Running</option>
+                        <option value="ultra">Ultra Running</option>
+                        <option value="track">Track &amp; Speed</option>
+                        <option value="beginner">Beginner / Return to Running</option>
+                        <option value="multi_sport">Multi-Sport / Triathlon</option>
+                      </select>
+                    </div>
+                  )}
                 </div>
                 <TextArea
                   label="Background"
@@ -442,6 +462,26 @@ export default function Profile({ mode, theme }: Props) {
                     placeholder="e.g. 150 km/week"
                     focusClass={focusClass}
                   />
+                  {mode === "cycling" && (
+                    <div className="col-span-2 flex flex-col gap-1">
+                      <label className="text-xs font-medium text-gray-400">Cycling Focus</label>
+                      <select
+                        value={fields.cycling_background?.cycling_focus ?? ""}
+                        onChange={(e) => setNested("cycling_background", "cycling_focus", e.target.value)}
+                        className={`rounded-md bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-100 focus:outline-none ${focusClass}`}
+                      >
+                        <option value="">Select…</option>
+                        <option value="fitness">Fitness &amp; General Health</option>
+                        <option value="road_racing">Road Racing / Criteriums</option>
+                        <option value="gran_fondo">Gran Fondo / Sportive</option>
+                        <option value="time_trial">Time Trial</option>
+                        <option value="mountain_biking">Mountain Biking</option>
+                        <option value="gravel">Gravel &amp; Adventure</option>
+                        <option value="triathlon">Triathlon / Multi-Sport</option>
+                        <option value="beginner">Beginner / Return to Cycling</option>
+                      </select>
+                    </div>
+                  )}
                 </div>
                 <TextArea
                   label="Background"
@@ -463,6 +503,56 @@ export default function Profile({ mode, theme }: Props) {
                 <Field label="Fastest century" value={fields.cycling_bests?.fastest_century ?? ""} onChange={(v) => setNested("cycling_bests", "fastest_century", v)} placeholder="e.g. 3:45:00" focusClass={focusClass} />
                 <Field label="Fastest gran fondo" value={fields.cycling_bests?.fastest_gran_fondo ?? ""} onChange={(v) => setNested("cycling_bests", "fastest_gran_fondo", v)} placeholder="e.g. 5:30:00" focusClass={focusClass} />
                 <Field label="Other" value={fields.cycling_bests?.other ?? ""} onChange={(v) => setNested("cycling_bests", "other", v)} placeholder="e.g. KOM on local climb" focusClass={focusClass} />
+              </div>
+            </Section>
+          )}
+
+          {/* Lifting Background — lifting only */}
+          {mode === "lifting" && (
+            <Section title="Lifting Background">
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <Field
+                    label="Lifting since"
+                    value={fields.lifting_background?.lifting_since ?? ""}
+                    onChange={(v) => setNested("lifting_background", "lifting_since", v)}
+                    placeholder="e.g. 2019"
+                    focusClass={focusClass}
+                  />
+                  <Field
+                    label="Sessions per week"
+                    value={fields.lifting_background?.sessions_per_week ?? ""}
+                    onChange={(v) => setNested("lifting_background", "sessions_per_week", v)}
+                    placeholder="e.g. 4"
+                    focusClass={focusClass}
+                  />
+                  <div className="col-span-2 flex flex-col gap-1">
+                    <label className="text-xs font-medium text-gray-400">Training Style</label>
+                    <select
+                      value={fields.lifting_background?.training_style ?? ""}
+                      onChange={(e) => setNested("lifting_background", "training_style", e.target.value)}
+                      className={`rounded-md bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-100 focus:outline-none ${focusClass}`}
+                    >
+                      <option value="">Select…</option>
+                      <option value="general_strength">General Strength</option>
+                      <option value="powerlifting">Powerlifting</option>
+                      <option value="bodybuilding">Bodybuilding / Hypertrophy</option>
+                      <option value="olympic">Olympic Weightlifting</option>
+                      <option value="crossfit">CrossFit / Functional Fitness</option>
+                      <option value="calisthenics">Calisthenics / Bodyweight</option>
+                      <option value="athletic">Athletic Performance</option>
+                      <option value="beginner">Beginner / Getting Started</option>
+                    </select>
+                  </div>
+                </div>
+                <TextArea
+                  label="Background"
+                  value={fields.lifting_background?.background ?? ""}
+                  onChange={(v) => setNested("lifting_background", "background", v)}
+                  placeholder="How you got into lifting, programs you've run, gym setup…"
+                  rows={3}
+                  focusClass={focusClass}
+                />
               </div>
             </Section>
           )}
