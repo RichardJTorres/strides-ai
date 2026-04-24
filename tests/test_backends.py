@@ -88,6 +88,7 @@ def test_claude_stream_turn_appends_history(mock_anthropic):
 
 
 def test_claude_stream_turn_initial_history_preserved(mock_anthropic):
+    """Prior history must survive a stream_turn call — not get clobbered."""
     mock_anthropic.return_value.messages.stream.return_value = _claude_stream(["ok"])
 
     from strides_ai.backends.claude import ClaudeBackend
@@ -97,6 +98,8 @@ def test_claude_stream_turn_initial_history_preserved(mock_anthropic):
         {"role": "assistant", "content": "prev a"},
     ]
     b = ClaudeBackend("key", prior)
+    b.stream_turn("sys", "new q", lambda _: None)
+
     assert b._history[0]["content"] == "prev q"
     assert b._history[1]["content"] == "prev a"
 
@@ -368,6 +371,7 @@ def test_openai_stream_turn_appends_history(mock_openai):
 
 
 def test_openai_stream_turn_initial_history_preserved(mock_openai):
+    """Prior history must survive a stream_turn call — not get clobbered."""
     mock_openai.return_value.chat.completions.create.return_value = _oai_stream([_oai_chunk("ok")])
 
     from strides_ai.backends.openai import OpenAIBackend
@@ -377,6 +381,8 @@ def test_openai_stream_turn_initial_history_preserved(mock_openai):
         {"role": "assistant", "content": "prev a"},
     ]
     b = OpenAIBackend("key", prior)
+    b.stream_turn("sys", "new q", lambda _: None)
+
     assert b._history[0]["content"] == "prev q"
     assert b._history[1]["content"] == "prev a"
 
@@ -609,6 +615,7 @@ def test_ollama_retries_without_tools_on_400(mocker):
 
 
 def test_ollama_stream_turn_initial_history_preserved(mocker):
+    """Prior history must survive a stream_turn call — not get clobbered."""
     _ollama_http_client(mocker, [_ollama_chunk("ok", done=True)])
 
     from strides_ai.backends.ollama import OllamaBackend
@@ -618,5 +625,7 @@ def test_ollama_stream_turn_initial_history_preserved(mocker):
         {"role": "assistant", "content": "prev a"},
     ]
     b = OllamaBackend("llama3.1", prior)
+    b.stream_turn("sys", "new q", lambda _: None)
+
     assert b._history[0]["content"] == "prev q"
     assert b._history[1]["content"] == "prev a"

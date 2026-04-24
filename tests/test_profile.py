@@ -59,6 +59,20 @@ def test_get_default_fields_returns_deep_copy():
     assert f2["personal"]["name"] == ""
 
 
+def test_get_default_fields_lifting_keys():
+    fields = get_default_fields("lifting")
+    assert set(fields.keys()) == {
+        "personal",
+        "lifting_background",
+        "lifting_bests",
+        "goals",
+        "injuries_and_health",
+        "equipment",
+        "nutrition_snacks",
+        "other_notes",
+    }
+
+
 def test_get_default_fields_unknown_mode_falls_back_to_running():
     fields = get_default_fields("triathlon")
     assert "running_background" in fields
@@ -128,3 +142,12 @@ def test_profile_to_text_nutrition_snacks_appear():
     result = profile_to_text(fields, "running")
     assert "banana" in result
     assert "gel" in result
+
+
+def test_profile_to_text_lifting_fields():
+    fields = get_default_fields("lifting")
+    fields["lifting_bests"]["squat_1rm"] = "140 kg"
+    fields["lifting_bests"]["bench_press_1rm"] = "100 kg"
+    result = profile_to_text(fields, "lifting")
+    assert "140 kg" in result
+    assert "100 kg" in result

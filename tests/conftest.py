@@ -1,6 +1,5 @@
 """Shared fixtures for strides-ai tests."""
 
-import sqlite3
 from pathlib import Path
 
 import pytest
@@ -60,29 +59,3 @@ def sample_cycling_activity():
         "perceived_exertion": 6.0,
         "sport_type": "Ride",
     }
-
-
-@pytest.fixture
-def activity_row():
-    """A sqlite3.Row-compatible dict for coach/chart tests.
-
-    Uses a real in-memory connection so the value behaves exactly like a Row.
-    """
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    conn.execute(
-        """CREATE TABLE a (
-            id INTEGER, date TEXT, name TEXT,
-            distance_m REAL, moving_time_s INTEGER,
-            avg_pace_s_per_km REAL, avg_hr REAL, max_hr INTEGER,
-            avg_cadence REAL, elevation_gain_m REAL,
-            suffer_score INTEGER, perceived_exertion REAL,
-            sport_type TEXT
-        )"""
-    )
-    conn.execute(
-        "INSERT INTO a VALUES (1,'2025-06-15','Morning Run',10000,3600,360,145,165,174,50,42,5,'Run')"
-    )
-    row = conn.execute("SELECT * FROM a").fetchone()
-    yield row
-    conn.close()

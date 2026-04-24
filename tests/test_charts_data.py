@@ -1,6 +1,5 @@
 """Unit tests for strides_ai.charts_data — all pure functions."""
 
-import math
 from datetime import date, timedelta
 
 import pytest
@@ -180,13 +179,6 @@ def test_atl_ctl_ratio_none_when_ctl_negligible():
         assert first["ratio"] is None
     else:
         assert first["ratio"] is not None
-
-
-def test_atl_ctl_ctl_smoother_than_atl():
-    """CTL (42-day EWA) should respond more slowly than ATL (7-day EWA)."""
-    alpha_atl = 1 - math.exp(-1 / 7)
-    alpha_ctl = 1 - math.exp(-1 / 42)
-    assert alpha_atl > alpha_ctl
 
 
 # ── compute_aerobic_efficiency ────────────────────────────────────────────────
