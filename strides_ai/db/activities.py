@@ -8,6 +8,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlmodel import Session, select
 
 from .models import Activity, RUN_TYPES, CYCLE_TYPES, LIFT_TYPES
+from ..modes import MODES
 
 
 def get_latest_activity_date(session: Session) -> str | None:
@@ -102,26 +103,10 @@ def get_all(session: Session) -> list[Activity]:
 
 def get_for_mode(session: Session, mode: str) -> list[Activity]:
     """Return activities filtered to the active mode, newest-first."""
-    if mode == "running":
-        stmt = (
-            select(Activity)
-            .where(Activity.sport_type.in_(RUN_TYPES))
-            .order_by(Activity.date.desc())
-        )
-    elif mode == "cycling":
-        stmt = (
-            select(Activity)
-            .where(Activity.sport_type.in_(CYCLE_TYPES))
-            .order_by(Activity.date.desc())
-        )
-    elif mode == "lifting":
-        stmt = (
-            select(Activity)
-            .where(Activity.sport_type.in_(LIFT_TYPES))
-            .order_by(Activity.date.desc())
-        )
-    else:  # hybrid
-        stmt = select(Activity).order_by(Activity.date.desc())
+    cfg = MODES.get(mode, MODES["running"])
+    stmt = select(Activity).order_by(Activity.date.desc())
+    if cfg.sport_types is not None:
+        stmt = stmt.where(Activity.sport_type.in_(cfg.sport_types))
     return session.exec(stmt).all()
 
 
