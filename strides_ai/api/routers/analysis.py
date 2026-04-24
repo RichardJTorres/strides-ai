@@ -1,6 +1,7 @@
 """Deep-dive analysis endpoint."""
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -21,6 +22,7 @@ from ...config import get_settings
 from ...db import activities as crud
 from ...db import get_all_memories, get_profile_fields
 from ...db.engine import get_session
+from ...hevy_analysis import LIFTING_DEEP_DIVE_SYSTEM_PROMPT
 from ...profile import profile_to_text
 from ..deps import get_backend
 
@@ -79,6 +81,79 @@ async def deep_dive(
             model=activity.deep_dive_model,
         )
 
+    activity_dict = activity.model_dump()
+    mode = getattr(request.app.state, "mode", "running")
+
+    # ── Lifting (HEVY) deep dive — no Strava streams needed ──────────────
+    if activity.sport_type == "WeightTraining":
+        if not activity.exercises_json:
+            raise HTTPException(
+                status_code=422, detail="No exercise data available for this session"
+            )
+
+        system_prompt = LIFTING_DEEP_DIVE_SYSTEM_PROMPT
+        try:
+            exercises = json.loads(activity.exercises_json)
+        except Exception:
+            raise HTTPException(status_code=422, detail="Could not parse exercise data")
+
+        lines = [f"Workout: {activity.name or 'Weight Training'}  |  Date: {activity.date}"]
+        if activity.total_volume_kg:
+            lines.append(
+                f"Total volume: {activity.total_volume_kg:.0f} kg  |  Sets: {activity.total_sets or '?'}"
+            )
+        lines.append("")
+        for ex in exercises:
+            lines.append(f"### {ex.get('title') or ex.get('name', 'Exercise')}")
+            for s in ex.get("sets", []):
+                weight = f"{s['weight_kg']} kg" if s.get("weight_kg") is not None else "BW"
+                reps = f"x{s['reps']}" if s.get("reps") is not None else ""
+                rpe = f"  RPE {s['rpe']}" if s.get("rpe") is not None else ""
+                stype = f"[{s['type']}]" if s.get("type") and s["type"] != "normal" else ""
+                lines.append(f"  {stype} {weight} {reps}{rpe}".strip())
+            lines.append("")
+        user_content = "\n".join(lines)
+
+        profile_text = profile_to_text(get_profile_fields(mode), mode)
+        if profile_text:
+            system_prompt += f"\n\n{profile_text}"
+
+        memories = get_all_memories()
+        if memories:
+            mem_lines = "\n".join(f"  [{m['category']}] {m['content']}" for m in memories)
+            system_prompt += (
+                f"\n\n## Coaching Notes (remembered from previous sessions)\n{mem_lines}"
+            )
+
+        def _run_llm_lifting():
+            return backend.stateless_turn(system_prompt, user_content, on_token=lambda _: None)
+
+        try:
+            report = await asyncio.get_event_loop().run_in_executor(None, _run_llm_lifting)
+        except Exception as exc:
+            log.error("LLM deep dive failed for lifting session %s: %s", activity_id, exc)
+            raise HTTPException(status_code=500, detail="LLM analysis failed")
+
+        completed_at = datetime.now(timezone.utc).isoformat()
+        model_label = backend.label
+        crud.update_analysis(
+            session,
+            activity_id,
+            {
+                "deep_dive_report": report,
+                "deep_dive_completed_at": completed_at,
+                "deep_dive_model": model_label,
+            },
+        )
+        return DeepDiveResponse(
+            activity_id=activity_id,
+            report=report,
+            cached=False,
+            completed_at=completed_at,
+            model=model_label,
+        )
+
+    # ── Cardio (Strava) deep dive ─────────────────────────────────────────
     settings = get_settings()
     if not settings.strava_client_id or not settings.strava_client_secret:
         raise HTTPException(status_code=500, detail="Strava credentials not configured")
@@ -100,9 +175,6 @@ async def deep_dive(
             status_code=422,
             detail="No stream data available for this activity (manual entry or GPS disabled)",
         )
-
-    activity_dict = activity.model_dump()
-    mode = getattr(request.app.state, "mode", "running")
 
     if backend.prefers_precomputed_brief:
         system_prompt = DEEP_DIVE_SYSTEM_PROMPT_LOCAL

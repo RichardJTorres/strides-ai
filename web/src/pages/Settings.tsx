@@ -54,6 +54,14 @@ const MODE_CARDS: {
     borderSelected: "border-purple-500",
     dotClass: "bg-purple-500",
   },
+  {
+    id: "lifting",
+    label: "Lifting",
+    description: "Weightlifting sessions from HEVY. Coaching focused on volume, strength, and progressive overload.",
+    accentClass: "text-orange-400",
+    borderSelected: "border-orange-500",
+    dotClass: "bg-orange-500",
+  },
 ];
 
 type SyncState = "idle" | "syncing" | "done" | "error";
@@ -61,6 +69,8 @@ type SyncState = "idle" | "syncing" | "done" | "error";
 export default function Settings({ mode, setMode, theme, onProviderChanged }: Props) {
   const [syncState, setSyncState] = useState<SyncState>("idle");
   const [syncCount, setSyncCount] = useState<number | null>(null);
+  const [hevySyncState, setHevySyncState] = useState<SyncState>("idle");
+  const [hevySyncCount, setHevySyncCount] = useState<number | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [switchingProvider, setSwitchingProvider] = useState(false);
   const [providerModels, setProviderModels] = useState<Record<string, ProviderModel[]>>({});
@@ -128,6 +138,20 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
       );
     } finally {
       setChangingModel(false);
+    }
+  }
+
+  async function handleHevySync(full: boolean) {
+    setHevySyncState("syncing");
+    setHevySyncCount(null);
+    try {
+      const res = await fetch(`/api/hevy/sync${full ? "?full=true" : ""}`, { method: "POST" });
+      if (!res.ok) throw new Error();
+      const { new_workouts } = await res.json();
+      setHevySyncCount(new_workouts);
+      setHevySyncState("done");
+    } catch {
+      setHevySyncState("error");
     }
   }
 
@@ -277,6 +301,45 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
               )}
               {syncState === "error" && (
                 <span className="text-xs text-red-400">Sync failed. Check your Strava credentials.</span>
+              )}
+            </div>
+          </section>
+
+          <section>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">
+              HEVY Sync
+            </h3>
+            <p className="text-xs text-gray-600 mb-3">
+              Fetches your weightlifting sessions from HEVY. Requires a{" "}
+              <span className="text-gray-400">Hevy Pro</span> subscription and{" "}
+              <code className="text-gray-500">HEVY_API_KEY</code> in{" "}
+              <code className="text-gray-500">.env</code> (get your key at{" "}
+              <span className="text-gray-400">hevy.com/settings?developer</span>).
+            </p>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => handleHevySync(false)}
+                disabled={hevySyncState === "syncing"}
+                className="px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed bg-orange-600 hover:bg-orange-500 text-white"
+              >
+                {hevySyncState === "syncing" ? "Syncing…" : "Sync New"}
+              </button>
+              <button
+                onClick={() => handleHevySync(true)}
+                disabled={hevySyncState === "syncing"}
+                className="px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed bg-gray-700 hover:bg-gray-600 text-white"
+              >
+                Full Sync
+              </button>
+              {hevySyncState === "done" && (
+                <span className="text-xs text-gray-400">
+                  {hevySyncCount === 0
+                    ? "Already up to date."
+                    : `${hevySyncCount} new session${hevySyncCount === 1 ? "" : "s"} synced.`}
+                </span>
+              )}
+              {hevySyncState === "error" && (
+                <span className="text-xs text-red-400">Sync failed. Check your HEVY_API_KEY.</span>
               )}
             </div>
           </section>

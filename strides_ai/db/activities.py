@@ -7,7 +7,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlmodel import Session, select
 
-from .models import Activity, RUN_TYPES, CYCLE_TYPES
+from .models import Activity, RUN_TYPES, CYCLE_TYPES, LIFT_TYPES
 
 
 def get_latest_activity_date(session: Session) -> str | None:
@@ -62,6 +62,39 @@ def upsert(session: Session, activity: dict[str, Any]) -> None:
     session.commit()
 
 
+def upsert_hevy(session: Session, activity: dict[str, Any]) -> None:
+    """Insert or replace an activity row derived from a HEVY workout."""
+    values = {
+        "id": activity["id"],
+        "name": activity.get("name"),
+        "date": activity.get("date"),
+        "distance_m": None,
+        "moving_time_s": activity.get("moving_time_s"),
+        "elapsed_time_s": activity.get("elapsed_time_s"),
+        "elevation_gain_m": None,
+        "avg_pace_s_per_km": None,
+        "avg_hr": None,
+        "max_hr": None,
+        "avg_cadence": None,
+        "suffer_score": None,
+        "perceived_exertion": activity.get("perceived_exertion"),
+        "sport_type": "WeightTraining",
+        "raw_json": activity.get("raw_json"),
+        "hevy_workout_id": activity.get("hevy_workout_id"),
+        "exercises_json": activity.get("exercises_json"),
+        "total_volume_kg": activity.get("total_volume_kg"),
+        "total_sets": activity.get("total_sets"),
+    }
+
+    stmt = sqlite_insert(Activity).values(**values)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["id"],
+        set_={k: v for k, v in values.items() if k != "id"},
+    )
+    session.execute(stmt)
+    session.commit()
+
+
 def get_all(session: Session) -> list[Activity]:
     """Return all activities ordered newest-first."""
     return session.exec(select(Activity).order_by(Activity.date.desc())).all()
@@ -79,6 +112,12 @@ def get_for_mode(session: Session, mode: str) -> list[Activity]:
         stmt = (
             select(Activity)
             .where(Activity.sport_type.in_(CYCLE_TYPES))
+            .order_by(Activity.date.desc())
+        )
+    elif mode == "lifting":
+        stmt = (
+            select(Activity)
+            .where(Activity.sport_type.in_(LIFT_TYPES))
             .order_by(Activity.date.desc())
         )
     else:  # hybrid

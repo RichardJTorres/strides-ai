@@ -15,6 +15,7 @@ from .routers import (
     calendar,
     charts,
     chat,
+    hevy,
     history,
     memories,
     profile,
@@ -51,6 +52,7 @@ app.include_router(charts.router, prefix="/api")
 app.include_router(memories.router, prefix="/api")
 app.include_router(profile.router, prefix="/api")
 app.include_router(sync.router, prefix="/api")
+app.include_router(hevy.router, prefix="/api")
 app.include_router(history.router, prefix="/api")
 app.include_router(analysis.router, prefix="/api")
 app.include_router(calendar.router, prefix="/api")

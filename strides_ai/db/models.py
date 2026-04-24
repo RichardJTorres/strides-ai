@@ -8,6 +8,7 @@ from sqlmodel import Column, Field, SQLModel
 # Activity type sets — used by sync.py and query filters
 RUN_TYPES = {"Run", "TrailRun", "VirtualRun"}
 CYCLE_TYPES = {"Ride", "VirtualRide", "GravelRide"}
+LIFT_TYPES = {"WeightTraining"}
 
 
 class Activity(SQLModel, table=True):
@@ -49,6 +50,12 @@ class Activity(SQLModel, table=True):
     deep_dive_model: Optional[str] = None
     analysis_status: Optional[str] = None
     user_notes: Optional[str] = None
+
+    # HEVY (weightlifting) columns
+    hevy_workout_id: Optional[str] = None
+    exercises_json: Optional[str] = None
+    total_volume_kg: Optional[float] = None
+    total_sets: Optional[int] = None
 
 
 class Conversation(SQLModel, table=True):

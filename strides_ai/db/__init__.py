@@ -18,6 +18,7 @@ from .models import (
     Setting,
     TrainingPlan,
     CYCLE_TYPES,
+    LIFT_TYPES,
     RUN_TYPES,
 )
 from . import activities as _act
@@ -48,11 +49,14 @@ __all__ = [
     "Setting",
     "TrainingPlan",
     "CYCLE_TYPES",
+    "LIFT_TYPES",
     "RUN_TYPES",
     # convenience wrappers (see below)
     "get_latest_activity_date",
+    "get_latest_hevy_date",
     "get_stored_ids",
     "upsert_activity",
+    "upsert_hevy_workout",
     "get_all_activities",
     "get_activities_for_mode",
     "get_activity",
@@ -99,6 +103,19 @@ def get_latest_activity_date() -> str | None:
         return _act.get_latest_activity_date(s)
 
 
+def get_latest_hevy_date() -> str | None:
+    """Return the date of the most recent WeightTraining activity, or None."""
+    with _session() as s:
+        from .models import Activity
+        import sqlalchemy as sa
+        from sqlmodel import select
+
+        result = s.execute(
+            select(sa.func.max(Activity.date)).where(Activity.sport_type == "WeightTraining")
+        ).scalar()
+        return result
+
+
 def get_stored_ids() -> set[int]:
     with _session() as s:
         return _act.get_stored_ids(s)
@@ -107,6 +124,11 @@ def get_stored_ids() -> set[int]:
 def upsert_activity(activity: dict) -> None:
     with _session() as s:
         _act.upsert(s, activity)
+
+
+def upsert_hevy_workout(activity: dict) -> None:
+    with _session() as s:
+        _act.upsert_hevy(s, activity)
 
 
 def get_all_activities() -> list[dict]:

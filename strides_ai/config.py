@@ -1,5 +1,6 @@
 """Application-wide configuration and constants."""
 
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -22,6 +23,9 @@ class Settings(BaseSettings):
     strava_client_id: str = ""
     strava_client_secret: str = ""
 
+    # HEVY
+    hevy_api_key: str = ""
+
     # Server
     port: int = 8000
 
@@ -33,9 +37,14 @@ def get_settings() -> Settings:
 
 # ── Application constants ──────────────────────────────────────────────────────
 
-VALID_MODES: frozenset[str] = frozenset({"running", "cycling", "hybrid"})
+VALID_MODES: frozenset[str] = frozenset({"running", "cycling", "hybrid", "lifting"})
 VALID_PROVIDERS: frozenset[str] = frozenset({"claude", "gemini", "ollama", "openai"})
 
-UPLOADS_DIR = Path.home() / ".strides_ai" / "uploads"
+from dotenv import load_dotenv
+
+load_dotenv()
+
+DATA_DIR = Path(os.environ.get("STRIDES_DATA_DIR", Path.home() / ".strides_ai")).expanduser()
+UPLOADS_DIR = DATA_DIR / "uploads"
 SUPPORTED_IMAGE_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
 MAX_FILE_BYTES = 20 * 1024 * 1024  # 20 MB

@@ -3,7 +3,7 @@
 import sqlite3
 from datetime import datetime
 
-from .db import RUN_TYPES
+from .db import RUN_TYPES, LIFT_TYPES
 from . import db
 
 RECALL_MESSAGES = 40
@@ -83,10 +83,33 @@ goals, upcoming events, injuries, preferences, or any key context that should \
 persist across sessions.\
 """
 
+LIFTING_SYSTEM_PROMPT = """\
+You are an experienced, data-driven strength and conditioning coach with access to the athlete's \
+complete HEVY training log. Your role is to:
+
+- Analyse training volume, intensity, and progression from the data provided.
+- Answer questions about specific sessions, weekly volume, and strength progress.
+- Give evidence-based coaching advice: programming, progressive overload, recovery, \
+injury prevention, deload timing, and exercise selection.
+- Be concise but thorough. When referencing specific sessions, cite the date and \
+key metrics (exercises, volume, RPE, estimated 1RM).
+- Use metric units (kg) unless the athlete asks otherwise.
+- When estimating 1-rep maxes, use the Epley formula (weight × (1 + reps/30)) and \
+note it is an estimate.
+
+The athlete's complete training log is included below. Treat it as ground \
+truth for all data-related questions.
+
+**Memory:** Use the save_memory tool proactively whenever the athlete mentions \
+goals, upcoming competitions, injuries, preferences, or any key context that should \
+persist across sessions.\
+"""
+
 _PROMPT_BY_MODE = {
     "running": RUNNING_SYSTEM_PROMPT,
     "cycling": CYCLING_SYSTEM_PROMPT,
     "hybrid": HYBRID_SYSTEM_PROMPT,
+    "lifting": LIFTING_SYSTEM_PROMPT,
 }
 
 
@@ -140,8 +163,8 @@ def build_system(
     # The full training log is seeded once in conversation history.
     recent = (activities or [])[:RECENT_ACTIVITIES_IN_SYSTEM]
 
-    # Inject metrics guide when any activity has been analyzed
-    has_analysis = any(a.get("analysis_summary") for a in recent)
+    # Inject cardio metrics guide when any activity has been analyzed (not relevant for lifting)
+    has_analysis = mode != "lifting" and any(a.get("analysis_summary") for a in recent)
     if has_analysis:
         prompt += (
             "\n\n## Analysis Metrics Guide\n"
@@ -193,6 +216,26 @@ def _format_duration(seconds: int | None) -> str:
 def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
     if not rows:
         return "No activities found."
+
+    if mode == "lifting":
+        header = "DATE       | NAME                           | DURATION | SETS | VOLUME(kg) | RPE | ANALYSIS"
+        sep = "-" * 140
+        lines = [header, sep]
+        for r in reversed(rows):
+            analysis = (r.get("analysis_summary") or "")[:60]
+            lines.append(
+                f"{r['date'] or '?':10s} | "
+                f"{(r['name'] or '')[:30]:30s} | "
+                f"{_format_duration(r['moving_time_s']):8s} | "
+                f"{r['total_sets'] or '—':4} | "
+                f"{r['total_volume_kg'] or '—':10} | "
+                f"{r['perceived_exertion'] or '—':3} | "
+                f"{analysis}"
+            )
+        total_volume = sum((r["total_volume_kg"] or 0) for r in rows)
+        lines.append(sep)
+        lines.append(f"Total: {len(rows)} sessions, {total_volume:.0f} kg cumulative volume")
+        return "\n".join(lines)
 
     if mode == "hybrid":
         header = "DATE       | TYPE       | NAME                           | DIST(km) | DURATION | PACE/SPEED  | AVG HR | MAX HR | CADENCE | ELEV(m) | SUFFER | RPE | ANALYSIS"
@@ -285,7 +328,11 @@ def build_initial_history(
     only the oldest runs are dropped — recent ones are protected by the system prompt.
     """
     training_log = build_training_log(activities, mode)
-    act_label = "runs" if mode == "running" else "rides" if mode == "cycling" else "activities"
+    act_label = (
+        "runs"
+        if mode == "running"
+        else "rides" if mode == "cycling" else "sessions" if mode == "lifting" else "activities"
+    )
     log_message = f"Here is the athlete's complete training log:\n\n```\n{training_log}\n```"
     return [
         {"role": "user", "content": log_message},
