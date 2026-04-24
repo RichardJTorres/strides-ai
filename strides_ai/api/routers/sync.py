@@ -9,7 +9,7 @@ from ..deps import init_backend
 router = APIRouter()
 
 
-@router.post("/sync")
+@router.post("/strava/sync")
 def sync(request: Request, full: bool = False):
     try:
         new_count = strava_source.sync(full=full)

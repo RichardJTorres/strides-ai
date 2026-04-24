@@ -159,7 +159,7 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
     setSyncState("syncing");
     setSyncCount(null);
     try {
-      const res = await fetch("/api/sync?full=true", { method: "POST" });
+      const res = await fetch("/api/strava/sync?full=true", { method: "POST" });
       if (!res.ok) throw new Error();
       const { new_activities } = await res.json();
       setSyncCount(new_activities);
