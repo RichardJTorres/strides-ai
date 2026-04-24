@@ -5,16 +5,14 @@ from datetime import date, timedelta
 import pytest
 
 from strides_ai import db
-from strides_ai.coach import (
+from strides_ai.coach import build_initial_history, build_system, build_training_log
+from strides_ai.modes import (
     CYCLING_SYSTEM_PROMPT,
     HYBRID_SYSTEM_PROMPT,
     RUNNING_SYSTEM_PROMPT,
     _format_duration,
     _format_pace,
     _format_speed,
-    build_initial_history,
-    build_system,
-    build_training_log,
 )
 
 # ── _format_pace ──────────────────────────────────────────────────────────────

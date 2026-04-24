@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .. import db
 from ..config import UPLOADS_DIR, get_settings
+from ..modes import MODES
 from .deps import init_backend
 from .routers import (
     activities,
@@ -57,3 +58,16 @@ app.include_router(history.router, prefix="/api")
 app.include_router(analysis.router, prefix="/api")
 app.include_router(calendar.router, prefix="/api")
 app.include_router(status.router, prefix="/api")
+
+
+@app.get("/api/modes")
+def get_modes():
+    """Return metadata for all coaching modes (used by frontend for tab visibility etc.)."""
+    return {
+        name: {
+            "activity_label": cfg.activity_label,
+            "hidden_tabs": sorted(cfg.hidden_tabs),
+            "has_analysis": cfg.has_analysis,
+        }
+        for name, cfg in MODES.items()
+    }

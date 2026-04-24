@@ -3,114 +3,13 @@
 import sqlite3
 from datetime import datetime
 
-from .db import RUN_TYPES, LIFT_TYPES
 from . import db
+from .modes import MODES
 
 RECALL_MESSAGES = 40
 # Number of most-recent activities always pinned in the system prompt each turn.
 # The full training log is seeded once in conversation history via build_initial_history.
 RECENT_ACTIVITIES_IN_SYSTEM = 30
-
-RUNNING_SYSTEM_PROMPT = """\
-You are an experienced, data-driven running coach with access to the athlete's \
-complete Strava training log. Your role is to:
-
-- Analyse training load, trends, and patterns from the data provided.
-- Answer questions about specific workouts, weekly/monthly volume, and progress.
-- Give evidence-based coaching advice: pacing, recovery, race preparation, \
-injury prevention, and periodisation.
-- Be concise but thorough. When referencing specific runs, cite the date and \
-key metrics (distance, pace, HR).
-- Use metric units (km, min/km) unless the athlete asks otherwise.
-- When advising on nutrition for a run, suggest a concrete sample loadout \
-(e.g. "2 gels, 1 granola bar, 500 ml electrolytes"). If the athlete has listed \
-preferred snacks in their profile, choose from those; otherwise use sensible \
-defaults based on run distance and intensity.
-
-The athlete's complete training log is included below. Treat it as ground \
-truth for all data-related questions.
-
-**Memory:** Use the save_memory tool proactively whenever the athlete mentions \
-goals, upcoming races, injuries, preferences, or any key context that should \
-persist across sessions.\
-"""
-
-CYCLING_SYSTEM_PROMPT = """\
-You are an experienced, data-driven cycling coach with access to the athlete's \
-complete Strava training log. Your role is to:
-
-- Analyse training load, trends, and patterns from cycling data provided.
-- Answer questions about specific rides, weekly/monthly volume, and progress.
-- Give evidence-based coaching advice: pacing, power, recovery, race preparation, \
-injury prevention, and periodisation for cyclists.
-- Be concise but thorough. When referencing specific rides, cite the date and \
-key metrics (distance, speed, HR).
-- Use metric units (km, km/h) unless the athlete asks otherwise.
-- When advising on nutrition for a ride, suggest a concrete sample loadout \
-(e.g. "2 gels, 1 energy bar, 750 ml electrolytes"). If the athlete has listed \
-preferred snacks in their profile, choose from those; otherwise use sensible \
-defaults based on ride duration and intensity.
-
-The athlete's complete training log is included below. Treat it as ground \
-truth for all data-related questions.
-
-**Memory:** Use the save_memory tool proactively whenever the athlete mentions \
-goals, upcoming events, injuries, preferences, or any key context that should \
-persist across sessions.\
-"""
-
-HYBRID_SYSTEM_PROMPT = """\
-You are an experienced, data-driven multisport coach with access to the athlete's \
-complete Strava training log covering both running and cycling. Your role is to:
-
-- Analyse training load, trends, and patterns across all sport types.
-- Answer questions about specific workouts, weekly/monthly volume, and progress.
-- Give evidence-based coaching advice covering both running and cycling: \
-pacing, recovery, race preparation, injury prevention, and periodisation.
-- Be concise but thorough. When referencing specific activities, cite the date, \
-sport type, and key metrics.
-- Use metric units unless the athlete asks otherwise.
-- When advising on nutrition for any activity, suggest a concrete sample loadout \
-(e.g. "2 gels, 1 granola bar, 500 ml electrolytes"). If the athlete has listed \
-preferred snacks in their profile, choose from those; otherwise use sensible \
-defaults based on activity duration and intensity.
-
-The athlete's complete training log is included below. Treat it as ground \
-truth for all data-related questions.
-
-**Memory:** Use the save_memory tool proactively whenever the athlete mentions \
-goals, upcoming events, injuries, preferences, or any key context that should \
-persist across sessions.\
-"""
-
-LIFTING_SYSTEM_PROMPT = """\
-You are an experienced, data-driven strength and conditioning coach with access to the athlete's \
-complete HEVY training log. Your role is to:
-
-- Analyse training volume, intensity, and progression from the data provided.
-- Answer questions about specific sessions, weekly volume, and strength progress.
-- Give evidence-based coaching advice: programming, progressive overload, recovery, \
-injury prevention, deload timing, and exercise selection.
-- Be concise but thorough. When referencing specific sessions, cite the date and \
-key metrics (exercises, volume, RPE, estimated 1RM).
-- Use metric units (kg) unless the athlete asks otherwise.
-- When estimating 1-rep maxes, use the Epley formula (weight × (1 + reps/30)) and \
-note it is an estimate.
-
-The athlete's complete training log is included below. Treat it as ground \
-truth for all data-related questions.
-
-**Memory:** Use the save_memory tool proactively whenever the athlete mentions \
-goals, upcoming competitions, injuries, preferences, or any key context that should \
-persist across sessions.\
-"""
-
-_PROMPT_BY_MODE = {
-    "running": RUNNING_SYSTEM_PROMPT,
-    "cycling": CYCLING_SYSTEM_PROMPT,
-    "hybrid": HYBRID_SYSTEM_PROMPT,
-    "lifting": LIFTING_SYSTEM_PROMPT,
-}
 
 
 def build_system(
@@ -119,7 +18,8 @@ def build_system(
     mode: str = "running",
     activities: list | None = None,
 ) -> str:
-    prompt = _PROMPT_BY_MODE.get(mode, RUNNING_SYSTEM_PROMPT)
+    cfg = MODES.get(mode, MODES["running"])
+    prompt = cfg.system_prompt
 
     now = datetime.now().astimezone()
     day_str = now.strftime("%A, %B %-d, %Y")
@@ -163,9 +63,7 @@ def build_system(
     # The full training log is seeded once in conversation history.
     recent = (activities or [])[:RECENT_ACTIVITIES_IN_SYSTEM]
 
-    # Inject cardio metrics guide when any activity has been analyzed (not relevant for lifting)
-    has_analysis = mode != "lifting" and any(a.get("analysis_summary") for a in recent)
-    if has_analysis:
+    if cfg.has_analysis and any(a.get("analysis_summary") for a in recent):
         prompt += (
             "\n\n## Analysis Metrics Guide\n"
             "The ANALYSIS column in the training log contains auto-generated summaries. "
@@ -188,130 +86,16 @@ def build_system(
     return prompt
 
 
-def _format_pace(s_per_km: float | None) -> str:
-    if s_per_km is None:
-        return "—"
-    mins = int(s_per_km // 60)
-    secs = int(s_per_km % 60)
-    return f"{mins}:{secs:02d}/km"
-
-
-def _format_speed(s_per_km: float | None) -> str:
-    if s_per_km is None or s_per_km <= 0:
-        return "—"
-    kph = 3600 / s_per_km
-    return f"{kph:.1f}km/h"
-
-
-def _format_duration(seconds: int | None) -> str:
-    if seconds is None:
-        return "—"
-    h, rem = divmod(seconds, 3600)
-    m, s = divmod(rem, 60)
-    if h:
-        return f"{h}h{m:02d}m{s:02d}s"
-    return f"{m}m{s:02d}s"
-
-
 def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
     if not rows:
         return "No activities found."
-
-    if mode == "lifting":
-        header = "DATE       | NAME                           | DURATION | SETS | VOLUME(kg) | RPE | ANALYSIS"
-        sep = "-" * 140
-        lines = [header, sep]
-        for r in reversed(rows):
-            analysis = (r.get("analysis_summary") or "")[:60]
-            lines.append(
-                f"{r['date'] or '?':10s} | "
-                f"{(r['name'] or '')[:30]:30s} | "
-                f"{_format_duration(r['moving_time_s']):8s} | "
-                f"{r['total_sets'] or '—':4} | "
-                f"{r['total_volume_kg'] or '—':10} | "
-                f"{r['perceived_exertion'] or '—':3} | "
-                f"{analysis}"
-            )
-        total_volume = sum((r["total_volume_kg"] or 0) for r in rows)
-        lines.append(sep)
-        lines.append(f"Total: {len(rows)} sessions, {total_volume:.0f} kg cumulative volume")
-        return "\n".join(lines)
-
-    if mode == "hybrid":
-        header = "DATE       | TYPE       | NAME                           | DIST(km) | DURATION | PACE/SPEED  | AVG HR | MAX HR | CADENCE | ELEV(m) | SUFFER | RPE | ANALYSIS"
-        sep = "-" * 215
-    elif mode == "cycling":
-        header = "DATE       | NAME                           | DIST(km) | DURATION | SPEED    | AVG HR | MAX HR | CADENCE(rpm) | ELEV(m) | SUFFER | RPE | ANALYSIS"
-        sep = "-" * 200
-    else:
-        header = "DATE       | NAME                           | DIST(km) | DURATION | PACE     | AVG HR | MAX HR | CADENCE(spm) | ELEV(m) | SUFFER | RPE | ANALYSIS"
-        sep = "-" * 200
-
-    lines = [header, sep]
-
+    cfg = MODES.get(mode, MODES["running"])
+    sep = "-" * cfg.log_sep_len
+    lines = [cfg.log_header, sep]
     for r in reversed(rows):
-        dist_km = (r["distance_m"] or 0) / 1000
-        sport = r["sport_type"] or ""
-        is_run = sport in RUN_TYPES
-
-        analysis = (r.get("analysis_summary") or "")[:60]
-
-        if mode == "hybrid":
-            pace_speed = (
-                _format_pace(r["avg_pace_s_per_km"])
-                if is_run
-                else _format_speed(r["avg_pace_s_per_km"])
-            )
-            lines.append(
-                f"{r['date'] or '?':10s} | "
-                f"{sport[:10]:10s} | "
-                f"{(r['name'] or '')[:30]:30s} | "
-                f"{dist_km:8.2f} | "
-                f"{_format_duration(r['moving_time_s']):8s} | "
-                f"{pace_speed:11s} | "
-                f"{r['avg_hr'] or '—':6} | "
-                f"{r['max_hr'] or '—':6} | "
-                f"{r['avg_cadence'] or '—':7} | "
-                f"{r['elevation_gain_m'] or '—':7} | "
-                f"{r['suffer_score'] or '—':6} | "
-                f"{r['perceived_exertion'] or '—':3} | "
-                f"{analysis}"
-            )
-        elif mode == "cycling":
-            lines.append(
-                f"{r['date'] or '?':10s} | "
-                f"{(r['name'] or '')[:30]:30s} | "
-                f"{dist_km:8.2f} | "
-                f"{_format_duration(r['moving_time_s']):8s} | "
-                f"{_format_speed(r['avg_pace_s_per_km']):8s} | "
-                f"{r['avg_hr'] or '—':6} | "
-                f"{r['max_hr'] or '—':6} | "
-                f"{r['avg_cadence'] or '—':12} | "
-                f"{r['elevation_gain_m'] or '—':7} | "
-                f"{r['suffer_score'] or '—':6} | "
-                f"{r['perceived_exertion'] or '—':3} | "
-                f"{analysis}"
-            )
-        else:  # running
-            lines.append(
-                f"{r['date'] or '?':10s} | "
-                f"{(r['name'] or '')[:30]:30s} | "
-                f"{dist_km:8.2f} | "
-                f"{_format_duration(r['moving_time_s']):8s} | "
-                f"{_format_pace(r['avg_pace_s_per_km']):8s} | "
-                f"{r['avg_hr'] or '—':6} | "
-                f"{r['max_hr'] or '—':6} | "
-                f"{r['avg_cadence'] or '—':12} | "
-                f"{r['elevation_gain_m'] or '—':7} | "
-                f"{r['suffer_score'] or '—':6} | "
-                f"{r['perceived_exertion'] or '—':3} | "
-                f"{analysis}"
-            )
-
-    total_km = sum((r["distance_m"] or 0) / 1000 for r in rows)
-    act_label = "runs" if mode == "running" else "rides" if mode == "cycling" else "activities"
+        lines.append(cfg.format_log_row(r))
     lines.append(sep)
-    lines.append(f"Total: {len(rows)} {act_label}, {total_km:.1f} km")
+    lines.append(cfg.format_log_total(rows))
     return "\n".join(lines)
 
 
@@ -327,19 +111,15 @@ def build_initial_history(
     history lives. It may be gracefully truncated by small-context models, but
     only the oldest runs are dropped — recent ones are protected by the system prompt.
     """
+    cfg = MODES.get(mode, MODES["running"])
     training_log = build_training_log(activities, mode)
-    act_label = (
-        "runs"
-        if mode == "running"
-        else "rides" if mode == "cycling" else "sessions" if mode == "lifting" else "activities"
-    )
     log_message = f"Here is the athlete's complete training log:\n\n```\n{training_log}\n```"
     return [
         {"role": "user", "content": log_message},
         {
             "role": "assistant",
             "content": (
-                f"Got it — I have your full training log loaded ({len(activities)} {act_label}). "
+                f"Got it — I have your full training log loaded ({len(activities)} {cfg.activity_label}). "
                 "What would you like to discuss?"
             ),
         },

@@ -106,18 +106,20 @@ const TABS: { id: Tab; label: string }[] = [
 ];
 
 const VALID_TABS = new Set<string>([...TABS.map((t) => t.id), "settings"]);
-const HIDDEN_IN_LIFTING = new Set<Tab>(["charts", "calendar"]);
 
 function tabFromHash(): Tab {
   const hash = location.hash.slice(1);
   return VALID_TABS.has(hash) ? (hash as Tab) : "chat";
 }
 
+type ModeMeta = { activity_label: string; hidden_tabs: string[]; has_analysis: boolean };
+
 export default function App() {
   const [tab, setTab] = useState<Tab>(tabFromHash);
   const [mode, setMode] = useState<Mode>("running");
   const [modeLoaded, setModeLoaded] = useState(false);
   const [supportsAttachments, setSupportsAttachments] = useState(false);
+  const [modeMeta, setModeMeta] = useState<Record<string, ModeMeta>>({});
 
   useEffect(() => {
     const onHashChange = () => setTab(tabFromHash());
@@ -125,12 +127,15 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
-  // Load persisted mode from server on mount
+  // Load persisted mode and mode metadata from server on mount
   useEffect(() => {
-    fetch("/api/settings")
-      .then((r) => r.json())
-      .then((data: { mode: Mode }) => {
-        if (data.mode) setMode(data.mode);
+    Promise.all([
+      fetch("/api/settings").then((r) => r.json()),
+      fetch("/api/modes").then((r) => r.json()),
+    ])
+      .then(([settings, modes]: [{ mode: Mode }, Record<string, ModeMeta>]) => {
+        if (settings.mode) setMode(settings.mode);
+        setModeMeta(modes);
       })
       .catch(() => {})
       .finally(() => setModeLoaded(true));
@@ -154,9 +159,11 @@ export default function App() {
 
   const theme = THEMES[mode];
 
+  const hiddenTabs = new Set<Tab>((modeMeta[mode]?.hidden_tabs ?? []) as Tab[]);
+
   // Redirect away from tabs that aren't available in the current mode
   useEffect(() => {
-    if (mode === "lifting" && HIDDEN_IN_LIFTING.has(tab)) {
+    if (hiddenTabs.has(tab)) {
       navigate("chat");
     }
   }, [mode]);
@@ -169,7 +176,7 @@ export default function App() {
     );
   }
 
-  const visibleTabs = TABS.filter((t) => mode !== "lifting" || !HIDDEN_IN_LIFTING.has(t.id));
+  const visibleTabs = TABS.filter((t) => !hiddenTabs.has(t.id as Tab));
   const allNavTabs: { id: Tab; label: string }[] = [...visibleTabs, { id: "settings", label: "Settings" }];
   const mobileNavTabs = allNavTabs.filter((t) => t.id !== "calendar");
 
