@@ -20,6 +20,7 @@ def test_get_default_fields_running_keys():
         "gear",
         "nutrition_snacks",
         "other_notes",
+        "coach_voice",
     }
 
 
@@ -34,6 +35,7 @@ def test_get_default_fields_cycling_keys():
         "gear",
         "nutrition_snacks",
         "other_notes",
+        "coach_voice",
     }
 
 
@@ -70,6 +72,7 @@ def test_get_default_fields_lifting_keys():
         "equipment",
         "nutrition_snacks",
         "other_notes",
+        "coach_voice",
     }
 
 

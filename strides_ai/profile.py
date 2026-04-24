@@ -32,6 +32,7 @@ RUNNING_DEFAULTS: dict = {
     "gear": "",
     "nutrition_snacks": [],
     "other_notes": "",
+    "coach_voice": "",
 }
 
 CYCLING_DEFAULTS: dict = {
@@ -60,6 +61,7 @@ CYCLING_DEFAULTS: dict = {
     "gear": "",
     "nutrition_snacks": [],
     "other_notes": "",
+    "coach_voice": "",
 }
 
 HYBRID_DEFAULTS: dict = {
@@ -98,6 +100,7 @@ HYBRID_DEFAULTS: dict = {
     "gear": "",
     "nutrition_snacks": [],
     "other_notes": "",
+    "coach_voice": "",
 }
 
 LIFTING_DEFAULTS: dict = {
@@ -126,6 +129,7 @@ LIFTING_DEFAULTS: dict = {
     "equipment": "",  # home gym, commercial gym, etc.
     "nutrition_snacks": [],
     "other_notes": "",
+    "coach_voice": "",
 }
 
 _DEFAULTS = {

@@ -11,15 +11,62 @@ RECALL_MESSAGES = 40
 # The full training log is seeded once in conversation history via build_initial_history.
 RECENT_ACTIVITIES_IN_SYSTEM = 30
 
+VOICE_INSTRUCTIONS: dict[str, str] = {
+    "supportive": (
+        "## Coaching Voice\n"
+        "Communicate with warmth and encouragement. Celebrate every win, no matter how small. "
+        "Emphasise progress over performance. Frame setbacks constructively and use inclusive, "
+        "affirming language throughout."
+    ),
+    "motivational": (
+        "## Coaching Voice\n"
+        "Be high-energy and inspirational. Push the athlete toward their goals with genuine excitement. "
+        "Use strong, vivid language. Remind them why they started and what they're capable of. "
+        "Keep the energy up throughout every response."
+    ),
+    "technical": (
+        "## Coaching Voice\n"
+        "Be analytical and data-driven. Lean into metrics, zones, ratios, and trends. "
+        "Minimise small talk — get to the numbers quickly. Use precise terminology "
+        "(e.g. cardiac decoupling, lactate threshold, progressive overload). "
+        "Support every recommendation with data from the training log."
+    ),
+    "aggressive": (
+        "## Coaching Voice\n"
+        "Be direct and demanding. No sugarcoating — if the data shows underperformance, say so. "
+        "Push harder. Keep responses concise and action-oriented. "
+        "Focus on results, not feelings."
+    ),
+    "beginner_friendly": (
+        "## Coaching Voice\n"
+        "Be patient and educational. Avoid jargon — explain any technical terms you use. "
+        "Break advice into simple, concrete steps. Reassure the athlete that progress takes time "
+        "and that consistency matters more than perfection. Prioritise clarity over brevity."
+    ),
+    "conversational": (
+        "## Coaching Voice\n"
+        "Be casual and relaxed, like talking to a training buddy. Keep formality low. "
+        "Use natural, colloquial language and feel free to be a bit chatty. "
+        "Make the athlete feel like they're having a conversation, not receiving a lecture."
+    ),
+}
+
 
 def build_system(
     profile: str,
     memories: list[dict],
     mode: str = "running",
     activities: list | None = None,
+    coach_voice: str = "",
 ) -> str:
     cfg = MODES.get(mode, MODES["running"])
     prompt = cfg.system_prompt
+
+    voice_block = VOICE_INSTRUCTIONS.get(coach_voice, "")
+    if not voice_block and coach_voice:
+        voice_block = f"## Coaching Voice\n{coach_voice}"
+    if voice_block:
+        prompt += f"\n\n{voice_block}"
 
     now = datetime.now().astimezone()
     day_str = now.strftime("%A, %B %-d, %Y")
