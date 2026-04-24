@@ -66,6 +66,16 @@ const MODE_CARDS: {
 
 type SyncState = "idle" | "syncing" | "done" | "error";
 
+const VOICE_OPTIONS: { value: string; label: string; description: string }[] = [
+  { value: "", label: "Default", description: "Uses the mode's standard coaching style" },
+  { value: "supportive", label: "Supportive", description: "Warm, encouraging, celebrates every win" },
+  { value: "motivational", label: "Motivational", description: "High-energy, inspirational, pushes toward goals" },
+  { value: "technical", label: "Technical", description: "Analytical, data-driven, metrics-focused" },
+  { value: "aggressive", label: "Aggressive", description: "Direct, demanding, no sugarcoating" },
+  { value: "beginner_friendly", label: "Beginner Friendly", description: "Patient, educational, jargon-free" },
+  { value: "conversational", label: "Conversational", description: "Casual, relaxed, like a training buddy" },
+];
+
 export default function Settings({ mode, setMode, theme, onProviderChanged }: Props) {
   const [syncState, setSyncState] = useState<SyncState>("idle");
   const [syncCount, setSyncCount] = useState<number | null>(null);
@@ -75,6 +85,20 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
   const [switchingProvider, setSwitchingProvider] = useState(false);
   const [providerModels, setProviderModels] = useState<Record<string, ProviderModel[]>>({});
   const [changingModel, setChangingModel] = useState(false);
+  const [voiceByMode, setVoiceByMode] = useState<Record<string, string>>({});
+  const [voiceSaving, setVoiceSaving] = useState(false);
+
+  useEffect(() => {
+    const modes: Mode[] = ["running", "cycling", "hybrid", "lifting"];
+    Promise.all(
+      modes.map((m) =>
+        fetch(`/api/profile?mode=${m}`)
+          .then((r) => r.json())
+          .then(({ fields }) => [m, (fields?.coach_voice as string) ?? ""] as [string, string])
+          .catch(() => [m, ""] as [string, string])
+      )
+    ).then((entries) => setVoiceByMode(Object.fromEntries(entries)));
+  }, []);
 
   useEffect(() => {
     fetch("/api/providers")
@@ -95,6 +119,21 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
       })
       .catch(() => {});
   }, []);
+
+  async function handleVoiceChange(targetMode: Mode, voice: string) {
+    setVoiceSaving(true);
+    setVoiceByMode((prev) => ({ ...prev, [targetMode]: voice }));
+    try {
+      const { fields } = await fetch(`/api/profile?mode=${targetMode}`).then((r) => r.json());
+      await fetch(`/api/profile?mode=${targetMode}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fields: { ...fields, coach_voice: voice } }),
+      });
+    } finally {
+      setVoiceSaving(false);
+    }
+  }
 
   async function handleModeChange(newMode: Mode) {
     try {
@@ -210,6 +249,37 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
                   </button>
                 );
               })}
+            </div>
+          </section>
+
+          <section>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">
+              Coach Voice
+            </h3>
+            <p className="text-xs text-gray-600 mb-3">
+              Adjust how your coach communicates. Each mode can have a different voice.
+            </p>
+            <div className="space-y-3">
+              {MODE_CARDS.map((card) => (
+                <div key={card.id} className="p-4 rounded-lg border border-gray-700 bg-gray-900">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className={`w-2 h-2 rounded-full shrink-0 ${card.dotClass}`} />
+                    <span className={`text-xs font-medium ${card.accentClass}`}>{card.label}</span>
+                  </div>
+                  <select
+                    value={voiceByMode[card.id] ?? ""}
+                    onChange={(e) => handleVoiceChange(card.id, e.target.value)}
+                    disabled={voiceSaving}
+                    className="w-full bg-gray-800 text-gray-300 text-xs rounded px-2 py-1.5 border border-gray-700 focus:outline-none focus:border-gray-500 disabled:opacity-50"
+                  >
+                    {VOICE_OPTIONS.map((v) => (
+                      <option key={v.value} value={v.value}>
+                        {v.label}{v.description ? ` — ${v.description}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ))}
             </div>
           </section>
 

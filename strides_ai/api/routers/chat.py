@@ -88,12 +88,14 @@ async def chat(
     memories = mem_crud.get_all(session)
     profile_fields = prof_crud.get_fields(session, mode)
     profile = profile_to_text(profile_fields, mode)
+    coach_voice = (profile_fields or {}).get("coach_voice", "")
     activities = [r.model_dump() for r in act_crud.get_for_mode(session, mode)]
     system = build_system(
         profile,
         [r.model_dump() for r in memories],
         mode=mode,
         activities=activities,
+        coach_voice=coach_voice,
     )
 
     conv_crud.save(session, "user", saved_message, mode=mode)
