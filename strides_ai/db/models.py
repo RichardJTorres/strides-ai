@@ -146,3 +146,24 @@ class TrainingPlan(SQLModel, table=True):
         default=None,
         sa_column=Column(sa.Text, server_default=sa.text("datetime('now')")),
     )
+
+
+class ExerciseTemplate(SQLModel, table=True):
+    """HEVY exercise template metadata (cached locally).
+
+    Workouts only carry ``exercise_template_id``; the muscle group lives on
+    the template. Refreshable via /api/hevy/templates/sync.
+    """
+
+    __tablename__ = "exercise_templates"
+
+    id: str = Field(primary_key=True)  # HEVY template UUID/hex string
+    title: Optional[str] = None
+    type: Optional[str] = None
+    primary_muscle_group: Optional[str] = None
+    secondary_muscle_groups: Optional[str] = None  # JSON-encoded list
+    is_custom: Optional[int] = None
+    updated_at: Optional[str] = Field(
+        default=None,
+        sa_column=Column(sa.Text, server_default=sa.text("datetime('now')")),
+    )

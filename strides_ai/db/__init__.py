@@ -13,6 +13,7 @@ from .models import (
     Activity,
     CalendarPref,
     Conversation,
+    ExerciseTemplate,
     Memory,
     Profile,
     Setting,
@@ -24,6 +25,7 @@ from .models import (
 from . import activities as _act
 from . import calendar as _cal
 from . import conversations as _conv
+from . import exercise_templates as _tmpl
 from . import memories as _mem
 from . import profiles as _prof
 from . import settings as _sett
@@ -44,6 +46,7 @@ __all__ = [
     "Activity",
     "CalendarPref",
     "Conversation",
+    "ExerciseTemplate",
     "Memory",
     "Profile",
     "Setting",
@@ -81,6 +84,9 @@ __all__ = [
     "delete_planned_workout",
     "save_workout_nutrition",
     "get_upcoming_planned_workouts",
+    "upsert_exercise_template",
+    "get_exercise_template_muscle_map",
+    "get_exercise_template_count",
 ]
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -275,3 +281,22 @@ def save_workout_nutrition(date: str, nutrition: dict) -> None:
 def get_upcoming_planned_workouts(days: int = 14) -> list[dict]:
     with _session() as s:
         return [r.model_dump() for r in _cal.get_upcoming_workouts(s, days)]
+
+
+# ── Exercise templates ────────────────────────────────────────────────────────
+
+
+def upsert_exercise_template(template: dict) -> None:
+    with _session() as s:
+        _tmpl.upsert(s, template)
+        s.commit()
+
+
+def get_exercise_template_muscle_map() -> dict[str, str]:
+    with _session() as s:
+        return _tmpl.get_muscle_map(s)
+
+
+def get_exercise_template_count() -> int:
+    with _session() as s:
+        return _tmpl.count(s)
