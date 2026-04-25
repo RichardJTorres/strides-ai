@@ -84,6 +84,8 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
   const [syncCount, setSyncCount] = useState<number | null>(null);
   const [hevySyncState, setHevySyncState] = useState<SyncState>("idle");
   const [hevySyncCount, setHevySyncCount] = useState<number | null>(null);
+  const [templatesSyncState, setTemplatesSyncState] = useState<SyncState>("idle");
+  const [templatesSynced, setTemplatesSynced] = useState<number | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [switchingProvider, setSwitchingProvider] = useState(false);
   const [providerModels, setProviderModels] = useState<Record<string, ProviderModel[]>>({});
@@ -200,6 +202,20 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
       setHevySyncState("done");
     } catch {
       setHevySyncState("error");
+    }
+  }
+
+  async function handleTemplatesSync() {
+    setTemplatesSyncState("syncing");
+    setTemplatesSynced(null);
+    try {
+      const res = await fetch("/api/hevy/templates/sync", { method: "POST" });
+      if (!res.ok) throw new Error();
+      const { templates_synced } = await res.json();
+      setTemplatesSynced(templates_synced);
+      setTemplatesSyncState("done");
+    } catch {
+      setTemplatesSyncState("error");
     }
   }
 
@@ -444,6 +460,34 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
               {hevySyncState === "error" && (
                 <span className="text-xs text-red-400">Sync failed. Check your HEVY_API_KEY.</span>
               )}
+            </div>
+            <div className="mt-4 pt-4 border-t border-gray-800">
+              <p className="text-xs text-gray-600 mb-2">
+                Refresh the cached exercise-template catalogue (used by the Working Sets by Muscle
+                Group chart). Re-run if you add custom exercises in HEVY or notice "Unknown" muscle
+                groups.
+              </p>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleTemplatesSync}
+                  disabled={templatesSyncState === "syncing"}
+                  className="px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed bg-gray-700 hover:bg-gray-600 text-white"
+                >
+                  {templatesSyncState === "syncing" ? "Refreshing…" : "Refresh Templates"}
+                </button>
+                {templatesSyncState === "done" && (
+                  <span className="text-xs text-gray-400">
+                    {templatesSynced === 0
+                      ? "No templates returned."
+                      : `${templatesSynced} template${templatesSynced === 1 ? "" : "s"} cached.`}
+                  </span>
+                )}
+                {templatesSyncState === "error" && (
+                  <span className="text-xs text-red-400">
+                    Refresh failed. Check your HEVY_API_KEY.
+                  </span>
+                )}
+              </div>
             </div>
           </section>
         </div>

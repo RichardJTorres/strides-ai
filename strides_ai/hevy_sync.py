@@ -12,6 +12,7 @@ from .hevy_analysis import analyze_hevy_workout
 
 HEVY_API_BASE = "https://api.hevyapp.com"
 PAGE_SIZE = 10  # HEVY max page size for workouts
+TEMPLATE_PAGE_SIZE = 100  # HEVY max page size for /v1/exercise_templates
 
 log = logging.getLogger(__name__)
 
@@ -90,6 +91,10 @@ def sync_hevy_workouts(full: bool = False) -> int:
     If *full* is False (default), uses /v1/workouts/events?since=<last_sync>
     for an incremental update. If *full* is True, pages through all workouts.
 
+    Also seeds the exercise-template cache on first sync (when the local
+    table is empty), so the muscle-group chart can resolve template ids
+    without requiring the user to click the manual refresh button first.
+
     Returns the number of new/updated workouts written.
     """
     settings = get_settings()
@@ -99,12 +104,63 @@ def sync_hevy_workouts(full: bool = False) -> int:
     headers = _get_headers()
     count = 0
 
+    if db.get_exercise_template_count() == 0:
+        try:
+            sync_exercise_templates(headers=headers)
+        except Exception as exc:
+            log.warning("initial exercise-template sync failed: %s", exc)
+
     since = db.get_latest_hevy_date()
     if not full and since:
         count = _sync_events(headers, since)
     else:
         count = _sync_full(headers)
 
+    return count
+
+
+def sync_exercise_templates(headers: dict | None = None) -> int:
+    """Page through /v1/exercise_templates and cache each row locally.
+
+    Re-running upserts so renamed templates or changed muscle groups are
+    refreshed. Custom templates added by the user in HEVY are picked up
+    automatically since the endpoint returns them too.
+
+    Returns the number of templates written.
+    """
+    settings = get_settings()
+    if not settings.hevy_api_key:
+        raise ValueError("HEVY_API_KEY not configured")
+
+    if headers is None:
+        headers = _get_headers()
+
+    count = 0
+    page = 1
+    with httpx.Client(timeout=30) as client:
+        while True:
+            resp = client.get(
+                f"{HEVY_API_BASE}/v1/exercise_templates",
+                headers=headers,
+                params={"page": page, "pageSize": TEMPLATE_PAGE_SIZE},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            templates = data.get("exercise_templates", [])
+            if not templates:
+                break
+
+            for t in templates:
+                if not t.get("id"):
+                    continue
+                db.upsert_exercise_template(t)
+                count += 1
+
+            if page >= data.get("page_count", 1):
+                break
+            page += 1
+
+    log.info("synced %d HEVY exercise templates", count)
     return count
 
 

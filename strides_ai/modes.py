@@ -335,7 +335,7 @@ MODES: dict[str, ModeConfig] = {
         sport_types=LIFT_TYPES,
         system_prompt=LIFTING_SYSTEM_PROMPT,
         has_analysis=False,
-        hidden_tabs=frozenset({"charts", "calendar"}),
+        hidden_tabs=frozenset({"calendar"}),
         activity_label="sessions",
         log_header=(
             "DATE       | NAME                           | DURATION | SETS | VOLUME(kg) | RPE | ANALYSIS"

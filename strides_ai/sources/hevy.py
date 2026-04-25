@@ -4,7 +4,7 @@ import json
 
 from ..config import get_settings
 from ..hevy_analysis import LIFTING_DEEP_DIVE_SYSTEM_PROMPT
-from ..hevy_sync import sync_hevy_workouts
+from ..hevy_sync import sync_exercise_templates, sync_hevy_workouts
 from .base import ConfigurationError, NoDataError
 
 
@@ -44,3 +44,9 @@ class HevySource:
         if not settings.hevy_api_key:
             raise ConfigurationError("HEVY_API_KEY not configured")
         return sync_hevy_workouts(full=full)
+
+    def sync_templates(self) -> int:
+        settings = get_settings()
+        if not settings.hevy_api_key:
+            raise ConfigurationError("HEVY_API_KEY not configured")
+        return sync_exercise_templates()
