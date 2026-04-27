@@ -86,19 +86,29 @@ def provider_statuses() -> list[dict]:
     ]
 
 
-def init_backend(app: FastAPI, mode: str | None = None, provider: str | None = None) -> None:
-    """Called at server startup (and on mode/profile/provider changes) to build the LLM backend."""
+def init_backend(
+    app: FastAPI,
+    mode: str | None = None,
+    provider: str | None = None,
+    units: str | None = None,
+) -> None:
+    """Called at server startup (and on mode/provider/units changes) to build the LLM backend."""
     if mode is not None:
         app.state.mode = mode
     if provider is not None:
         app.state.provider = provider
+    if units is not None:
+        app.state.units = units
     current_mode = getattr(app.state, "mode", "running")
+    current_units = getattr(app.state, "units", None) or db.get_setting("units", "metric")
     settings = get_settings()
     current_provider = (getattr(app.state, "provider", None) or settings.provider).lower()
 
     activities = db.get_activities_for_mode(current_mode)
     prior_messages = db.get_recent_messages(RECALL_MESSAGES, mode=current_mode)
-    initial_history = build_initial_history(activities, prior_messages, mode=current_mode)
+    initial_history = build_initial_history(
+        activities, prior_messages, mode=current_mode, units=current_units
+    )
 
     if current_provider == "ollama":
         available = get_provider_models("ollama")

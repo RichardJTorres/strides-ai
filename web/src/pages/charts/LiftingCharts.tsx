@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ThemeConfig } from "../../App";
+import { useUnits } from "../../UnitsContext";
+import { weightUnitLabel } from "../../units";
 import FilterBar from "../../charts/FilterBar";
 import StackedBarCard, { type StackedCategory } from "../../charts/StackedBarCard";
 import TimeSeriesLineCard, { type SeriesSpec } from "../../charts/TimeSeriesLineCard";
@@ -68,6 +70,8 @@ function pivotOneRm(series: Record<string, OneRMPoint[]>): Record<string, unknow
 }
 
 export default function LiftingCharts({ theme }: Props) {
+  const { units } = useUnits();
+  const wLabel = weightUnitLabel(units);
   const [data, setData] = useState<LiftingChartData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -91,7 +95,7 @@ export default function LiftingCharts({ theme }: Props) {
         setError(e.message);
         setLoading(false);
       });
-  }, []);
+  }, [units]);
 
   const range = useMemo((): DateRange => {
     if (preset === "custom") return { since: customSince || null, until: customUntil || null };
@@ -199,9 +203,9 @@ export default function LiftingCharts({ theme }: Props) {
             <WeeklyBarCard
               title="Weekly Training Volume"
               data={filtered.weekly_volume}
-              unitLabel="kg"
+              unitLabel={wLabel}
               valueLabel="Volume"
-              formatValue={(n) => `${n.toLocaleString(undefined, { maximumFractionDigits: 0 })} kg`}
+              formatValue={(n) => `${n.toLocaleString(undefined, { maximumFractionDigits: 0 })} ${wLabel}`}
             />
 
             {filtered.one_rm_progression.exercises.length > 0 ? (
@@ -214,8 +218,8 @@ export default function LiftingCharts({ theme }: Props) {
                 yAxes={[
                   {
                     id: "y",
-                    tickFormatter: (v) => `${v}kg`,
-                    label: "kg",
+                    tickFormatter: (v) => `${v}${wLabel}`,
+                    label: wLabel,
                   },
                 ]}
               />

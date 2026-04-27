@@ -23,6 +23,7 @@ from datetime import date, timedelta
 from typing import Iterator
 
 from .hevy_analysis import estimate_1rm
+from .units import KG_TO_LB
 
 log = logging.getLogger(__name__)
 
@@ -112,13 +113,19 @@ def _rolling_avg(values: list[float], window: int = 4) -> list[float]:
 # ── Weekly volume ─────────────────────────────────────────────────────────────
 
 
-def compute_weekly_volume(activities: list[dict]) -> list[dict]:
-    """Sum total_volume_kg per ISO week with 4-week trailing rolling average."""
+def compute_weekly_volume(activities: list[dict], units: str = "metric") -> list[dict]:
+    """Sum total_volume_kg per ISO week with 4-week trailing rolling average.
+
+    Values are converted to lbs when ``units == "imperial"``.
+    """
+    factor = KG_TO_LB if units == "imperial" else 1.0
     weekly: dict[date, float] = defaultdict(float)
     for act in activities:
         if not act.get("date") or not act.get("total_volume_kg"):
             continue
-        weekly[_week_start(date.fromisoformat(act["date"]))] += float(act["total_volume_kg"])
+        weekly[_week_start(date.fromisoformat(act["date"]))] += (
+            float(act["total_volume_kg"]) * factor
+        )
 
     if not weekly:
         return []
@@ -174,15 +181,20 @@ def compute_weekly_sessions(activities: list[dict]) -> list[dict]:
 # ── 1RM progression ───────────────────────────────────────────────────────────
 
 
-def compute_one_rm_progression(activities: list[dict], top_n: int = 6) -> dict:
+def compute_one_rm_progression(
+    activities: list[dict], top_n: int = 6, units: str = "metric"
+) -> dict:
     """Per-exercise estimated 1RM time series.
 
     Returns ``{"series": {exercise_title: [{date, one_rm_kg}, ...]}, "exercises": [titles]}``.
+    The point key stays ``one_rm_kg`` for backward compatibility with the existing
+    test suite; values are converted to lbs when ``units == "imperial"``.
 
     ``top_n`` keeps the exercises with the most working sets across the dataset
     so the chart auto-surfaces the lifts the athlete actually trains. Sets with
     reps > 12 are dropped by ``estimate_1rm``.
     """
+    factor = KG_TO_LB if units == "imperial" else 1.0
     set_counts: Counter[str] = Counter()
     daily_max: dict[str, dict[date, float]] = defaultdict(dict)
 
@@ -209,7 +221,7 @@ def compute_one_rm_progression(activities: list[dict], top_n: int = 6) -> dict:
     series: dict[str, list[dict]] = {}
     for title in top_titles:
         points = [
-            {"date": d.isoformat(), "one_rm_kg": round(v, 1)}
+            {"date": d.isoformat(), "one_rm_kg": round(v * factor, 1)}
             for d, v in sorted(daily_max[title].items())
         ]
         if points:
@@ -306,12 +318,14 @@ def compute_rpe_trend(activities: list[dict]) -> list[dict]:
 def get_chart_data(
     activities: list[dict],
     template_muscle_map: dict[str, str] | None = None,
+    units: str = "metric",
 ) -> dict:
     acts = [dict(a) for a in activities]
     return {
-        "weekly_volume": compute_weekly_volume(acts),
+        "units": units,
+        "weekly_volume": compute_weekly_volume(acts, units),
         "weekly_sessions": compute_weekly_sessions(acts),
-        "one_rm_progression": compute_one_rm_progression(acts),
+        "one_rm_progression": compute_one_rm_progression(acts, units=units),
         "muscle_group_sets": compute_muscle_group_sets_per_week(acts, template_muscle_map),
         "rpe_trend": compute_rpe_trend(acts),
     }

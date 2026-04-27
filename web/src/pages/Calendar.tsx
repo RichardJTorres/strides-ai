@@ -1,4 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
+import { useUnits } from "../UnitsContext";
+import {
+  distUnitLabel,
+  elevUnitLabel,
+  formatPace,
+  imperialInputToKm,
+  imperialInputToM,
+  kmToDistance,
+  kmToUserUnit,
+  mToElevation,
+  mToUserElevation,
+} from "../units";
 
 const DAYS_OF_WEEK = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -81,16 +93,12 @@ function fmtDuration(seconds: number): string {
   return `${m}m ${s.toString().padStart(2, "0")}s`;
 }
 
-function fmtPace(sPerKm: number | null): string {
-  if (!sPerKm) return "—";
-  const m = Math.floor(sPerKm / 60);
-  const s = Math.round(sPerKm % 60);
-  return `${m}:${s.toString().padStart(2, "0")}/km`;
-}
+// fmtPace removed — use formatPace from "../units" with current units context.
 
 const RUN_TYPES = new Set(["Run", "TrailRun", "VirtualRun"]);
 
 export default function Calendar() {
+  const { units } = useUnits();
   const today = new Date();
   const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
@@ -175,11 +183,14 @@ export default function Calendar() {
 
   const saveWorkout = async () => {
     if (!selectedDate) return;
+    // Form values are entered in the user's preferred unit; convert back to canonical SI.
+    const distInput = form.distance_km ? parseFloat(form.distance_km) : null;
+    const elevInput = form.elevation_m ? parseFloat(form.elevation_m) : null;
     const body = {
       workout_type: form.workout_type,
       description: form.description || null,
-      distance_km: form.distance_km ? parseFloat(form.distance_km) : null,
-      elevation_m: form.elevation_m ? parseFloat(form.elevation_m) : null,
+      distance_km: imperialInputToKm(distInput, units),
+      elevation_m: imperialInputToM(elevInput, units),
       duration_min: form.duration_min ? parseInt(form.duration_min) : null,
       intensity: form.intensity,
     };
@@ -236,8 +247,12 @@ export default function Calendar() {
     setForm(existing ? {
       workout_type: existing.workout_type || "Easy Run",
       description: existing.description || "",
-      distance_km: existing.distance_km?.toString() || "",
-      elevation_m: existing.elevation_m?.toString() || "",
+      distance_km: existing.distance_km != null
+        ? (kmToUserUnit(existing.distance_km, units) ?? 0).toFixed(2)
+        : "",
+      elevation_m: existing.elevation_m != null
+        ? (mToUserElevation(existing.elevation_m, units) ?? 0).toFixed(0)
+        : "",
       duration_min: existing.duration_min?.toString() || "",
       intensity: existing.intensity || "easy",
     } : EMPTY_FORM);
@@ -248,8 +263,12 @@ export default function Calendar() {
     setForm({
       workout_type: existing?.workout_type || "Easy Run",
       description: existing?.description || "",
-      distance_km: existing?.distance_km?.toString() || "",
-      elevation_m: existing?.elevation_m?.toString() || "",
+      distance_km: existing?.distance_km != null
+        ? (kmToUserUnit(existing.distance_km, units) ?? 0).toFixed(2)
+        : "",
+      elevation_m: existing?.elevation_m != null
+        ? (mToUserElevation(existing.elevation_m, units) ?? 0).toFixed(0)
+        : "",
       duration_min: existing?.duration_min?.toString() || "",
       intensity: existing?.intensity || "easy",
     });
@@ -402,6 +421,8 @@ export default function Calendar() {
                   (s, a) => s + (a.distance_m ?? 0) / 1000, 0
                 );
               }, 0);
+              const plannedDisplay = kmToDistance(plannedKm, units) ?? 0;
+              const actualDisplay = kmToDistance(actualKm, units) ?? 0;
 
               return (
                 <div key={wi} className="flex gap-1 mb-3">
@@ -439,13 +460,17 @@ export default function Calendar() {
                           <div className={`text-xs px-1 py-0.5 rounded border truncate mb-0.5 ${WORKOUT_COLORS[workout.workout_type] ?? "bg-zinc-700/50 text-zinc-400 border-zinc-600/30"}`}>
                             {workout.workout_type}
                             {workout.distance_km && (
-                              <span className="ml-1 opacity-70">{workout.distance_km}k</span>
+                              <span className="ml-1 opacity-70">
+                                {(kmToDistance(workout.distance_km, units) ?? 0).toFixed(1)}
+                                {distUnitLabel(units) === "mi" ? "mi" : "k"}
+                              </span>
                             )}
                           </div>
                         )}
                         {dayActivities.map(a => (
                           <div key={a.id} className="text-xs px-1 py-0.5 rounded bg-zinc-600/40 text-zinc-300 border border-zinc-600/40 truncate mb-0.5">
-                            ✓ {((a.distance_m ?? 0) / 1000).toFixed(1)}k {a.sport_type}
+                            ✓ {((kmToDistance((a.distance_m ?? 0) / 1000, units)) ?? 0).toFixed(1)}
+                            {distUnitLabel(units) === "mi" ? "mi" : "k"} {a.sport_type}
                           </div>
                         ))}
                       </div>
@@ -457,16 +482,16 @@ export default function Calendar() {
                     <div>
                       <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Planned</div>
                       <div className="text-sm text-zinc-300 font-semibold">
-                        {plannedKm > 0 ? `${plannedKm.toFixed(1)}` : "—"}
+                        {plannedKm > 0 ? `${plannedDisplay.toFixed(1)}` : "—"}
                       </div>
-                      {plannedKm > 0 && <div className="text-[10px] text-zinc-500">km</div>}
+                      {plannedKm > 0 && <div className="text-[10px] text-zinc-500">{distUnitLabel(units)}</div>}
                     </div>
                     <div>
                       <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Actual</div>
                       <div className={`text-sm font-semibold ${actualKm > 0 ? "text-green-400" : "text-zinc-600"}`}>
-                        {actualKm > 0 ? `${actualKm.toFixed(1)}` : "—"}
+                        {actualKm > 0 ? `${actualDisplay.toFixed(1)}` : "—"}
                       </div>
-                      {actualKm > 0 && <div className="text-[10px] text-zinc-500">km</div>}
+                      {actualKm > 0 && <div className="text-[10px] text-zinc-500">{distUnitLabel(units)}</div>}
                     </div>
                   </div>
                 </div>
@@ -518,7 +543,9 @@ export default function Calendar() {
                         {selectedWorkout.distance_km && (
                           <div className="bg-zinc-800 rounded p-2 text-xs">
                             <div className="text-zinc-500">Distance</div>
-                            <div className="text-zinc-200 font-medium">{selectedWorkout.distance_km} km</div>
+                            <div className="text-zinc-200 font-medium">
+                              {(kmToDistance(selectedWorkout.distance_km, units) ?? 0).toFixed(2)} {distUnitLabel(units)}
+                            </div>
                           </div>
                         )}
                         {selectedWorkout.duration_min && (
@@ -530,7 +557,9 @@ export default function Calendar() {
                         {selectedWorkout.elevation_m && (
                           <div className="bg-zinc-800 rounded p-2 text-xs">
                             <div className="text-zinc-500">Elevation</div>
-                            <div className="text-zinc-200 font-medium">{selectedWorkout.elevation_m} m</div>
+                            <div className="text-zinc-200 font-medium">
+                              {(mToElevation(selectedWorkout.elevation_m, units) ?? 0).toFixed(0)} {elevUnitLabel(units)}
+                            </div>
                           </div>
                         )}
                       </div>
@@ -567,7 +596,7 @@ export default function Calendar() {
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                       <div>
-                        <label className="text-xs text-zinc-500 mb-1 block">Distance (km)</label>
+                        <label className="text-xs text-zinc-500 mb-1 block">Distance ({distUnitLabel(units)})</label>
                         <input
                           type="number" step="0.1" placeholder="—"
                           value={form.distance_km}
@@ -576,7 +605,7 @@ export default function Calendar() {
                         />
                       </div>
                       <div>
-                        <label className="text-xs text-zinc-500 mb-1 block">Elevation (m)</label>
+                        <label className="text-xs text-zinc-500 mb-1 block">Elevation ({elevUnitLabel(units)})</label>
                         <input
                           type="number" placeholder="—"
                           value={form.elevation_m}
@@ -635,7 +664,7 @@ export default function Calendar() {
                 <div className="w-44 flex-shrink-0 space-y-2">
                   <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Strava</h4>
                   {selectedActivities.map(a => {
-                    const distKm = ((a.distance_m ?? 0) / 1000).toFixed(2);
+                    const distDisplay = (kmToDistance((a.distance_m ?? 0) / 1000, units) ?? 0).toFixed(2);
                     const isRun = RUN_TYPES.has(a.sport_type);
                     return (
                       <div key={a.id} className="bg-zinc-800/60 rounded p-2 border border-zinc-700/50 space-y-1">
@@ -643,13 +672,13 @@ export default function Calendar() {
                         <div className="text-xs text-zinc-500">{a.sport_type}</div>
                         <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs">
                           <span className="text-zinc-500">Distance</span>
-                          <span className="text-zinc-300">{distKm} km</span>
+                          <span className="text-zinc-300">{distDisplay} {distUnitLabel(units)}</span>
                           <span className="text-zinc-500">Duration</span>
                           <span className="text-zinc-300">{fmtDuration(a.moving_time_s)}</span>
                           {isRun && a.avg_pace_s_per_km && (
                             <>
                               <span className="text-zinc-500">Pace</span>
-                              <span className="text-zinc-300">{fmtPace(a.avg_pace_s_per_km)}</span>
+                              <span className="text-zinc-300">{formatPace(a.avg_pace_s_per_km, units)}</span>
                             </>
                           )}
                           {a.avg_hr && (
@@ -661,7 +690,9 @@ export default function Calendar() {
                           {a.elevation_gain_m != null && (
                             <>
                               <span className="text-zinc-500">Elevation</span>
-                              <span className="text-zinc-300">{Math.round(a.elevation_gain_m)} m</span>
+                              <span className="text-zinc-300">
+                                {Math.round(mToElevation(a.elevation_gain_m, units) ?? 0)} {elevUnitLabel(units)}
+                              </span>
                             </>
                           )}
                         </div>

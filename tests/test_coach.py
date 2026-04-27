@@ -333,3 +333,74 @@ def test_build_training_log_hybrid_header_has_type_column():
     log = build_training_log([_make_row()], mode="hybrid")
     header = log.split("\n")[0]
     assert "TYPE" in header
+
+
+# ── Units-aware system prompt + log ───────────────────────────────────────────
+
+
+def test_build_system_running_metric_says_min_per_km(tmp_db):
+    result = build_system("", [], mode="running", units="metric")
+    assert "min/km" in result
+    assert "min/mi" not in result
+
+
+def test_build_system_running_imperial_says_min_per_mi(tmp_db):
+    result = build_system("", [], mode="running", units="imperial")
+    assert "min/mi" in result
+    assert "min/km" not in result
+
+
+def test_build_system_cycling_imperial_uses_mph(tmp_db):
+    result = build_system("", [], mode="cycling", units="imperial")
+    assert "mph" in result
+    assert "km/h" not in result
+
+
+def test_build_system_lifting_imperial_uses_lb(tmp_db):
+    result = build_system("", [], mode="lifting", units="imperial")
+    # Persona instruction line + log header row both reference lb
+    assert "lb" in result
+    # The bare token "kg" should not survive in imperial mode
+    # (we check the unit instruction phrase, not arbitrary substrings)
+    assert "Use imperial units (lb)" in result
+
+
+def test_build_system_lifting_metric_uses_kg(tmp_db):
+    result = build_system("", [], mode="lifting", units="metric")
+    assert "Use metric units (kg)" in result
+
+
+def test_build_training_log_imperial_header_swaps_dist_unit():
+    log = build_training_log([_make_row()], mode="running", units="imperial")
+    header = log.split("\n")[0]
+    assert "DIST(mi)" in header
+    assert "ELEV(ft)" in header
+
+
+def test_build_training_log_metric_header_uses_km_m():
+    log = build_training_log([_make_row()], mode="running", units="metric")
+    header = log.split("\n")[0]
+    assert "DIST(km)" in header
+    assert "ELEV(m)" in header
+
+
+def test_build_training_log_lifting_imperial_header():
+    row = {
+        "date": "2025-06-15",
+        "name": "Bench Day",
+        "moving_time_s": 3600,
+        "total_sets": 12,
+        "total_volume_kg": 1000.0,
+        "perceived_exertion": 8.0,
+        "analysis_summary": None,
+    }
+    log = build_training_log([row], mode="lifting", units="imperial")
+    header = log.split("\n")[0]
+    assert "VOLUME(lb)" in header
+
+
+def test_build_training_log_imperial_total_in_miles():
+    rows = [_make_row(distance_m=10_000), _make_row(distance_m=5_000)]
+    log = build_training_log(rows, mode="running", units="imperial")
+    # 15000 m → 9.32 mi (rounded to one decimal in totals = 9.3)
+    assert "9.3 mi" in log

@@ -31,7 +31,8 @@ async def lifespan(app: FastAPI):
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     saved_mode = db.get_setting("mode", "running")
     saved_provider = db.get_setting("provider", get_settings().provider)
-    init_backend(app, mode=saved_mode, provider=saved_provider)
+    saved_units = db.get_setting("units", "metric")
+    init_backend(app, mode=saved_mode, provider=saved_provider, units=saved_units)
     yield
 
 

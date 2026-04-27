@@ -2,6 +2,18 @@ import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Mode, ThemeConfig } from "../App";
+import { useUnits } from "../UnitsContext";
+import {
+  distUnitLabel,
+  elevUnitLabel,
+  formatPace,
+  formatSpeed,
+  kgToWeight,
+  mToDistance,
+  mToElevation,
+  weightUnitLabel,
+  type Units,
+} from "../units";
 
 interface Activity {
   id: number;
@@ -52,18 +64,6 @@ type SortKey =
   | "total_volume_kg" | "total_sets";
 type SortDir = "asc" | "desc";
 
-function formatPace(s: number | null): string {
-  if (!s) return "—";
-  const mins = Math.floor(s / 60);
-  const secs = Math.floor(s % 60);
-  return `${mins}:${String(secs).padStart(2, "0")}/km`;
-}
-
-function formatSpeed(s: number | null): string {
-  if (!s || s <= 0) return "—";
-  return `${(3600 / s).toFixed(1)} km/h`;
-}
-
 function formatDuration(s: number): string {
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
@@ -73,14 +73,21 @@ function formatDuration(s: number): string {
 }
 
 function formatPaceFade(s: number | null): string {
+  // pace_fade_seconds is stored as s/mi by the analysis pipeline (a deferred
+  // unification — see plan). Display in s/mi regardless of preference for now.
   if (s === null) return "—";
   const abs = Math.round(Math.abs(s));
   return s > 0 ? `+${abs}s/mi` : `−${abs}s/mi`;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function formatSet(s: any): string {
-  const weight = s.weight_kg != null ? `${s.weight_kg} kg` : "BW";
+function formatSet(s: any, units: Units): string {
+  const w = s.weight_kg;
+  let weight = "BW";
+  if (w != null) {
+    const v = kgToWeight(w, units) ?? 0;
+    weight = `${v.toFixed(units === "imperial" ? 1 : 0)} ${weightUnitLabel(units)}`;
+  }
   if (s.reps != null) return `${weight} × ${s.reps}`;
   if (s.duration_seconds != null) return `${weight} × ${s.duration_seconds}s`;
   if (s.distance_meters != null) return `${weight} × ${s.distance_meters}m`;
@@ -173,7 +180,7 @@ function HrZonesBar({ a }: { a: Activity }) {
 }
 
 /** Exercise breakdown panel section for lifting workouts. */
-function ExerciseBreakdown({ exercises_json }: { exercises_json: string }) {
+function ExerciseBreakdown({ exercises_json, units }: { exercises_json: string; units: Units }) {
   const [showAll, setShowAll] = useState(false);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -210,11 +217,11 @@ function ExerciseBreakdown({ exercises_json }: { exercises_json: string }) {
               <div className="flex flex-wrap gap-x-3 gap-y-1">
                 {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                 {warmupSets.map((s: any, j: number) => (
-                  <span key={`w${j}`} className="text-xs text-gray-600 italic">{formatSet(s)}</span>
+                  <span key={`w${j}`} className="text-xs text-gray-600 italic">{formatSet(s, units)}</span>
                 ))}
                 {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                 {workingSets.map((s: any, j: number) => (
-                  <span key={j} className="text-xs text-gray-400">{formatSet(s)}</span>
+                  <span key={j} className="text-xs text-gray-400">{formatSet(s, units)}</span>
                 ))}
               </div>
             </div>
@@ -234,6 +241,7 @@ function ExerciseBreakdown({ exercises_json }: { exercises_json: string }) {
 }
 
 export default function Activities({ mode, theme }: Props) {
+  const { units } = useUnits();
   const [activities, setActivities] = useState<Activity[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -387,7 +395,10 @@ export default function Activities({ mode, theme }: Props) {
     }
     if (dateFrom) rows = rows.filter((a) => a.date >= dateFrom);
     if (dateTo)   rows = rows.filter((a) => a.date <= dateTo);
-    if (!isLifting && minDist) rows = rows.filter((a) => (a.distance_m ?? 0) / 1000 >= parseFloat(minDist));
+    if (!isLifting && minDist) {
+      const minMeters = parseFloat(minDist) / (units === "imperial" ? 0.000621371 : 0.001);
+      rows = rows.filter((a) => (a.distance_m ?? 0) >= minMeters);
+    }
 
     return [...rows].sort((a, b) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -435,8 +446,8 @@ export default function Activities({ mode, theme }: Props) {
 
   function paceLabel2(a: Activity): string {
     const isCycle = a.sport_type === "Ride" || a.sport_type === "VirtualRide" || a.sport_type === "GravelRide";
-    if (mode === "cycling" || isCycle) return formatSpeed(a.avg_pace_s_per_km);
-    return formatPace(a.avg_pace_s_per_km);
+    if (mode === "cycling" || isCycle) return formatSpeed(a.avg_pace_s_per_km, units);
+    return formatPace(a.avg_pace_s_per_km, units);
   }
 
   const hasMetrics = selectedActivity && (
@@ -503,7 +514,7 @@ export default function Activities({ mode, theme }: Props) {
         {!isLifting && (
           <input
             type="number"
-            placeholder="Min km"
+            placeholder={`Min ${distUnitLabel(units)}`}
             value={minDist}
             onChange={(e) => setMinDist(e.target.value)}
             min="0"
@@ -533,7 +544,7 @@ export default function Activities({ mode, theme }: Props) {
                   <>
                     <Th label="Date"        col="date" />
                     <Th label="Name"        col="name" />
-                    <Th label="Volume (kg)" col="total_volume_kg"  right />
+                    <Th label={`Volume (${weightUnitLabel(units)})`} col="total_volume_kg"  right />
                     <Th label="Time"        col="moving_time_s"    right />
                     <Th label="Sets"        col="total_sets"       right />
                     <th className="px-4 py-2 font-medium whitespace-nowrap text-right text-gray-400">Exercises</th>
@@ -543,11 +554,11 @@ export default function Activities({ mode, theme }: Props) {
                   <>
                     <Th label="Date"      col="date" />
                     <Th label="Name"      col="name" />
-                    <Th label="Dist (km)" col="distance_m"       right />
+                    <Th label={`Dist (${distUnitLabel(units)})`} col="distance_m"       right />
                     <Th label="Time"      col="moving_time_s"     right />
                     <Th label={paceLabel} col="avg_pace_s_per_km" right />
                     <Th label="Avg HR"    col="avg_hr"            right />
-                    <Th label="Elev (m)"  col="elevation_gain_m"  right />
+                    <Th label={`Elev (${elevUnitLabel(units)})`}  col="elevation_gain_m"  right />
                     <th className="px-4 py-2 font-medium whitespace-nowrap text-right"></th>
                   </>
                 )}
@@ -583,7 +594,9 @@ export default function Activities({ mode, theme }: Props) {
                     {isLifting ? (
                       <>
                         <td className="px-4 py-2 text-right text-gray-100">
-                          {a.total_volume_kg != null ? a.total_volume_kg.toFixed(0) : "—"}
+                          {a.total_volume_kg != null
+                            ? (kgToWeight(a.total_volume_kg, units) ?? 0).toFixed(0)
+                            : "—"}
                         </td>
                         <td className="px-4 py-2 text-right text-gray-400">
                           {formatDuration(a.moving_time_s)}
@@ -598,25 +611,27 @@ export default function Activities({ mode, theme }: Props) {
                     ) : (
                       <>
                         <td className="px-4 py-2 text-right text-gray-100">
-                          {((a.distance_m || 0) / 1000).toFixed(2)}
+                          {(mToDistance(a.distance_m, units) ?? 0).toFixed(2)}
                         </td>
                         <td className="px-4 py-2 text-right text-gray-400">
                           {formatDuration(a.moving_time_s)}
                         </td>
                         <td className="px-4 py-2 text-right text-gray-400">
                           {mode === "cycling"
-                            ? formatSpeed(a.avg_pace_s_per_km)
+                            ? formatSpeed(a.avg_pace_s_per_km, units)
                             : mode === "hybrid"
                             ? (a.sport_type === "Ride" || a.sport_type === "VirtualRide" || a.sport_type === "GravelRide"
-                                ? formatSpeed(a.avg_pace_s_per_km)
-                                : formatPace(a.avg_pace_s_per_km))
-                            : formatPace(a.avg_pace_s_per_km)}
+                                ? formatSpeed(a.avg_pace_s_per_km, units)
+                                : formatPace(a.avg_pace_s_per_km, units))
+                            : formatPace(a.avg_pace_s_per_km, units)}
                         </td>
                         <td className="px-4 py-2 text-right text-gray-400">
                           {a.avg_hr ?? "—"}
                         </td>
                         <td className="px-4 py-2 text-right text-gray-400">
-                          {a.elevation_gain_m != null ? Math.round(a.elevation_gain_m) : "—"}
+                          {a.elevation_gain_m != null
+                            ? Math.round(mToElevation(a.elevation_gain_m, units) ?? 0)
+                            : "—"}
                         </td>
                       </>
                     )}
@@ -685,8 +700,12 @@ export default function Activities({ mode, theme }: Props) {
               {isLifting ? (
                 <div className="grid grid-cols-4 gap-2">
                   <MetricTile
-                    label="Volume (kg)"
-                    value={selectedActivity.total_volume_kg != null ? selectedActivity.total_volume_kg.toFixed(0) : "—"}
+                    label={`Volume (${weightUnitLabel(units)})`}
+                    value={
+                      selectedActivity.total_volume_kg != null
+                        ? (kgToWeight(selectedActivity.total_volume_kg, units) ?? 0).toFixed(0)
+                        : "—"
+                    }
                   />
                   <MetricTile
                     label="Time"
@@ -705,7 +724,7 @@ export default function Activities({ mode, theme }: Props) {
                 <div className="grid grid-cols-4 gap-2">
                   <MetricTile
                     label="Distance"
-                    value={`${((selectedActivity.distance_m || 0) / 1000).toFixed(2)} km`}
+                    value={`${(mToDistance(selectedActivity.distance_m, units) ?? 0).toFixed(2)} ${distUnitLabel(units)}`}
                   />
                   <MetricTile
                     label="Time"
@@ -724,7 +743,7 @@ export default function Activities({ mode, theme }: Props) {
 
               {/* Exercise breakdown — lifting only */}
               {isLifting && selectedActivity.exercises_json && (
-                <ExerciseBreakdown exercises_json={selectedActivity.exercises_json} />
+                <ExerciseBreakdown exercises_json={selectedActivity.exercises_json} units={units} />
               )}
 
               {/* Analysis summary */}
