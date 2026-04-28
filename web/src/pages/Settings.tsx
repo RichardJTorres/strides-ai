@@ -1,5 +1,7 @@
 import { useState, useEffect, type Dispatch, type SetStateAction } from "react";
 import type { Mode, ThemeConfig } from "../App";
+import { useUnits } from "../UnitsContext";
+import type { Units } from "../units";
 
 interface Provider {
   id: string;
@@ -80,6 +82,7 @@ const VOICE_OPTIONS: { value: string; label: string; description: string }[] = [
 const PRESET_VOICE_VALUES = new Set(VOICE_OPTIONS.map((o) => o.value).filter((v) => v !== "custom"));
 
 export default function Settings({ mode, setMode, theme, onProviderChanged }: Props) {
+  const { units, setUnits } = useUnits();
   const [syncState, setSyncState] = useState<SyncState>("idle");
   const [syncCount, setSyncCount] = useState<number | null>(null);
   const [hevySyncState, setHevySyncState] = useState<SyncState>("idle");
@@ -271,6 +274,50 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
                       )}
                     </div>
                     <p className="text-xs text-gray-500 pl-5">{card.description}</p>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          <section>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">
+              Units
+            </h3>
+            <p className="text-xs text-gray-600 mb-3">
+              Switches the entire app between metric (km, kg, m, min/km) and imperial
+              (mi, lb, ft, min/mi). Coaching responses follow the same preference. New activity
+              analyses are written in both units; older summaries keep their original unit.
+            </p>
+            <div className="flex gap-3">
+              {(
+                [
+                  { id: "metric" as Units, label: "Metric", desc: "km · kg · m · min/km · km/h" },
+                  { id: "imperial" as Units, label: "Imperial", desc: "mi · lb · ft · min/mi · mph" },
+                ]
+              ).map((opt) => {
+                const selected = units === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    onClick={() => setUnits(opt.id)}
+                    className={`flex-1 text-left p-4 rounded-lg border-2 transition-colors bg-gray-900 ${
+                      selected ? "border-gray-300" : "border-gray-700 hover:border-gray-500"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span
+                        className={`font-medium text-sm ${
+                          selected ? theme.accentClass : "text-gray-200"
+                        }`}
+                      >
+                        {opt.label}
+                      </span>
+                      {selected && (
+                        <span className={`ml-auto text-xs ${theme.accentClass}`}>Active</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-500">{opt.desc}</p>
                   </button>
                 );
               })}

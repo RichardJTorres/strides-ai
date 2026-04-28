@@ -364,19 +364,27 @@ def build_analysis_summary(metrics: dict) -> str:
             zone_msg = f"Dominant effort Z{dominant[0]} ({dominant[1]:.0f}%)"
         parts.append(zone_msg + ".")
 
-    # Pace fade
+    # Pace fade — emit both unit forms inline so the analysis text reads correctly
+    # whichever units preference is active when the activity is later viewed.
     pf = metrics.get("pace_fade_seconds")
     if pf is not None and abs(pf) > 15:
+        pf_km = pf / 1.60934
         if pf > 0:
-            parts.append(f"Positive pace fade of {pf:.0f}s/mile in final third.")
+            parts.append(f"Positive pace fade of {pf:.0f}s/mi ({pf_km:.0f}s/km) in final third.")
         else:
-            parts.append(f"Negative split — improved {abs(pf):.0f}s/mile in final third.")
+            parts.append(
+                f"Negative split — improved {abs(pf):.0f}s/mi ({abs(pf_km):.0f}s/km) in final third."
+            )
 
-    # Elevation
+    # Elevation — bilingual: ft/mi (stored) and m/km (derived)
     if metrics.get("high_elevation_flag"):
         elev = metrics.get("elevation_per_mile")
         if elev is not None:
-            parts.append(f"Hilly course ({elev:.0f} ft/mile elevation gain).")
+            # ft/mi → m/km: ft × 0.3048 / mile (1.60934 km) = m/km
+            elev_m_per_km = elev * 0.3048 / 1.60934
+            parts.append(
+                f"Hilly course ({elev:.0f} ft/mi · {elev_m_per_km:.0f} m/km elevation gain)."
+            )
 
     # Suffer score mismatch
     if metrics.get("suffer_score_mismatch_flag"):

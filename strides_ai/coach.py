@@ -5,6 +5,7 @@ from datetime import datetime
 
 from . import db
 from .modes import MODES
+from .units import dist_unit_label, llm_unit_instruction, km_to_distance
 
 RECALL_MESSAGES = 40
 # Number of most-recent activities always pinned in the system prompt each turn.
@@ -58,9 +59,13 @@ def build_system(
     mode: str = "running",
     activities: list | None = None,
     coach_voice: str = "",
+    units: str = "metric",
 ) -> str:
     cfg = MODES.get(mode, MODES["running"])
     prompt = cfg.system_prompt
+
+    # Inject the unit instruction dynamically based on the athlete's preference.
+    prompt += f"\n\n{llm_unit_instruction(mode, units)}"
 
     voice_block = VOICE_INSTRUCTIONS.get(coach_voice, "")
     if not voice_block and coach_voice:
@@ -88,14 +93,19 @@ def build_system(
 
     upcoming = db.get_upcoming_planned_workouts()
     if upcoming:
-        header = "Date       | Type             | Distance | Duration | Intensity"
-        sep = "-" * 65
+        dist_label = dist_unit_label(units)
+        header = f"Date       | Type             | Distance     | Duration | Intensity"
+        sep = "-" * 70
         rows = []
         for w in upcoming:
-            dist = f"{w['distance_km']} km" if w.get("distance_km") else "—"
+            if w.get("distance_km"):
+                dist_value = km_to_distance(w["distance_km"], units)
+                dist = f"{dist_value:.2f} {dist_label}" if dist_value is not None else "—"
+            else:
+                dist = "—"
             dur = f"{w['duration_min']} min" if w.get("duration_min") else "—"
             rows.append(
-                f"{w['date']:10s} | {(w['workout_type'] or '')[:16]:16s} | {dist:8s} | {dur:8s} | {w.get('intensity') or '—'}"
+                f"{w['date']:10s} | {(w['workout_type'] or '')[:16]:16s} | {dist:12s} | {dur:8s} | {w.get('intensity') or '—'}"
             )
         prompt += (
             "\n\n## Upcoming Planned Workouts (next 14 days)\n"
@@ -111,6 +121,7 @@ def build_system(
     recent = (activities or [])[:RECENT_ACTIVITIES_IN_SYSTEM]
 
     if cfg.has_analysis and any(a.get("analysis_summary") for a in recent):
+        pace_fade_unit = "sec/mi" if units == "imperial" else "sec/km"
         prompt += (
             "\n\n## Analysis Metrics Guide\n"
             "The ANALYSIS column in the training log contains auto-generated summaries. "
@@ -121,11 +132,11 @@ def build_system(
             "higher = more efficient pace for a given HR\n"
             "- **HR zones**: Z1=recovery, Z2=aerobic base, Z3=tempo, "
             "Z4=threshold, Z5=VO2max/max effort\n"
-            "- **Pace fade**: sec/mile change in final third vs first third; "
+            f"- **Pace fade**: {pace_fade_unit} change in final third vs first third; "
             "positive = slowing (possible fatigue), negative = negative split"
         )
 
-    recent_log = build_training_log(recent, mode)
+    recent_log = build_training_log(recent, mode, units)
     prompt += (
         f"\n\n## Recent Activities (last {RECENT_ACTIVITIES_IN_SYSTEM})\n\n```\n{recent_log}\n```"
     )
@@ -133,21 +144,26 @@ def build_system(
     return prompt
 
 
-def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
+def build_training_log(
+    rows: list[sqlite3.Row], mode: str = "running", units: str = "metric"
+) -> str:
     if not rows:
         return "No activities found."
     cfg = MODES.get(mode, MODES["running"])
     sep = "-" * cfg.log_sep_len
-    lines = [cfg.log_header, sep]
+    lines = [cfg.log_header(units), sep]
     for r in reversed(rows):
-        lines.append(cfg.format_log_row(r))
+        lines.append(cfg.format_log_row(r, units))
     lines.append(sep)
-    lines.append(cfg.format_log_total(rows))
+    lines.append(cfg.format_log_total(rows, units))
     return "\n".join(lines)
 
 
 def build_initial_history(
-    activities: list, prior_messages: list[dict], mode: str = "running"
+    activities: list,
+    prior_messages: list[dict],
+    mode: str = "running",
+    units: str = "metric",
 ) -> list[dict]:
     """
     Seed the backend's conversation history with the full training log (once)
@@ -159,7 +175,7 @@ def build_initial_history(
     only the oldest runs are dropped — recent ones are protected by the system prompt.
     """
     cfg = MODES.get(mode, MODES["running"])
-    training_log = build_training_log(activities, mode)
+    training_log = build_training_log(activities, mode, units)
     log_message = f"Here is the athlete's complete training log:\n\n```\n{training_log}\n```"
     return [
         {"role": "user", "content": log_message},

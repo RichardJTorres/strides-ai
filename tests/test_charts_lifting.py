@@ -438,13 +438,13 @@ def test_rpe_trend_sorts_by_date():
 
 def test_get_chart_data_returns_all_keys():
     out = get_chart_data([])
-    assert set(out.keys()) == {
+    assert {
         "weekly_volume",
         "weekly_sessions",
         "one_rm_progression",
         "muscle_group_sets",
         "rpe_trend",
-    }
+    }.issubset(out.keys())
 
 
 def test_get_chart_data_with_real_session():

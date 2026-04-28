@@ -306,6 +306,10 @@ export default function Profile({ mode, theme }: Props) {
           <p className="text-xs text-gray-500 mt-0.5">
             Loaded fresh every session — tell your coach who you are.
           </p>
+          <p className="text-xs text-gray-600 italic mt-1">
+            Free-text fields (height, weight, weekly volume, etc.) are stored as you typed them —
+            re-enter them if you change your units preference.
+          </p>
         </div>
         <div className="flex items-center gap-3">
           {saved && <span className={`text-sm ${theme.accentClass}`}>Saved!</span>}

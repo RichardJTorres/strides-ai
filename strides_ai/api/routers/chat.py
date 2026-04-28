@@ -19,6 +19,7 @@ from ...db import activities as act_crud
 from ...db import conversations as conv_crud
 from ...db import memories as mem_crud
 from ...db import profiles as prof_crud
+from ...db import settings as settings_crud
 from ...db.engine import get_engine, get_session
 from ...profile import profile_to_text
 from ..deps import get_backend
@@ -90,12 +91,14 @@ async def chat(
     profile = profile_to_text(profile_fields, mode)
     coach_voice = (profile_fields or {}).get("coach_voice", "")
     activities = [r.model_dump() for r in act_crud.get_for_mode(session, mode)]
+    units = settings_crud.get(session, "units", "metric") or "metric"
     system = build_system(
         profile,
         [r.model_dump() for r in memories],
         mode=mode,
         activities=activities,
         coach_voice=coach_voice,
+        units=units,
     )
 
     conv_crud.save(session, "user", saved_message, mode=mode)

@@ -7,6 +7,7 @@ from sqlmodel import Session
 from ...config import VALID_MODES, VALID_PROVIDERS, get_settings
 from ...db import settings as crud
 from ...db.engine import get_session
+from ...units import VALID_UNITS
 from ..deps import get_provider_models, provider_statuses, init_backend
 
 router = APIRouter()
@@ -16,6 +17,7 @@ class SettingsBody(BaseModel):
     mode: str | None = None
     provider: str | None = None
     model: str | None = None
+    units: str | None = None
 
 
 @router.get("/settings")
@@ -23,6 +25,7 @@ def get_api_settings(session: Session = Depends(get_session)):
     return {
         "mode": crud.get(session, "mode", "running"),
         "provider": crud.get(session, "provider", get_settings().provider),
+        "units": crud.get(session, "units", "metric"),
     }
 
 
@@ -48,11 +51,23 @@ def put_settings(
     if body.model is not None:
         target = body.provider or crud.get(session, "provider", settings.provider) or "claude"
         crud.set(session, f"{target}_model", body.model)
-    if body.mode is not None or body.provider is not None or body.model is not None:
-        init_backend(request.app, mode=body.mode, provider=body.provider)
+    if body.units is not None:
+        if body.units not in VALID_UNITS:
+            raise HTTPException(
+                status_code=400, detail=f"units must be one of {sorted(VALID_UNITS)}"
+            )
+        crud.set(session, "units", body.units)
+    if (
+        body.mode is not None
+        or body.provider is not None
+        or body.model is not None
+        or body.units is not None
+    ):
+        init_backend(request.app, mode=body.mode, provider=body.provider, units=body.units)
     return {
         "mode": crud.get(session, "mode", "running"),
         "provider": crud.get(session, "provider", settings.provider),
+        "units": crud.get(session, "units", "metric"),
     }
 
 

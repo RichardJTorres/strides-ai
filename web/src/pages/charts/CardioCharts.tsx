@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Mode, ThemeConfig } from "../../App";
+import { useUnits } from "../../UnitsContext";
+import { distUnitLabel } from "../../units";
 import FilterBar from "../../charts/FilterBar";
 import ScatterTrendCard from "../../charts/ScatterTrendCard";
 import TimeSeriesLineCard from "../../charts/TimeSeriesLineCard";
@@ -137,9 +139,8 @@ function AerobicEffTooltip({
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function CardioCharts({ mode, theme }: Props) {
-  const [unit, setUnit] = useState<Unit>(() => {
-    return (localStorage.getItem("strides_unit") as Unit) || "miles";
-  });
+  const { units } = useUnits();
+  const unit: Unit = units === "imperial" ? "miles" : "km";
   const [data, setData] = useState<ChartData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -149,10 +150,9 @@ export default function CardioCharts({ mode, theme }: Props) {
   const [customUntil, setCustomUntil] = useState("");
 
   useEffect(() => {
-    localStorage.setItem("strides_unit", unit);
     setLoading(true);
     setError(null);
-    fetch(`/api/charts?unit=${unit}&mode=${mode}`)
+    fetch(`/api/charts?mode=${mode}`)
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
@@ -165,7 +165,7 @@ export default function CardioCharts({ mode, theme }: Props) {
         setError(e.message);
         setLoading(false);
       });
-  }, [unit, mode]);
+  }, [units, mode]);
 
   const range = useMemo((): DateRange => {
     if (preset === "custom") return { since: customSince || null, until: customUntil || null };
@@ -226,21 +226,9 @@ export default function CardioCharts({ mode, theme }: Props) {
       <div className="p-6 space-y-5 max-w-5xl mx-auto">
         <div className="flex items-center justify-between">
           <h2 className="text-xl font-bold text-gray-100">Training Charts</h2>
-          <div className="flex rounded-md overflow-hidden border border-gray-700 text-sm">
-            {(["miles", "km"] as Unit[]).map((u) => (
-              <button
-                key={u}
-                onClick={() => setUnit(u)}
-                className={`px-4 py-1.5 transition-colors ${
-                  unit === u
-                    ? `${theme.accentBg} ${theme.accentClass} font-medium`
-                    : "text-gray-400 hover:bg-gray-800"
-                }`}
-              >
-                {u === "miles" ? "Miles" : "km"}
-              </button>
-            ))}
-          </div>
+          <span className="text-xs text-gray-500">
+            Units: {distUnitLabel(units)} · change in Settings
+          </span>
         </div>
 
         <FilterBar
