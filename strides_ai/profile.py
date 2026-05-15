@@ -130,6 +130,7 @@ LIFTING_DEFAULTS: dict = {
     "nutrition_snacks": [],
     "other_notes": "",
     "coach_voice": "",
+    "weight_unit": "kg",
 }
 
 _DEFAULTS = {

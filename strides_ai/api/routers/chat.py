@@ -89,6 +89,7 @@ async def chat(
     profile_fields = prof_crud.get_fields(session, mode)
     profile = profile_to_text(profile_fields, mode)
     coach_voice = (profile_fields or {}).get("coach_voice", "")
+    weight_unit = (profile_fields or {}).get("weight_unit", "kg")
     activities = [r.model_dump() for r in act_crud.get_all(session)]
     system = build_system(
         profile,
@@ -96,6 +97,7 @@ async def chat(
         mode=mode,
         activities=activities,
         coach_voice=coach_voice,
+        weight_unit=weight_unit,
     )
 
     conv_crud.save(session, "user", saved_message, mode=mode)

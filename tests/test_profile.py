@@ -73,6 +73,7 @@ def test_get_default_fields_lifting_keys():
         "nutrition_snacks",
         "other_notes",
         "coach_voice",
+        "weight_unit",
     }
 
 

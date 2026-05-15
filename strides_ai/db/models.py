@@ -56,6 +56,7 @@ class Activity(SQLModel, table=True):
     exercises_json: Optional[str] = None
     total_volume_kg: Optional[float] = None
     total_sets: Optional[int] = None
+    avg_rpe: Optional[float] = None
 
 
 class Conversation(SQLModel, table=True):
