@@ -89,7 +89,7 @@ async def chat(
     profile_fields = prof_crud.get_fields(session, mode)
     profile = profile_to_text(profile_fields, mode)
     coach_voice = (profile_fields or {}).get("coach_voice", "")
-    activities = [r.model_dump() for r in act_crud.get_for_mode(session, mode)]
+    activities = [r.model_dump() for r in act_crud.get_all(session)]
     system = build_system(
         profile,
         [r.model_dump() for r in memories],
