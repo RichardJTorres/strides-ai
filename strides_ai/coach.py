@@ -219,6 +219,14 @@ def build_training_log(
     if not rows:
         return "No activities found."
     cfg = MODES.get(mode, MODES["running"])
+
+    # When activities span multiple sport types, use the hybrid formatter
+    # (it has a TYPE column and handles mixed pace/speed/duration display).
+    if cfg.sport_types is not None:  # hybrid already uses its own formatter
+        types_present = {(r.get("sport_type") or "") for r in rows}
+        if not types_present.issubset(cfg.sport_types):
+            cfg = MODES["hybrid"]
+
     sep = "-" * cfg.log_sep_len
     header = cfg.log_header
     formatted_rows = rows
@@ -246,7 +254,6 @@ def build_initial_history(
     history lives. It may be gracefully truncated by small-context models, but
     only the oldest runs are dropped — recent ones are protected by the system prompt.
     """
-    cfg = MODES.get(mode, MODES["running"])
     training_log = build_training_log(activities, mode, weight_unit=weight_unit)
     log_message = f"Here is the athlete's complete training log:\n\n```\n{training_log}\n```"
     return [
@@ -254,7 +261,7 @@ def build_initial_history(
         {
             "role": "assistant",
             "content": (
-                f"Got it — I have your full training log loaded ({len(activities)} {cfg.activity_label}). "
+                f"Got it — I have your full training log loaded ({len(activities)} activities). "
                 "What would you like to discuss?"
             ),
         },

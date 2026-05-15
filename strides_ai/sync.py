@@ -1,4 +1,4 @@
-"""Fetch runs and rides from Strava and persist them locally."""
+"""Fetch all activities from Strava and persist them locally."""
 
 import logging
 from typing import Generator
@@ -7,10 +7,9 @@ import httpx
 
 from . import db
 from .analysis import RateLimitError, analyze_activity
-from .db import get_stored_ids, upsert_activity, RUN_TYPES, CYCLE_TYPES
+from .db import get_stored_ids, upsert_activity
 
 ACTIVITIES_URL = "https://www.strava.com/api/v3/athlete/activities"
-ALL_SYNCED_TYPES = RUN_TYPES | CYCLE_TYPES
 PAGE_SIZE = 100
 
 log = logging.getLogger(__name__)
@@ -39,7 +38,7 @@ def _iter_activities(access_token: str) -> Generator[dict, None, None]:
 
 def sync_activities(access_token: str, full: bool = False) -> int:
     """
-    Sync run and cycling activities from Strava.
+    Sync all activities from Strava.
 
     If *full* is False (default), stops as soon as it encounters an activity
     already in the database — fast incremental sync.
@@ -55,10 +54,6 @@ def sync_activities(access_token: str, full: bool = False) -> int:
     rate_limited = False
 
     for activity in _iter_activities(access_token):
-        sport = activity.get("sport_type") or activity.get("type", "")
-        if sport not in ALL_SYNCED_TYPES:
-            continue
-
         if not full and activity["id"] in stored_ids:
             # In incremental mode, once we hit a known activity we're up-to-date
             break
