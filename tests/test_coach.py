@@ -235,7 +235,7 @@ def test_build_initial_history_empty_activities():
 def test_build_initial_history_activity_count_in_reply():
     rows = [_make_row(), _make_row()]
     history = build_initial_history(rows, [])
-    assert "2 runs" in history[1]["content"]
+    assert "2 activities" in history[1]["content"]
 
 
 def test_build_initial_history_includes_prior_messages():
@@ -251,7 +251,7 @@ def test_build_initial_history_includes_prior_messages():
 
 def test_build_initial_history_cycling_label():
     history = build_initial_history([_make_row(sport_type="Ride")], [], mode="cycling")
-    assert "rides" in history[1]["content"]
+    assert "activities" in history[1]["content"]
 
 
 def test_build_initial_history_hybrid_label():
