@@ -208,15 +208,25 @@ def _hybrid_log_row(r: dict) -> str:
     )
 
 
+_KG_TO_LBS = 2.20462
+
+
 def _lifting_log_row(r: dict) -> str:
     analysis = (r.get("analysis_summary") or "")[:60]
+    use_lbs = r.get("_weight_unit") == "lbs"
+    raw_volume = r.get("total_volume_kg") or 0
+    if raw_volume:
+        volume = round(raw_volume * _KG_TO_LBS) if use_lbs else round(raw_volume)
+        volume_str = str(volume)
+    else:
+        volume_str = "—"
     return (
         f"{r['date'] or '?':10s} | "
         f"{(r['name'] or '')[:30]:30s} | "
         f"{_format_duration(r['moving_time_s']):8s} | "
         f"{r['total_sets'] or '—':4} | "
-        f"{r['total_volume_kg'] or '—':10} | "
-        f"{r['perceived_exertion'] or '—':3} | "
+        f"{volume_str:10} | "
+        f"{r.get('avg_rpe') or '—':3} | "
         f"{analysis}"
     )
 
@@ -230,7 +240,11 @@ def _make_cardio_total(label: str) -> Callable[[list[dict]], str]:
 
 
 def _lifting_log_total(rows: list[dict]) -> str:
-    total_volume = sum((r["total_volume_kg"] or 0) for r in rows)
+    use_lbs = rows[0].get("_weight_unit") == "lbs" if rows else False
+    total_volume = sum((r.get("total_volume_kg") or 0) for r in rows)
+    if use_lbs:
+        total_volume = total_volume * _KG_TO_LBS
+        return f"Total: {len(rows)} sessions, {total_volume:.0f} lbs cumulative volume"
     return f"Total: {len(rows)} sessions, {total_volume:.0f} kg cumulative volume"
 
 

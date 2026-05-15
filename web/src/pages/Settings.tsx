@@ -94,6 +94,7 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
   const [customText, setCustomText] = useState<Record<string, string>>({});
   const [customSelected, setCustomSelected] = useState<Record<string, boolean>>({});
   const [voiceSaving, setVoiceSaving] = useState(false);
+  const [weightUnit, setWeightUnit] = useState<"kg" | "lbs">("kg");
 
   useEffect(() => {
     const modes: Mode[] = ["running", "cycling", "hybrid", "lifting"];
@@ -111,6 +112,15 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
       setCustomSelected(Object.fromEntries(customEntries.map(([m]) => [m, true])));
     });
   }, []);
+
+  useEffect(() => {
+    if (mode === "lifting") {
+      fetch(`/api/profile?mode=lifting`)
+        .then((r) => r.json())
+        .then(({ fields }) => setWeightUnit((fields?.weight_unit as "kg" | "lbs") || "kg"))
+        .catch(() => {});
+    }
+  }, [mode]);
 
   useEffect(() => {
     fetch("/api/providers")
@@ -145,6 +155,16 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
     } finally {
       setVoiceSaving(false);
     }
+  }
+
+  async function handleWeightUnitChange(unit: "kg" | "lbs") {
+    setWeightUnit(unit);
+    const { fields } = await fetch(`/api/profile?mode=lifting`).then((r) => r.json());
+    await fetch(`/api/profile?mode=lifting`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fields: { ...fields, weight_unit: unit } }),
+    });
   }
 
   async function handleModeChange(newMode: Mode) {
@@ -331,6 +351,32 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
               );
             })()}
           </section>
+
+          {mode === "lifting" && (
+            <section>
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">
+                Weight Unit
+              </h3>
+              <p className="text-xs text-gray-600 mb-3">
+                Unit used when the coach references weights in feedback and session breakdowns.
+              </p>
+              <div className="flex gap-2">
+                {(["kg", "lbs"] as const).map((u) => (
+                  <button
+                    key={u}
+                    onClick={() => handleWeightUnitChange(u)}
+                    className={`px-4 py-1.5 rounded text-xs font-medium border transition-colors ${
+                      weightUnit === u
+                        ? "bg-orange-500 border-orange-500 text-white"
+                        : "bg-gray-800 border-gray-700 text-gray-300 hover:border-gray-500"
+                    }`}
+                  >
+                    {u}
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
 
           <section>
             <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">

@@ -140,10 +140,32 @@ def analyze_hevy_workout(row: dict) -> None:
         {
             "total_volume_kg": metrics["total_volume_kg"],
             "total_sets": metrics["total_sets"],
+            "avg_rpe": metrics["avg_rpe"],
             "analysis_summary": metrics["analysis_summary"],
             "analysis_status": "done",
         },
     )
+
+
+def backfill_avg_rpe() -> int:
+    """Compute and store avg_rpe for existing WeightTraining rows that have exercises_json but no avg_rpe."""
+    from . import db
+
+    count = 0
+    for act in db.get_all_activities():
+        if act.get("sport_type") != "WeightTraining":
+            continue
+        if act.get("avg_rpe") is not None:
+            continue
+        if not act.get("exercises_json"):
+            continue
+        metrics = compute_hevy_metrics(act["exercises_json"])
+        if not metrics or metrics.get("avg_rpe") is None:
+            continue
+        db.save_analysis(act["id"], {"avg_rpe": metrics["avg_rpe"]})
+        count += 1
+    log.info("backfill_avg_rpe: updated %d activities", count)
+    return count
 
 
 LIFTING_DEEP_DIVE_SYSTEM_PROMPT = """\

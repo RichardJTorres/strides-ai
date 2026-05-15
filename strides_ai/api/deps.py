@@ -98,7 +98,11 @@ def init_backend(app: FastAPI, mode: str | None = None, provider: str | None = N
 
     activities = db.get_activities_for_mode(current_mode)
     prior_messages = db.get_recent_messages(RECALL_MESSAGES, mode=current_mode)
-    initial_history = build_initial_history(activities, prior_messages, mode=current_mode)
+    profile_fields = db.get_profile_fields(current_mode) or {}
+    weight_unit = profile_fields.get("weight_unit", "kg")
+    initial_history = build_initial_history(
+        activities, prior_messages, mode=current_mode, weight_unit=weight_unit
+    )
 
     if current_provider == "ollama":
         available = get_provider_models("ollama")

@@ -58,6 +58,7 @@ def build_system(
     mode: str = "running",
     activities: list | None = None,
     coach_voice: str = "",
+    weight_unit: str = "kg",
 ) -> str:
     cfg = MODES.get(mode, MODES["running"])
     prompt = cfg.system_prompt
@@ -125,29 +126,116 @@ def build_system(
             "positive = slowing (possible fatigue), negative = negative split"
         )
 
-    recent_log = build_training_log(recent, mode)
+    recent_log = build_training_log(recent, mode, weight_unit=weight_unit)
     prompt += (
         f"\n\n## Recent Activities (last {RECENT_ACTIVITIES_IN_SYSTEM})\n\n```\n{recent_log}\n```"
     )
 
+    if mode == "lifting" or (
+        mode == "hybrid" and any(a.get("sport_type") == "WeightTraining" for a in recent)
+    ):
+        detail = build_lifting_detail(recent, weight_unit=weight_unit)
+        if detail:
+            prompt += (
+                f"\n\n## Lifting Session Detail (last {LIFTING_DETAIL_SESSIONS} sessions)\n\n"
+                "Per-set breakdown. Use this to reason about RPE trends, rep ranges, and progression.\n\n"
+                f"{detail}"
+            )
+
     return prompt
 
 
-def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
+LIFTING_DETAIL_SESSIONS = 10
+
+
+_KG_TO_LBS = 2.20462
+
+
+def build_lifting_detail(activities: list[dict], weight_unit: str = "kg") -> str:
+    """Compact per-set breakdown for recent lifting sessions."""
+    import json
+
+    use_lbs = weight_unit == "lbs"
+
+    lifting_acts = [
+        a for a in activities if a.get("sport_type") == "WeightTraining" and a.get("exercises_json")
+    ][:LIFTING_DETAIL_SESSIONS]
+
+    if not lifting_acts:
+        return ""
+
+    blocks: list[str] = []
+    for act in lifting_acts:
+        date_str = act.get("date") or "?"
+        name = act.get("name") or "Weight Training"
+        avg_rpe = act.get("avg_rpe")
+        rpe_label = f"  avg RPE {avg_rpe}" if avg_rpe is not None else ""
+        blocks.append(f"### {date_str} — {name}{rpe_label}")
+
+        try:
+            exercises = json.loads(act["exercises_json"])
+        except (json.JSONDecodeError, TypeError):
+            blocks.append("  (exercise data unavailable)")
+            continue
+
+        for ex in exercises:
+            title = ex.get("title") or "Unknown"
+            muscle = ex.get("primary_muscle_group") or ""
+            muscle_suffix = f" [{muscle}]" if muscle else ""
+            blocks.append(f"  {title}{muscle_suffix}")
+
+            for s in ex.get("sets", []):
+                set_type = s.get("type", "normal")
+                if set_type == "warmup":
+                    prefix = "[W] "
+                elif set_type == "normal":
+                    prefix = "    "
+                else:
+                    prefix = f"[{set_type}] "
+
+                weight_kg = s.get("weight_kg")
+                if weight_kg:
+                    if use_lbs:
+                        weight_str = f"{round(weight_kg * _KG_TO_LBS, 1)} lbs"
+                    else:
+                        weight_str = f"{weight_kg} kg"
+                else:
+                    weight_str = "BW"
+                reps = s.get("reps")
+                reps_str = f"x{reps}" if reps is not None else "x?"
+                rpe = s.get("rpe")
+                rpe_str = f"  RPE {rpe}" if rpe is not None else ""
+
+                blocks.append(f"  {prefix}{weight_str} {reps_str}{rpe_str}")
+
+        blocks.append("")
+
+    return "\n".join(blocks)
+
+
+def build_training_log(
+    rows: list[sqlite3.Row], mode: str = "running", weight_unit: str = "kg"
+) -> str:
     if not rows:
         return "No activities found."
     cfg = MODES.get(mode, MODES["running"])
     sep = "-" * cfg.log_sep_len
-    lines = [cfg.log_header, sep]
-    for r in reversed(rows):
+    header = cfg.log_header
+    formatted_rows = rows
+    if mode == "lifting":
+        if weight_unit == "lbs":
+            header = header.replace("VOLUME(kg)", "VOLUME(lbs)")
+        formatted_rows = [{**r, "_weight_unit": weight_unit} for r in rows]
+    lines = [header, sep]
+    for r in reversed(formatted_rows):
         lines.append(cfg.format_log_row(r))
     lines.append(sep)
-    lines.append(cfg.format_log_total(rows))
+    lines.append(cfg.format_log_total(formatted_rows))
     return "\n".join(lines)
 
 
 def build_initial_history(
-    activities: list, prior_messages: list[dict], mode: str = "running"
+    activities: list, prior_messages: list[dict], mode: str = "running", weight_unit: str = "kg"
 ) -> list[dict]:
     """
     Seed the backend's conversation history with the full training log (once)
@@ -159,7 +247,7 @@ def build_initial_history(
     only the oldest runs are dropped — recent ones are protected by the system prompt.
     """
     cfg = MODES.get(mode, MODES["running"])
-    training_log = build_training_log(activities, mode)
+    training_log = build_training_log(activities, mode, weight_unit=weight_unit)
     log_message = f"Here is the athlete's complete training log:\n\n```\n{training_log}\n```"
     return [
         {"role": "user", "content": log_message},
