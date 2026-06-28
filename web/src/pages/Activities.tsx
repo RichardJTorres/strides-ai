@@ -240,6 +240,9 @@ export default function Activities({ mode, theme }: Props) {
   const [syncMsg, setSyncMsg] = useState("");
 
   const isLifting = mode === "lifting";
+  const [modeOnly, setModeOnly] = useState(false);
+  const showAllView = !modeOnly;
+  const isLiftingView = isLifting && modeOnly;
 
   // Sorting
   const [sortKey, setSortKey] = useState<SortKey>("date");
@@ -262,19 +265,21 @@ export default function Activities({ mode, theme }: Props) {
   const [notesSaved, setNotesSaved] = useState(false);
 
   const selectedActivity = activities.find((a) => a.id === selectedId) ?? null;
+  const isLiftingActivity = selectedActivity?.sport_type === "WeightTraining";
 
   useEffect(() => {
     setLoading(true);
-    fetch(`/api/activities?mode=${mode}`)
+    fetch(modeOnly ? `/api/activities?mode=${mode}` : "/api/activities")
       .then((r) => r.json())
       .then(setActivities)
       .finally(() => setLoading(false));
-  }, [mode]);
+  }, [mode, modeOnly]);
 
-  // Reset sort key when switching modes to avoid invalid keys
+  // Reset sort key and modeOnly when switching modes
   useEffect(() => {
     setSortKey("date");
     setSortDir("desc");
+    setModeOnly(false);
   }, [mode]);
 
   function openPanel(id: number) {
@@ -308,7 +313,7 @@ export default function Activities({ mode, theme }: Props) {
       const count = data.new_activities ?? data.new_workouts ?? 0;
       const noun = isLifting ? "session" : "activit";
       setSyncMsg(count > 0 ? `${count} new ${noun}${isLifting ? (count === 1 ? "" : "s") : (count === 1 ? "y" : "ies")} synced.` : "Already up to date.");
-      const rows = await fetch(`/api/activities?mode=${mode}`).then((r) => r.json());
+      const rows = await fetch(modeOnly ? `/api/activities?mode=${mode}` : "/api/activities").then((r) => r.json());
       setActivities(rows);
     } catch {
       setSyncMsg("Sync failed.");
@@ -387,7 +392,7 @@ export default function Activities({ mode, theme }: Props) {
     }
     if (dateFrom) rows = rows.filter((a) => a.date >= dateFrom);
     if (dateTo)   rows = rows.filter((a) => a.date <= dateTo);
-    if (!isLifting && minDist) rows = rows.filter((a) => (a.distance_m ?? 0) / 1000 >= parseFloat(minDist));
+    if (modeOnly && !isLifting && minDist) rows = rows.filter((a) => (a.distance_m ?? 0) / 1000 >= parseFloat(minDist));
 
     return [...rows].sort((a, b) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -398,7 +403,7 @@ export default function Activities({ mode, theme }: Props) {
       if (av > bv) return sortDir === "asc" ? 1 : -1;
       return 0;
     });
-  }, [activities, search, dateFrom, dateTo, minDist, sortKey, sortDir, isLifting]);
+  }, [activities, search, dateFrom, dateTo, minDist, sortKey, sortDir, isLifting, modeOnly]);
 
   const paceLabel = mode === "cycling" ? "Speed" : mode === "hybrid" ? "Pace/Speed" : "Pace";
   const focusClass = "focus:outline-none focus:border-gray-500";
@@ -415,7 +420,7 @@ export default function Activities({ mode, theme }: Props) {
     );
   }
 
-  const filtersActive = search || dateFrom || dateTo || (!isLifting && minDist);
+  const filtersActive = search || dateFrom || dateTo || (modeOnly && !isLifting && minDist);
 
   // ── Panel helpers ────────────────────────────────────────────────────────
 
@@ -500,7 +505,7 @@ export default function Activities({ mode, theme }: Props) {
           title="To date"
           className={`rounded-md bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-gray-100 ${focusClass}`}
         />
-        {!isLifting && (
+        {modeOnly && !isLifting && (
           <input
             type="number"
             placeholder="Min km"
@@ -511,6 +516,16 @@ export default function Activities({ mode, theme }: Props) {
             className={`rounded-md bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-gray-100 placeholder-gray-500 ${focusClass} w-24`}
           />
         )}
+        <button
+          onClick={() => setModeOnly((v) => !v)}
+          className={`px-3 py-1.5 rounded-md text-sm border transition-colors ${
+            modeOnly
+              ? `${theme.accentButton} text-white border-transparent`
+              : "bg-gray-900 border-gray-700 text-gray-400 hover:text-gray-200"
+          }`}
+        >
+          Mode Only
+        </button>
         {filtersActive && (
           <button
             onClick={() => { setSearch(""); setDateFrom(""); setDateTo(""); setMinDist(""); }}
@@ -529,7 +544,19 @@ export default function Activities({ mode, theme }: Props) {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-900 text-gray-400 text-left sticky top-0">
-                {isLifting ? (
+                {showAllView ? (
+                  <>
+                    <Th label="Date"       col="date" />
+                    <th className="px-4 py-2 font-medium whitespace-nowrap text-gray-400">Type</th>
+                    <Th label="Name"       col="name" />
+                    <Th label="Dist (km)"  col="distance_m"       right />
+                    <Th label="Time"       col="moving_time_s"     right />
+                    <Th label="Pace/Speed" col="avg_pace_s_per_km" right />
+                    <Th label="Avg HR"     col="avg_hr"            right />
+                    <Th label="Elev (m)"   col="elevation_gain_m"  right />
+                    <th className="px-4 py-2 font-medium whitespace-nowrap text-right"></th>
+                  </>
+                ) : isLiftingView ? (
                   <>
                     <Th label="Date"        col="date" />
                     <Th label="Name"        col="name" />
@@ -556,7 +583,7 @@ export default function Activities({ mode, theme }: Props) {
             <tbody className="divide-y divide-gray-800">
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-gray-500">
+                  <td colSpan={showAllView ? 9 : isLiftingView ? 7 : 8} className="px-4 py-8 text-center text-gray-500">
                     No {isLifting ? "sessions" : "activities"} match your filters.
                   </td>
                 </tr>
@@ -568,19 +595,22 @@ export default function Activities({ mode, theme }: Props) {
                     onClick={() => openPanel(a.id)}
                   >
                     <td className="px-4 py-2 text-gray-400 whitespace-nowrap">{a.date}</td>
+                    {showAllView && (
+                      <td className="px-4 py-2 text-gray-500 whitespace-nowrap text-xs">{a.sport_type ?? "—"}</td>
+                    )}
                     <td className="px-4 py-2">
                       <span className="text-gray-100">{a.name || "—"}</span>
                       {a.analysis_summary && (
                         <p className="text-xs text-gray-500 mt-0.5 max-w-xs truncate">{a.analysis_summary}</p>
                       )}
-                      {!isLifting && (a.cardiac_decoupling_pct !== null || a.effort_efficiency_score !== null) && (
+                      {!isLiftingView && (a.cardiac_decoupling_pct !== null || a.effort_efficiency_score !== null) && (
                         <div className="flex gap-1 mt-1 flex-wrap">
                           <DecouplingBadge val={a.cardiac_decoupling_pct} />
                           <EfficiencyBadge val={a.effort_efficiency_score} />
                         </div>
                       )}
                     </td>
-                    {isLifting ? (
+                    {isLiftingView ? (
                       <>
                         <td className="px-4 py-2 text-right text-gray-100">
                           {a.total_volume_kg != null ? a.total_volume_kg.toFixed(0) : "—"}
@@ -604,12 +634,8 @@ export default function Activities({ mode, theme }: Props) {
                           {formatDuration(a.moving_time_s)}
                         </td>
                         <td className="px-4 py-2 text-right text-gray-400">
-                          {mode === "cycling"
+                          {(a.sport_type === "Ride" || a.sport_type === "VirtualRide" || a.sport_type === "GravelRide")
                             ? formatSpeed(a.avg_pace_s_per_km)
-                            : mode === "hybrid"
-                            ? (a.sport_type === "Ride" || a.sport_type === "VirtualRide" || a.sport_type === "GravelRide"
-                                ? formatSpeed(a.avg_pace_s_per_km)
-                                : formatPace(a.avg_pace_s_per_km))
                             : formatPace(a.avg_pace_s_per_km)}
                         </td>
                         <td className="px-4 py-2 text-right text-gray-400">
@@ -653,7 +679,7 @@ export default function Activities({ mode, theme }: Props) {
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <h3 className="text-gray-100 font-semibold truncate">{selectedActivity.name || "Activity"}</h3>
-                  {!isLifting && (
+                  {!isLiftingActivity && (
                     <a
                       href={`https://www.strava.com/activities/${selectedActivity.id}`}
                       target="_blank"
@@ -682,7 +708,7 @@ export default function Activities({ mode, theme }: Props) {
             <div className="overflow-y-auto flex-1 p-5 space-y-6">
 
               {/* Basic stats row */}
-              {isLifting ? (
+              {isLiftingActivity ? (
                 <div className="grid grid-cols-4 gap-2">
                   <MetricTile
                     label="Volume (kg)"
@@ -723,7 +749,7 @@ export default function Activities({ mode, theme }: Props) {
               )}
 
               {/* Exercise breakdown — lifting only */}
-              {isLifting && selectedActivity.exercises_json && (
+              {isLiftingActivity && selectedActivity.exercises_json && (
                 <ExerciseBreakdown exercises_json={selectedActivity.exercises_json} />
               )}
 
@@ -736,7 +762,7 @@ export default function Activities({ mode, theme }: Props) {
               )}
 
               {/* Cardio metrics grid — running/cycling only */}
-              {!isLifting && hasMetrics && (
+              {!isLiftingActivity && hasMetrics && (
                 <section className="space-y-3">
                   <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Computed Metrics</h4>
 
@@ -795,7 +821,7 @@ export default function Activities({ mode, theme }: Props) {
               )}
 
               {/* No analysis yet — running/cycling only */}
-              {!isLifting && !hasMetrics && selectedActivity.analysis_status !== "done" && (
+              {!isLiftingActivity && !hasMetrics && selectedActivity.analysis_status !== "done" && (
                 <p className="text-sm text-gray-600">
                   {selectedActivity.analysis_status === "skipped"
                     ? "No stream data available for this activity."
