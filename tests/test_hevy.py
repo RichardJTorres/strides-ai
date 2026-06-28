@@ -140,9 +140,9 @@ def test_transform_workout_duration():
     assert row["moving_time_s"] == 5400
 
 
-def test_transform_workout_hevy_workout_id():
+def test_transform_workout_external_id():
     row = _transform_workout(_SAMPLE_WORKOUT)
-    assert row["hevy_workout_id"] == _SAMPLE_WORKOUT["id"]
+    assert row["external_id"] == _SAMPLE_WORKOUT["id"]
 
 
 def test_transform_workout_volume():

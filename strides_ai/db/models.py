@@ -5,10 +5,12 @@ from typing import Optional
 import sqlalchemy as sa
 from sqlmodel import Column, Field, SQLModel
 
+from ..activity_types import SportType
+
 # Activity type sets — used by sync.py and query filters
-RUN_TYPES = {"Run", "TrailRun", "VirtualRun"}
-CYCLE_TYPES = {"Ride", "VirtualRide", "GravelRide"}
-LIFT_TYPES = {"WeightTraining"}
+RUN_TYPES = {SportType.RUN, SportType.TRAIL_RUN, SportType.VIRTUAL_RUN}
+CYCLE_TYPES = {SportType.RIDE, SportType.VIRTUAL_RIDE, SportType.GRAVEL_RIDE}
+LIFT_TYPES = {SportType.WEIGHT_TRAINING}
 
 
 class Activity(SQLModel, table=True):
@@ -28,6 +30,7 @@ class Activity(SQLModel, table=True):
     suffer_score: Optional[int] = None
     perceived_exertion: Optional[float] = None
     sport_type: Optional[str] = None
+    source: Optional[str] = None
     raw_json: Optional[str] = None
 
     # Analysis columns (populated by analysis pipeline)
@@ -52,7 +55,7 @@ class Activity(SQLModel, table=True):
     user_notes: Optional[str] = None
 
     # HEVY (weightlifting) columns
-    hevy_workout_id: Optional[str] = None
+    external_id: Optional[str] = None
     exercises_json: Optional[str] = None
     total_volume_kg: Optional[float] = None
     total_sets: Optional[int] = None

@@ -83,6 +83,68 @@ def test_get_stored_ids_empty(tmp_db):
     assert db.get_stored_ids() == set()
 
 
+def test_upsert_activity_sets_source_strava(tmp_db, sample_activity):
+    db.upsert_activity(sample_activity)
+    row = db.get_all_activities()[0]
+    assert row["source"] == "strava"
+
+
+def test_upsert_hevy_workout_sets_source_hevy(tmp_db):
+    hevy_row = {
+        "id": 5001,
+        "external_id": "abc-123",
+        "name": "Push Day",
+        "date": "2026-01-15",
+        "moving_time_s": 3600,
+        "elapsed_time_s": 3600,
+        "exercises_json": "[]",
+        "total_volume_kg": 1000.0,
+        "total_sets": 10,
+        "raw_json": "{}",
+    }
+    db.upsert_hevy_workout(hevy_row)
+    row = db.get_all_activities()[0]
+    assert row["source"] == "hevy"
+
+
+def test_upsert_canonical_cardio(tmp_db):
+    from strides_ai.activity_types import CardioActivity, SportType
+
+    act = CardioActivity(
+        id=7001,
+        source="strava",
+        sport_type=SportType.RUN,
+        date="2026-02-01",
+        distance_m=5000.0,
+        moving_time_s=1800,
+    )
+    db.upsert_canonical_activity(act)
+    rows = db.get_all_activities()
+    assert len(rows) == 1
+    assert rows[0]["source"] == "strava"
+    assert rows[0]["sport_type"] == "Run"
+    assert rows[0]["distance_m"] == 5000.0
+
+
+def test_upsert_canonical_strength(tmp_db):
+    from strides_ai.activity_types import SportType, StrengthActivity
+
+    act = StrengthActivity(
+        id=8001,
+        source="hevy",
+        external_id="xyz-999",
+        date="2026-02-02",
+        total_volume_kg=800.0,
+        total_sets=8,
+    )
+    db.upsert_canonical_activity(act)
+    rows = db.get_all_activities()
+    assert len(rows) == 1
+    assert rows[0]["source"] == "hevy"
+    assert rows[0]["sport_type"] == "WeightTraining"
+    assert rows[0]["external_id"] == "xyz-999"
+
+
 # ── save_message / get_recent_messages ────────────────────────────────────────
 
 

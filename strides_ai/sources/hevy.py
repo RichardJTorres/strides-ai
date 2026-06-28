@@ -11,6 +11,8 @@ from .base import ConfigurationError, NoDataError
 class HevySource:
     """DataSource implementation backed by HEVY."""
 
+    source_name = "hevy"
+
     def build_deep_dive_content(self, activity, backend) -> tuple[str, str]:
         if not activity.exercises_json:
             raise NoDataError("No exercise data available for this session")

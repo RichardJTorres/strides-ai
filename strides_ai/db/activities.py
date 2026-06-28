@@ -38,6 +38,7 @@ def upsert(session: Session, activity: dict[str, Any]) -> None:
 
     values = {
         "id": activity["id"],
+        "source": "strava",
         "name": activity.get("name"),
         "date": activity.get("start_date_local", "")[:10],
         "distance_m": distance_m,
@@ -67,6 +68,7 @@ def upsert_hevy(session: Session, activity: dict[str, Any]) -> None:
     """Insert or replace an activity row derived from a HEVY workout."""
     values = {
         "id": activity["id"],
+        "source": "hevy",
         "name": activity.get("name"),
         "date": activity.get("date"),
         "distance_m": None,
@@ -81,11 +83,62 @@ def upsert_hevy(session: Session, activity: dict[str, Any]) -> None:
         "perceived_exertion": activity.get("perceived_exertion"),
         "sport_type": "WeightTraining",
         "raw_json": activity.get("raw_json"),
-        "hevy_workout_id": activity.get("hevy_workout_id"),
+        "external_id": activity.get("external_id"),
         "exercises_json": activity.get("exercises_json"),
         "total_volume_kg": activity.get("total_volume_kg"),
         "total_sets": activity.get("total_sets"),
     }
+
+    stmt = sqlite_insert(Activity).values(**values)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["id"],
+        set_={k: v for k, v in values.items() if k != "id"},
+    )
+    session.execute(stmt)
+    session.commit()
+
+
+def upsert_canonical(session: Session, activity) -> None:
+    """Insert or replace an activity row from a CardioActivity or StrengthActivity."""
+    from ..activity_types import CardioActivity, StrengthActivity
+
+    if isinstance(activity, CardioActivity):
+        values: dict = {
+            "id": activity.id,
+            "source": activity.source,
+            "name": activity.name,
+            "date": activity.date,
+            "sport_type": activity.sport_type,
+            "distance_m": activity.distance_m,
+            "moving_time_s": activity.moving_time_s,
+            "elapsed_time_s": activity.elapsed_time_s,
+            "elevation_gain_m": activity.elevation_gain_m,
+            "avg_pace_s_per_km": activity.avg_pace_s_per_km,
+            "avg_hr": activity.avg_hr,
+            "max_hr": activity.max_hr,
+            "avg_cadence": activity.avg_cadence,
+            "suffer_score": activity.suffer_score,
+            "perceived_exertion": activity.perceived_exertion,
+            "raw_json": activity.raw_json,
+        }
+    elif isinstance(activity, StrengthActivity):
+        values = {
+            "id": activity.id,
+            "source": activity.source,
+            "name": activity.name,
+            "date": activity.date,
+            "sport_type": activity.sport_type,
+            "moving_time_s": activity.moving_time_s,
+            "elapsed_time_s": activity.elapsed_time_s,
+            "perceived_exertion": activity.perceived_exertion,
+            "external_id": activity.external_id,
+            "exercises_json": activity.exercises_json,
+            "total_volume_kg": activity.total_volume_kg,
+            "total_sets": activity.total_sets,
+            "raw_json": activity.raw_json,
+        }
+    else:
+        raise TypeError(f"Unknown canonical activity type: {type(activity)!r}")
 
     stmt = sqlite_insert(Activity).values(**values)
     stmt = stmt.on_conflict_do_update(

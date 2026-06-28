@@ -17,6 +17,8 @@ from .base import AuthError, ConfigurationError, NoDataError
 class StravaSource:
     """DataSource implementation backed by Strava."""
 
+    source_name = "strava"
+
     def build_deep_dive_content(self, activity, backend) -> tuple[str, str]:
         settings = get_settings()
         if not settings.strava_client_id or not settings.strava_client_secret:
