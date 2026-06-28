@@ -19,6 +19,11 @@ def register_source(source: DataSource) -> DataSource:
     return source
 
 
+def configured_sources() -> list[DataSource]:
+    """Return all registered sources that have their credentials configured."""
+    return [s for s in _REGISTRY.values() if s.is_configured()]
+
+
 def get_source(name: str) -> DataSource:
     """Look up a registered source by name. Raises ValueError for unknown names."""
     source = _REGISTRY.get(name)

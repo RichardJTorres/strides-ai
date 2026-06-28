@@ -307,11 +307,8 @@ export default function Activities({ mode, theme }: Props) {
     setSyncing(true);
     setSyncMsg("");
     try {
-      const [stravaData, hevyData] = await Promise.all([
-        fetch("/api/strava/sync", { method: "POST" }).then((r) => r.json()).catch(() => ({})),
-        fetch("/api/hevy/sync",   { method: "POST" }).then((r) => r.json()).catch(() => ({})),
-      ]);
-      const count = (stravaData.new_activities ?? 0) + (hevyData.new_workouts ?? 0);
+      const data = await fetch("/api/sync", { method: "POST" }).then((r) => r.json());
+      const count = data.total ?? 0;
       setSyncMsg(count > 0 ? `${count} new item${count === 1 ? "" : "s"} synced.` : "Already up to date.");
       const rows = await fetch(modeOnly ? `/api/activities?mode=${mode}` : "/api/activities").then((r) => r.json());
       setActivities(rows);

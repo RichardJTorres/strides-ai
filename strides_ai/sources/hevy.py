@@ -13,6 +13,9 @@ class HevySource:
 
     source_name = "hevy"
 
+    def is_configured(self) -> bool:
+        return bool(get_settings().hevy_api_key)
+
     def build_deep_dive_content(self, activity, backend) -> tuple[str, str]:
         if not activity.exercises_json:
             raise NoDataError("No exercise data available for this session")
