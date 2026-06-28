@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import httpx
 
 from . import db
+from .activity_types import SportType, StrengthActivity
 from .config import get_settings
 from .hevy_analysis import analyze_hevy_workout
 
@@ -65,7 +66,7 @@ def _transform_workout(w: dict) -> dict:
 
     return {
         "id": numeric_id,
-        "hevy_workout_id": hevy_id,
+        "external_id": hevy_id,
         "name": w.get("title") or "Weight Training",
         "date": date_str,
         "moving_time_s": moving_time_s,
@@ -76,6 +77,25 @@ def _transform_workout(w: dict) -> dict:
         "total_sets": total_sets,
         "raw_json": json.dumps(w),
     }
+
+
+def _to_strength_activity(row: dict) -> StrengthActivity:
+    """Convert a _transform_workout() dict to a canonical StrengthActivity."""
+    return StrengthActivity(
+        id=row["id"],
+        source="hevy",
+        sport_type=SportType.WEIGHT_TRAINING,
+        name=row.get("name"),
+        date=row.get("date"),
+        moving_time_s=row.get("moving_time_s"),
+        elapsed_time_s=row.get("elapsed_time_s"),
+        perceived_exertion=row.get("perceived_exertion"),
+        external_id=row.get("external_id"),
+        exercises_json=row.get("exercises_json"),
+        total_volume_kg=row.get("total_volume_kg"),
+        total_sets=row.get("total_sets"),
+        raw_json=row.get("raw_json"),
+    )
 
 
 def _get_last_sync_timestamp() -> str | None:
@@ -185,7 +205,7 @@ def _sync_events(headers: dict, since: str | None) -> int:
             if not workout:
                 continue
             row = _transform_workout(workout)
-            db.upsert_hevy_workout(row)
+            db.upsert_canonical_activity(_to_strength_activity(row))
             analyze_hevy_workout(row)
             count += 1
 
@@ -212,7 +232,7 @@ def _sync_full(headers: dict) -> int:
 
             for w in workouts:
                 row = _transform_workout(w)
-                db.upsert_hevy_workout(row)
+                db.upsert_canonical_activity(_to_strength_activity(row))
                 analyze_hevy_workout(row)
                 count += 1
 

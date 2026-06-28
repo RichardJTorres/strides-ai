@@ -19,6 +19,12 @@ class NoDataError(Exception):
 class DataSource(Protocol):
     """Contract that every data-source implementation must satisfy."""
 
+    source_name: str
+
+    def is_configured(self) -> bool:
+        """Return True if the credentials / config needed to sync are present."""
+        ...
+
     def build_deep_dive_content(self, activity, backend) -> tuple[str, str]:
         """Return ``(system_prompt, user_content)`` for a deep-dive LLM call.
 

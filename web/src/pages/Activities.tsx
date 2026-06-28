@@ -307,12 +307,9 @@ export default function Activities({ mode, theme }: Props) {
     setSyncing(true);
     setSyncMsg("");
     try {
-      const url = isLifting ? "/api/hevy/sync" : "/api/strava/sync";
-      const res = await fetch(url, { method: "POST" });
-      const data = await res.json();
-      const count = data.new_activities ?? data.new_workouts ?? 0;
-      const noun = isLifting ? "session" : "activit";
-      setSyncMsg(count > 0 ? `${count} new ${noun}${isLifting ? (count === 1 ? "" : "s") : (count === 1 ? "y" : "ies")} synced.` : "Already up to date.");
+      const data = await fetch("/api/sync", { method: "POST" }).then((r) => r.json());
+      const count = data.total ?? 0;
+      setSyncMsg(count > 0 ? `${count} new item${count === 1 ? "" : "s"} synced.` : "Already up to date.");
       const rows = await fetch(modeOnly ? `/api/activities?mode=${mode}` : "/api/activities").then((r) => r.json());
       setActivities(rows);
     } catch {
@@ -476,7 +473,7 @@ export default function Activities({ mode, theme }: Props) {
             disabled={syncing}
             className={`px-3 py-1.5 rounded-md ${theme.accentButton} text-white text-sm disabled:opacity-50 transition-colors`}
           >
-            {syncing ? "Syncing…" : isLifting ? "Sync HEVY" : "Sync Strava"}
+            {syncing ? "Syncing…" : "Sync Activities"}
           </button>
         </div>
       </div>

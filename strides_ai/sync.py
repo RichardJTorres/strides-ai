@@ -1,13 +1,16 @@
 """Fetch all activities from Strava and persist them locally."""
 
+import json
 import logging
 from typing import Generator
 
 import httpx
 
 from . import db
+from .activity_types import CardioActivity, SportType
 from .analysis import RateLimitError, analyze_activity
-from .db import get_stored_ids, upsert_activity
+from .db import get_stored_ids, upsert_activity, upsert_canonical_activity
+from .db.models import RUN_TYPES
 
 ACTIVITIES_URL = "https://www.strava.com/api/v3/athlete/activities"
 PAGE_SIZE = 100
@@ -36,6 +39,40 @@ def _iter_activities(access_token: str) -> Generator[dict, None, None]:
             page += 1
 
 
+def _normalize_strava(raw: dict) -> CardioActivity:
+    """Map a raw Strava API activity dict to a CardioActivity."""
+    distance_m: float = raw.get("distance", 0)
+    moving_time_s: int = raw.get("moving_time", 0)
+    avg_pace_s_per_km = (
+        moving_time_s / (distance_m / 1000) if distance_m > 0 and moving_time_s > 0 else None
+    )
+    sport = SportType.from_api(raw.get("sport_type", raw.get("type")))
+    raw_cadence = raw.get("average_cadence")
+    avg_cadence = (
+        (raw_cadence * 2 if sport in RUN_TYPES else raw_cadence)
+        if raw_cadence is not None
+        else None
+    )
+    return CardioActivity(
+        id=raw["id"],
+        source="strava",
+        sport_type=sport,
+        name=raw.get("name"),
+        date=raw.get("start_date_local", "")[:10],
+        distance_m=distance_m,
+        moving_time_s=moving_time_s,
+        elapsed_time_s=raw.get("elapsed_time"),
+        elevation_gain_m=raw.get("total_elevation_gain"),
+        avg_pace_s_per_km=avg_pace_s_per_km,
+        avg_hr=raw.get("average_heartrate"),
+        max_hr=raw.get("max_heartrate"),
+        avg_cadence=avg_cadence,
+        suffer_score=raw.get("suffer_score"),
+        perceived_exertion=raw.get("perceived_exertion"),
+        raw_json=json.dumps(raw),
+    )
+
+
 def sync_activities(access_token: str, full: bool = False) -> int:
     """
     Sync all activities from Strava.
@@ -58,7 +95,7 @@ def sync_activities(access_token: str, full: bool = False) -> int:
             # In incremental mode, once we hit a known activity we're up-to-date
             break
 
-        upsert_activity(activity)
+        upsert_canonical_activity(_normalize_strava(activity))
         count += 1
 
         # Skip analysis for already-analyzed activities during a full sync
