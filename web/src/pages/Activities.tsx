@@ -307,21 +307,12 @@ export default function Activities({ mode, theme }: Props) {
     setSyncing(true);
     setSyncMsg("");
     try {
-      let count = 0;
-      if (showAllView) {
-        const [stravaData, hevyData] = await Promise.all([
-          fetch("/api/strava/sync", { method: "POST" }).then((r) => r.json()).catch(() => ({})),
-          fetch("/api/hevy/sync",   { method: "POST" }).then((r) => r.json()).catch(() => ({})),
-        ]);
-        count = (stravaData.new_activities ?? 0) + (hevyData.new_workouts ?? 0);
-        setSyncMsg(count > 0 ? `${count} new item${count === 1 ? "" : "s"} synced.` : "Already up to date.");
-      } else {
-        const url = isLifting ? "/api/hevy/sync" : "/api/strava/sync";
-        const data = await fetch(url, { method: "POST" }).then((r) => r.json());
-        count = data.new_activities ?? data.new_workouts ?? 0;
-        const noun = isLifting ? "session" : "activit";
-        setSyncMsg(count > 0 ? `${count} new ${noun}${isLifting ? (count === 1 ? "" : "s") : (count === 1 ? "y" : "ies")} synced.` : "Already up to date.");
-      }
+      const [stravaData, hevyData] = await Promise.all([
+        fetch("/api/strava/sync", { method: "POST" }).then((r) => r.json()).catch(() => ({})),
+        fetch("/api/hevy/sync",   { method: "POST" }).then((r) => r.json()).catch(() => ({})),
+      ]);
+      const count = (stravaData.new_activities ?? 0) + (hevyData.new_workouts ?? 0);
+      setSyncMsg(count > 0 ? `${count} new item${count === 1 ? "" : "s"} synced.` : "Already up to date.");
       const rows = await fetch(modeOnly ? `/api/activities?mode=${mode}` : "/api/activities").then((r) => r.json());
       setActivities(rows);
     } catch {
@@ -485,7 +476,7 @@ export default function Activities({ mode, theme }: Props) {
             disabled={syncing}
             className={`px-3 py-1.5 rounded-md ${theme.accentButton} text-white text-sm disabled:opacity-50 transition-colors`}
           >
-            {syncing ? "Syncing…" : showAllView ? "Sync All" : isLifting ? "Sync HEVY" : "Sync Strava"}
+            {syncing ? "Syncing…" : "Sync Activities"}
           </button>
         </div>
       </div>
