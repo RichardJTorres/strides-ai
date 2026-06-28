@@ -516,16 +516,18 @@ export default function Activities({ mode, theme }: Props) {
             className={`rounded-md bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-gray-100 placeholder-gray-500 ${focusClass} w-24`}
           />
         )}
-        <button
-          onClick={() => setModeOnly((v) => !v)}
-          className={`px-3 py-1.5 rounded-md text-sm border transition-colors ${
-            modeOnly
-              ? `${theme.accentButton} text-white border-transparent`
-              : "bg-gray-900 border-gray-700 text-gray-400 hover:text-gray-200"
-          }`}
-        >
-          Mode Only
-        </button>
+        {mode !== "hybrid" && (
+          <button
+            onClick={() => setModeOnly((v) => !v)}
+            className={`px-3 py-1.5 rounded-md text-sm border transition-colors ${
+              modeOnly
+                ? `${theme.accentButton} text-white border-transparent`
+                : "bg-gray-900 border-gray-700 text-gray-400 hover:text-gray-200"
+            }`}
+          >
+            Mode Only
+          </button>
+        )}
         {filtersActive && (
           <button
             onClick={() => { setSearch(""); setDateFrom(""); setDateTo(""); setMinDist(""); }}
