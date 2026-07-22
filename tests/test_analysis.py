@@ -310,8 +310,10 @@ def test_summary_strong_aerobic():
         "suffer_score_mismatch_flag": 0,
     }
     summary = build_analysis_summary(metrics)
-    assert "Strong aerobic" in summary
-    assert "3.0%" in summary
+    # Leads with HR zone distribution; low CD (<5%) is not flagged
+    assert "Aerobic effort" in summary
+    assert "85%" in summary  # z1+z2 = 40+45
+    assert "cardiac" not in summary.lower()
 
 
 def test_summary_high_cardiac_stress():
@@ -327,7 +329,10 @@ def test_summary_high_cardiac_stress():
         "suffer_score_mismatch_flag": 0,
     }
     summary = build_analysis_summary(metrics)
-    assert "High cardiac stress" in summary
+    # High-intensity effort leads; high CD (>10%) is still flagged
+    assert "High-intensity effort" in summary
+    assert "14.0%" in summary
+    assert "High cardiac decoupling" in summary
 
 
 def test_summary_includes_pace_fade_when_significant():

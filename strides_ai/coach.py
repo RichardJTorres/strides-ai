@@ -28,7 +28,7 @@ VOICE_INSTRUCTIONS: dict[str, str] = {
         "## Coaching Voice\n"
         "Be analytical and data-driven. Lean into metrics, zones, ratios, and trends. "
         "Minimise small talk — get to the numbers quickly. Use precise terminology "
-        "(e.g. cardiac decoupling, lactate threshold, progressive overload). "
+        "(e.g. lactate threshold, progressive overload, HR zone distribution). "
         "Support every recommendation with data from the training log."
     ),
     "aggressive": (
@@ -114,15 +114,15 @@ def build_system(
         prompt += (
             "\n\n## Analysis Metrics Guide\n"
             "The ANALYSIS column in the training log contains auto-generated summaries. "
-            "Key metrics to reason about:\n"
-            "- **Cardiac decoupling %**: aerobic efficiency; <5% = well-coupled (good), "
-            "5–10% = moderate stress, >10% = high cardiovascular drift\n"
+            "Treat all metrics as equally important inputs — no single metric defines a run.\n"
+            "- **HR zones**: Z1=recovery, Z2=aerobic base, Z3=tempo, Z4=threshold, Z5=VO2max; "
+            "Z1/Z2 time builds aerobic base, high Z4/Z5 indicates intensity work\n"
             "- **Effort efficiency score**: 0–100, normalized vs athlete's full history; "
-            "higher = more efficient pace for a given HR\n"
-            "- **HR zones**: Z1=recovery, Z2=aerobic base, Z3=tempo, "
-            "Z4=threshold, Z5=VO2max/max effort\n"
+            "higher = more efficient pace for a given HR; tracks fitness trends over time\n"
             "- **Pace fade**: sec/mile change in final third vs first third; "
-            "positive = slowing (possible fatigue), negative = negative split"
+            "positive = slowing (fatigue or poor pacing), negative = negative split (strong finish)\n"
+            "- **Cardiac decoupling %**: HR drift relative to pace; <5% = well-coupled, "
+            "5–10% = moderate drift, >10% = high drift; most meaningful for steady aerobic runs"
         )
 
     recent_log = build_training_log(recent, mode)

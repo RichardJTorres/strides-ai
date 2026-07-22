@@ -29,7 +29,7 @@ Do not ask follow-up questions. Analyse only the data provided and write your re
 
 Cover each of these dimensions, citing ELAPSED times for specific observations:
 1. Pacing strategy: is it even, a positive split (slowing), or a negative split (speeding up)?
-2. HR drift: does heart rate climb while pace stays flat? This indicates cardiac decoupling and fatigue.
+2. Aerobic efficiency: how does heart rate behave relative to pace? Consider HR zone distribution, drift across the run, and what it reveals about fitness or fatigue.
 3. Cadence: does it stay consistent or drop in the later stages?
 4. Elevation: how do climbs and descents affect pace and heart rate?
 5. Fatigue signs: look for pace fade, HR spike, or cadence collapse in the final third.
@@ -329,19 +329,7 @@ def build_analysis_summary(metrics: dict) -> str:
     """
     parts = []
 
-    # Lead with cardiac decoupling
-    cd = metrics.get("cardiac_decoupling_pct")
-    if cd is not None:
-        if cd < 5:
-            parts.append(f"Strong aerobic run — {cd:.1f}% cardiac decoupling.")
-        elif cd < 10:
-            parts.append(f"Moderate aerobic stress — {cd:.1f}% cardiac decoupling.")
-        else:
-            parts.append(f"High cardiac stress — {cd:.1f}% cardiac decoupling.")
-    else:
-        parts.append("Analysis limited — HR/velocity data unavailable.")
-
-    # HR zone distribution
+    # Lead with HR zone distribution — describes the nature of the effort
     z1 = metrics.get("hr_zone_1_pct")
     z2 = metrics.get("hr_zone_2_pct")
     z4 = metrics.get("hr_zone_4_pct")
@@ -357,12 +345,22 @@ def build_analysis_summary(metrics: dict) -> str:
             (5, z5 or 0),
         ]
         dominant = max(zones_available, key=lambda x: x[1])
-        zone_msg = f"{z12:.0f}% time in Z1/Z2"
         if z4 is not None and z5 is not None and z4 + z5 > 30:
-            zone_msg += f", {z4 + z5:.0f}% in Z4/Z5 (high intensity)"
-        elif dominant[0] >= 3:
-            zone_msg = f"Dominant effort Z{dominant[0]} ({dominant[1]:.0f}%)"
-        parts.append(zone_msg + ".")
+            parts.append(f"High-intensity effort — {z4 + z5:.0f}% in Z4/Z5, {z12:.0f}% in Z1/Z2.")
+        elif dominant[0] <= 2:
+            parts.append(f"Aerobic effort — {z12:.0f}% time in Z1/Z2.")
+        else:
+            parts.append(f"Dominant effort Z{dominant[0]} ({dominant[1]:.0f}%).")
+
+    # Effort efficiency score
+    eff = metrics.get("effort_efficiency_score")
+    if eff is not None:
+        if eff >= 75:
+            parts.append(f"Effort efficiency {eff:.0f}/100 — strong pace-for-HR output.")
+        elif eff >= 50:
+            parts.append(f"Effort efficiency {eff:.0f}/100.")
+        else:
+            parts.append(f"Effort efficiency {eff:.0f}/100 — below average pace-for-HR output.")
 
     # Pace fade
     pf = metrics.get("pace_fade_seconds")
@@ -371,6 +369,14 @@ def build_analysis_summary(metrics: dict) -> str:
             parts.append(f"Positive pace fade of {pf:.0f}s/mile in final third.")
         else:
             parts.append(f"Negative split — improved {abs(pf):.0f}s/mile in final third.")
+
+    # Cardiac decoupling — flag only when notable
+    cd = metrics.get("cardiac_decoupling_pct")
+    if cd is not None and cd >= 5:
+        if cd < 10:
+            parts.append(f"Moderate cardiac decoupling ({cd:.1f}%) — some aerobic drift.")
+        else:
+            parts.append(f"High cardiac decoupling ({cd:.1f}%) — significant cardiovascular drift.")
 
     # Elevation
     if metrics.get("high_elevation_flag"):
@@ -381,6 +387,9 @@ def build_analysis_summary(metrics: dict) -> str:
     # Suffer score mismatch
     if metrics.get("suffer_score_mismatch_flag"):
         parts.append("Note: HR data may be unreliable for this run.")
+
+    if not parts:
+        parts.append("Insufficient stream data for analysis summary.")
 
     return " ".join(parts)
 
