@@ -2,13 +2,14 @@
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Generator
 
 import httpx
 
 from . import db
 from .activity_types import CardioActivity, SportType
-from .analysis import RateLimitError, analyze_activity
+from .analysis import RateLimitError, _fetch_streams, _process_streams, analyze_activity
 from .db import get_stored_ids, upsert_activity, upsert_canonical_activity
 from .db.models import RUN_TYPES
 
@@ -84,12 +85,18 @@ def sync_activities(access_token: str, full: bool = False) -> int:
     to backfill or fix gaps.
 
     Returns the number of new/updated activities written.
+
+    Performance: stream fetches (HTTP I/O) are parallelized across up to 5
+    workers; metric computation and DB writes remain sequential to avoid SQLite
+    write contention. renormalize_effort_efficiency() runs once at the end
+    instead of once per activity.
     """
     stored_ids = get_stored_ids()
     max_hr = int(db.get_setting("max_hr", "190") or "190")
     count = 0
-    rate_limited = False
 
+    # Phase 1: collect activities to upsert and analyze
+    to_analyze: list[dict] = []
     for activity in _iter_activities(access_token):
         if not full and activity["id"] in stored_ids:
             # In incremental mode, once we hit a known activity we're up-to-date
@@ -104,19 +111,52 @@ def sync_activities(access_token: str, full: bool = False) -> int:
             if stored and stored.get("analysis_status") == "done":
                 continue
 
-        if not rate_limited:
-            status = analyze_activity(activity, access_token, max_hr=max_hr)
-            if status == "pending":
-                log.warning("rate limited during sync — deferring remaining stream fetches")
-                rate_limited = True
+        to_analyze.append(activity)
 
-    # Backfill: process up to 10 pending/unanalyzed activities per sync cycle
+    # Phase 2: parallel stream fetch (I/O-bound — safe to parallelize)
+    any_analyzed = False
+    rate_limited = False
+
+    if to_analyze:
+        fetch_results: dict[int, tuple[dict, dict | None, str]] = {}
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            future_to_activity = {
+                executor.submit(_fetch_streams, act["id"], access_token): act for act in to_analyze
+            }
+            for future in as_completed(future_to_activity):
+                act = future_to_activity[future]
+                streams, status = future.result()
+                fetch_results[act["id"]] = (act, streams, status)
+
+        # Phase 3: sequential processing (CPU + DB writes — avoids SQLite contention)
+        for activity in to_analyze:  # preserve insertion order
+            activity_id = activity["id"]
+            act, streams, status = fetch_results[activity_id]
+
+            if status == "pending":
+                db.save_analysis(activity_id, {"analysis_status": "pending"})
+                rate_limited = True
+                log.warning("rate limited during sync — activity %s deferred", activity_id)
+            elif status == "error":
+                db.save_analysis(activity_id, {"analysis_status": "error"})
+            else:
+                result = _process_streams(act, streams, max_hr=max_hr)
+                if result == "done":
+                    any_analyzed = True
+
+    # Phase 4: backfill pending activities (sequential; rate-limit awareness required)
     if not rate_limited:
         pending = db.get_activities_pending_analysis(limit=10)
         for act in pending:
-            status = analyze_activity(act, access_token, max_hr=max_hr)
+            status = analyze_activity(act, access_token, max_hr=max_hr, renormalize=False)
             if status == "pending":
                 log.warning("rate limited during backfill — stopping")
                 break
+            if status == "done":
+                any_analyzed = True
+
+    # Phase 5: renormalize once after all analyses complete (O(N) instead of O(N²))
+    if any_analyzed:
+        db.renormalize_effort_efficiency()
 
     return count

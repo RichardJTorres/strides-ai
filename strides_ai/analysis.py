@@ -397,28 +397,35 @@ def build_analysis_summary(metrics: dict) -> str:
 # ── Top-level orchestrator ────────────────────────────────────────────────────
 
 
-def analyze_activity(activity: dict, access_token: str, max_hr: int = 190) -> str:
+def _fetch_streams(activity_id: int, access_token: str) -> tuple[dict | None, str]:
     """
-    Fetch streams, compute metrics, generate summary, and persist to the DB.
+    Fetch streams for a single activity. No DB writes.
 
-    Returns:
-        'done'    — analysis completed successfully
-        'pending' — Strava rate limit hit; activity marked for retry
-        'skipped' — no stream data available (manual entry)
+    Returns (streams, status) where status is one of:
+        'ok'      — streams fetched successfully
+        'skipped' — no stream data (manual entry / 404)
+        'pending' — Strava rate limit hit
         'error'   — unexpected failure
     """
-    activity_id = activity["id"]
-
     try:
         streams = fetch_activity_streams(activity_id, access_token)
     except RateLimitError:
-        log.warning("rate limited — marking activity %s as pending", activity_id)
-        db.save_analysis(activity_id, {"analysis_status": "pending"})
-        return "pending"
+        log.warning("rate limited — activity %s will be retried", activity_id)
+        return None, "pending"
     except Exception as exc:
         log.error("stream fetch failed for activity %s: %s", activity_id, exc)
-        db.save_analysis(activity_id, {"analysis_status": "error"})
-        return "error"
+        return None, "error"
+    return ({}, "skipped") if not streams else (streams, "ok")
+
+
+def _process_streams(activity: dict, streams: dict, max_hr: int = 190) -> str:
+    """
+    Compute metrics from already-fetched streams and persist to the DB.
+    No HTTP calls — safe to call sequentially while streams were fetched in parallel.
+
+    Returns 'done', 'skipped', or 'error'.
+    """
+    activity_id = activity["id"]
 
     if not streams:
         db.save_analysis(
@@ -440,7 +447,6 @@ def analyze_activity(activity: dict, access_token: str, max_hr: int = 190) -> st
         metrics = {k: v for k, v in metrics.items() if v is not None}
 
         db.save_analysis(activity_id, metrics)
-        db.renormalize_effort_efficiency()
 
         computed = [
             k
@@ -454,6 +460,37 @@ def analyze_activity(activity: dict, access_token: str, max_hr: int = 190) -> st
         log.error("analysis failed for activity %s: %s", activity_id, exc, exc_info=True)
         db.save_analysis(activity_id, {"analysis_status": "error"})
         return "error"
+
+
+def analyze_activity(
+    activity: dict, access_token: str, max_hr: int = 190, renormalize: bool = True
+) -> str:
+    """
+    Fetch streams, compute metrics, generate summary, and persist to the DB.
+
+    Pass renormalize=False when calling in a batch — the caller is responsible
+    for calling db.renormalize_effort_efficiency() once after the batch completes.
+
+    Returns:
+        'done'    — analysis completed successfully
+        'pending' — Strava rate limit hit; activity marked for retry
+        'skipped' — no stream data available (manual entry)
+        'error'   — unexpected failure
+    """
+    activity_id = activity["id"]
+    streams, fetch_status = _fetch_streams(activity_id, access_token)
+
+    if fetch_status == "pending":
+        db.save_analysis(activity_id, {"analysis_status": "pending"})
+        return "pending"
+    if fetch_status == "error":
+        db.save_analysis(activity_id, {"analysis_status": "error"})
+        return "error"
+
+    status = _process_streams(activity, streams, max_hr=max_hr)
+    if renormalize and status == "done":
+        db.renormalize_effort_efficiency()
+    return status
 
 
 # ── Deep-dive stream condensation ─────────────────────────────────────────────

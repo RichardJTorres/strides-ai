@@ -10,9 +10,12 @@ from strides_ai.analysis import (
     _cardiac_decoupling,
     _effort_efficiency_raw,
     _elevation_metrics,
+    _fetch_streams,
     _hr_zones,
     _pace_fade_seconds,
+    _process_streams,
     _suffer_mismatch,
+    analyze_activity,
     build_analysis_summary,
     compute_metrics,
     condense_streams_for_deep_dive,
@@ -637,3 +640,165 @@ def test_condense_streams_cycling_shows_speed():
     output = condense_streams_for_deep_dive(streams, activity)
     assert "SPEED" in output
     assert "PACE" not in output
+
+
+# ── _fetch_streams ────────────────────────────────────────────────────────────
+
+
+def test_fetch_streams_wrapper_ok():
+    with patch("strides_ai.analysis.fetch_activity_streams") as mock_fetch:
+        mock_fetch.return_value = {"heartrate": {"data": [150]}}
+        streams, status = _fetch_streams(1, "token")
+    assert status == "ok"
+    assert streams == {"heartrate": {"data": [150]}}
+
+
+def test_fetch_streams_wrapper_skipped_on_empty():
+    with patch("strides_ai.analysis.fetch_activity_streams") as mock_fetch:
+        mock_fetch.return_value = {}
+        streams, status = _fetch_streams(1, "token")
+    assert status == "skipped"
+    assert streams == {}
+
+
+def test_fetch_streams_wrapper_pending_on_rate_limit():
+    with patch("strides_ai.analysis.fetch_activity_streams") as mock_fetch:
+        mock_fetch.side_effect = RateLimitError("429")
+        streams, status = _fetch_streams(1, "token")
+    assert status == "pending"
+    assert streams is None
+
+
+def test_fetch_streams_wrapper_error_on_exception():
+    with patch("strides_ai.analysis.fetch_activity_streams") as mock_fetch:
+        mock_fetch.side_effect = Exception("network error")
+        streams, status = _fetch_streams(1, "token")
+    assert status == "error"
+    assert streams is None
+
+
+# ── _process_streams ──────────────────────────────────────────────────────────
+
+
+def test_process_streams_skipped_on_empty(tmp_db):
+    activity = {
+        "id": 99,
+        "sport_type": "Run",
+        "distance_m": 0,
+        "avg_pace_s_per_km": None,
+        "avg_hr": None,
+    }
+    db.upsert_activity(
+        {
+            "id": 99,
+            "name": "Empty",
+            "start_date_local": "2025-01-01T07:00:00Z",
+            "distance": 0,
+            "moving_time": 0,
+            "elapsed_time": 0,
+            "sport_type": "Run",
+        }
+    )
+    status = _process_streams(activity, {})
+    assert status == "skipped"
+    row = db.get_activity(99)
+    assert row["analysis_status"] == "skipped"
+
+
+def test_process_streams_done_does_not_call_renormalize(tmp_db):
+    """_process_streams must NOT call renormalize — that's the caller's responsibility."""
+    activity = {
+        "id": 1,
+        "sport_type": "Run",
+        "distance_m": 5000,
+        "avg_pace_s_per_km": 300.0,
+        "avg_hr": 150.0,
+        "suffer_score": None,
+    }
+    db.upsert_activity(
+        {
+            "id": 1,
+            "name": "Run",
+            "start_date_local": "2025-01-01T07:00:00Z",
+            "distance": 5000,
+            "moving_time": 1500,
+            "elapsed_time": 1600,
+            "sport_type": "Run",
+        }
+    )
+    streams = {
+        "time": list(range(0, 300)),
+        "heartrate": [150] * 300,
+        "velocity_smooth": [3.0] * 300,
+    }
+    with patch("strides_ai.analysis.db.renormalize_effort_efficiency") as mock_renorm:
+        status = _process_streams(activity, streams)
+    assert status == "done"
+    mock_renorm.assert_not_called()
+
+
+# ── analyze_activity ──────────────────────────────────────────────────────────
+
+
+def test_analyze_activity_renormalize_true_calls_once(tmp_db):
+    activity = {
+        "id": 1,
+        "sport_type": "Run",
+        "distance_m": 5000,
+        "avg_pace_s_per_km": 300.0,
+        "avg_hr": 150.0,
+        "suffer_score": None,
+    }
+    db.upsert_activity(
+        {
+            "id": 1,
+            "name": "Run",
+            "start_date_local": "2025-01-01T07:00:00Z",
+            "distance": 5000,
+            "moving_time": 1500,
+            "elapsed_time": 1600,
+            "sport_type": "Run",
+        }
+    )
+    streams = {
+        "time": list(range(0, 300)),
+        "heartrate": [150] * 300,
+        "velocity_smooth": [3.0] * 300,
+    }
+    with patch("strides_ai.analysis.fetch_activity_streams", return_value=streams):
+        with patch("strides_ai.analysis.db.renormalize_effort_efficiency") as mock_renorm:
+            status = analyze_activity(activity, "token", renormalize=True)
+    assert status == "done"
+    mock_renorm.assert_called_once()
+
+
+def test_analyze_activity_renormalize_false_skips_renormalize(tmp_db):
+    activity = {
+        "id": 1,
+        "sport_type": "Run",
+        "distance_m": 5000,
+        "avg_pace_s_per_km": 300.0,
+        "avg_hr": 150.0,
+        "suffer_score": None,
+    }
+    db.upsert_activity(
+        {
+            "id": 1,
+            "name": "Run",
+            "start_date_local": "2025-01-01T07:00:00Z",
+            "distance": 5000,
+            "moving_time": 1500,
+            "elapsed_time": 1600,
+            "sport_type": "Run",
+        }
+    )
+    streams = {
+        "time": list(range(0, 300)),
+        "heartrate": [150] * 300,
+        "velocity_smooth": [3.0] * 300,
+    }
+    with patch("strides_ai.analysis.fetch_activity_streams", return_value=streams):
+        with patch("strides_ai.analysis.db.renormalize_effort_efficiency") as mock_renorm:
+            status = analyze_activity(activity, "token", renormalize=False)
+    assert status == "done"
+    mock_renorm.assert_not_called()
