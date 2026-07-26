@@ -120,7 +120,7 @@ def test_claude_stream_turn_attachment_prepended(mock_anthropic):
 
 
 def test_claude_stream_turn_saves_memory(mock_anthropic, mocker):
-    mock_db = mocker.patch("strides_ai.backends.claude.db.save_memory", return_value="ok")
+    mock_db = mocker.patch("strides_ai.backends.base.db.save_memory", return_value="ok")
     tool_block = _claude_tool_block("save_memory", {"category": "goal", "content": "BQ 2025"})
     mock_anthropic.return_value.messages.stream.side_effect = [
         _claude_stream([], stop_reason="tool_use", content_blocks=[tool_block]),
@@ -137,7 +137,7 @@ def test_claude_stream_turn_saves_memory(mock_anthropic, mocker):
 
 
 def test_claude_stream_turn_multiple_tool_calls(mock_anthropic, mocker):
-    mock_db = mocker.patch("strides_ai.backends.claude.db.save_memory", return_value="ok")
+    mock_db = mocker.patch("strides_ai.backends.base.db.save_memory", return_value="ok")
     blocks = [
         _claude_tool_block(
             "save_memory", {"category": "goal", "content": "sub-3 marathon"}, "tu_1"
@@ -262,7 +262,7 @@ def test_gemini_stream_turn_appends_history(mock_genai):
 
 
 def test_gemini_stream_turn_saves_memory(mock_genai, mocker):
-    mock_db = mocker.patch("strides_ai.backends.gemini.db.save_memory", return_value="ok")
+    mock_db = mocker.patch("strides_ai.backends.base.db.save_memory", return_value="ok")
     mock_client = mock_genai.return_value
     mock_client.models.generate_content_stream.return_value = iter(
         [_gemini_fc_chunk("save_memory", {"category": "injury", "content": "knee pain"})]
@@ -388,7 +388,7 @@ def test_openai_stream_turn_initial_history_preserved(mock_openai):
 
 
 def test_openai_stream_turn_saves_memory(mock_openai, mocker):
-    mock_db = mocker.patch("strides_ai.backends.openai.db.save_memory", return_value="saved")
+    mock_db = mocker.patch("strides_ai.backends.base.db.save_memory", return_value="saved")
     mock_client = mock_openai.return_value
     tc = _oai_tc_delta(
         0, "call_abc", "save_memory", json.dumps({"category": "goal", "content": "BQ 2025"})
@@ -411,7 +411,7 @@ def test_openai_stream_turn_saves_memory(mock_openai, mocker):
 
 def test_openai_tool_result_history_format(mock_openai, mocker):
     """After a tool call the history must include a 'tool' role message."""
-    mocker.patch("strides_ai.backends.openai.db.save_memory", return_value="saved")
+    mocker.patch("strides_ai.backends.base.db.save_memory", return_value="saved")
     mock_client = mock_openai.return_value
     tc = _oai_tc_delta(
         0,
@@ -438,7 +438,7 @@ def test_openai_tool_result_history_format(mock_openai, mocker):
 
 def test_openai_assembles_split_tool_arguments(mock_openai, mocker):
     """Arguments arriving across multiple stream chunks are concatenated correctly."""
-    mock_db = mocker.patch("strides_ai.backends.openai.db.save_memory", return_value="ok")
+    mock_db = mocker.patch("strides_ai.backends.base.db.save_memory", return_value="ok")
     mock_client = mock_openai.return_value
     part1 = _oai_tc_delta(0, "call_1", "save_memory", '{"category": "race"')
     part2 = _oai_tc_delta(0, None, None, ', "content": "Boston 2026"}')
@@ -548,7 +548,7 @@ def test_ollama_stream_turn_appends_history(mocker):
 
 
 def test_ollama_stream_turn_saves_memory(mocker):
-    mock_db = mocker.patch("strides_ai.backends.ollama.db.save_memory", return_value="ok")
+    mock_db = mocker.patch("strides_ai.backends.base.db.save_memory", return_value="ok")
     tool_call = {
         "function": {
             "name": "save_memory",

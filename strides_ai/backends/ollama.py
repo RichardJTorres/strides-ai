@@ -5,8 +5,7 @@ import time
 
 import httpx
 
-from .. import db
-from .base import BaseBackend
+from .base import SAVE_MEMORY_CATEGORIES, SAVE_MEMORY_DESCRIPTION, BaseBackend
 
 DEFAULT_HOST = "http://localhost:11434"
 
@@ -15,18 +14,13 @@ SAVE_MEMORY_TOOL = {
     "type": "function",
     "function": {
         "name": "save_memory",
-        "description": (
-            "Save an important fact about the athlete to persistent memory. "
-            "Call this whenever the athlete mentions: goals, target races or times, "
-            "injuries or niggles, training preferences, weekly mileage targets, "
-            "or any coaching context that should be remembered in future sessions."
-        ),
+        "description": SAVE_MEMORY_DESCRIPTION,
         "parameters": {
             "type": "object",
             "properties": {
                 "category": {
                     "type": "string",
-                    "enum": ["goal", "race", "injury", "preference", "training", "other"],
+                    "enum": SAVE_MEMORY_CATEGORIES,
                     "description": "Category of the memory",
                 },
                 "content": {
@@ -149,10 +143,7 @@ class OllamaBackend(BaseBackend):
             for tc in tool_calls:
                 fn = tc.get("function", {})
                 if fn.get("name") == "save_memory":
-                    args = fn.get("arguments", {})
-                    category = args.get("category", "other")
-                    content = args.get("content", "")
-                    result = db.save_memory(category, content)
+                    result, category, content = self._execute_save_memory(fn.get("arguments", {}))
                     memories_saved.append((category, content))
                     self._history.append({"role": "tool", "content": result})
 

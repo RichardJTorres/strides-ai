@@ -4,26 +4,20 @@ import time
 
 import anthropic
 
-from .. import db
-from .base import BaseBackend
+from .base import SAVE_MEMORY_CATEGORIES, SAVE_MEMORY_DESCRIPTION, BaseBackend
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
 # Anthropic tool-use format
 SAVE_MEMORY_TOOL = {
     "name": "save_memory",
-    "description": (
-        "Save an important fact about the athlete to persistent memory. "
-        "Call this whenever the athlete mentions: goals, target races or times, "
-        "injuries or niggles, training preferences, weekly mileage targets, "
-        "or any coaching context that should be remembered in future sessions."
-    ),
+    "description": SAVE_MEMORY_DESCRIPTION,
     "input_schema": {
         "type": "object",
         "properties": {
             "category": {
                 "type": "string",
-                "enum": ["goal", "race", "injury", "preference", "training", "other"],
+                "enum": SAVE_MEMORY_CATEGORIES,
                 "description": "Category of the memory",
             },
             "content": {
@@ -114,14 +108,10 @@ class ClaudeBackend(BaseBackend):
                 if not (hasattr(block, "type") and block.type == "tool_use"):
                     continue
                 if block.name == "save_memory":
-                    result = db.save_memory(block.input["category"], block.input["content"])
-                    memories_saved.append((block.input["category"], block.input["content"]))
+                    result, category, content = self._execute_save_memory(block.input)
+                    memories_saved.append((category, content))
                     tool_results.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": result,
-                        }
+                        {"type": "tool_result", "tool_use_id": block.id, "content": result}
                     )
 
             self._history.append({"role": "user", "content": tool_results})
