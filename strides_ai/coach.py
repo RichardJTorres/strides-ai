@@ -52,6 +52,85 @@ VOICE_INSTRUCTIONS: dict[str, str] = {
 }
 
 
+# ── build_system section helpers ──────────────────────────────────────────────
+
+
+def _voice_section(coach_voice: str) -> str:
+    block = VOICE_INSTRUCTIONS.get(coach_voice, "")
+    if not block and coach_voice:
+        block = f"## Coaching Voice\n{coach_voice}"
+    return block
+
+
+def _datetime_section() -> str:
+    now = datetime.now().astimezone()
+    day_str = now.strftime("%A, %B %-d, %Y")
+    time_str = now.strftime("%-I:%M %p %Z")
+    return (
+        f"## Current Date & Time\n"
+        f"Today is {day_str} at {time_str}. "
+        "Use this to reason about training timing, upcoming workouts, recovery windows, "
+        "and time elapsed since past activities. "
+        "Do not mention the date or time in responses unless directly relevant to the athlete's question."
+    )
+
+
+def _memories_section(memories: list[dict]) -> str:
+    if not memories:
+        return ""
+    lines = [f"  [{m['category']}] {m['content']}" for m in memories]
+    return "## Coaching Notes (remembered from previous sessions)\n" + "\n".join(lines)
+
+
+def _upcoming_workouts_section() -> str:
+    upcoming = db.get_upcoming_planned_workouts()
+    if not upcoming:
+        return ""
+    header = "Date       | Type             | Distance | Duration | Intensity"
+    sep = "-" * 65
+    rows = []
+    for w in upcoming:
+        dist = f"{w['distance_km']} km" if w.get("distance_km") else "—"
+        dur = f"{w['duration_min']} min" if w.get("duration_min") else "—"
+        rows.append(
+            f"{w['date']:10s} | {(w['workout_type'] or '')[:16]:16s} | {dist:8s} | {dur:8s} | {w.get('intensity') or '—'}"
+        )
+    return (
+        "## Upcoming Planned Workouts (next 14 days)\n"
+        + header
+        + "\n"
+        + sep
+        + "\n"
+        + "\n".join(rows)
+    )
+
+
+def _analysis_guide_section(cfg, recent: list) -> str:
+    if not cfg.has_analysis or not any(a.get("analysis_summary") for a in recent):
+        return ""
+    return (
+        "## Analysis Metrics Guide\n"
+        "The ANALYSIS column in the training log contains auto-generated summaries. "
+        "Treat all metrics as equally important inputs — no single metric defines a run.\n"
+        "- **HR zones**: Z1=recovery, Z2=aerobic base, Z3=tempo, Z4=threshold, Z5=VO2max; "
+        "Z1/Z2 time builds aerobic base, high Z4/Z5 indicates intensity work\n"
+        "- **Effort efficiency score**: 0–100, normalized vs athlete's full history; "
+        "higher = more efficient pace for a given HR; tracks fitness trends over time\n"
+        "- **Pace fade**: sec/mile change in final third vs first third; "
+        "positive = slowing (fatigue or poor pacing), negative = negative split (strong finish)\n"
+        "- **Cardiac decoupling %**: HR drift relative to pace; <5% = well-coupled, "
+        "5–10% = moderate drift, >10% = high drift; most meaningful for steady aerobic runs"
+    )
+
+
+def _recent_activities_section(recent: list, mode: str) -> str:
+    log = build_training_log(recent, mode)
+    return f"## Recent Activities (last {RECENT_ACTIVITIES_IN_SYSTEM})\n\n```\n{log}\n```"
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
+
+
 def build_system(
     profile: str,
     memories: list[dict],
@@ -60,77 +139,21 @@ def build_system(
     coach_voice: str = "",
 ) -> str:
     cfg = MODES.get(mode, MODES["running"])
-    prompt = cfg.system_prompt
-
-    voice_block = VOICE_INSTRUCTIONS.get(coach_voice, "")
-    if not voice_block and coach_voice:
-        voice_block = f"## Coaching Voice\n{coach_voice}"
-    if voice_block:
-        prompt += f"\n\n{voice_block}"
-
-    now = datetime.now().astimezone()
-    day_str = now.strftime("%A, %B %-d, %Y")
-    time_str = now.strftime("%-I:%M %p %Z")
-    prompt += (
-        f"\n\n## Current Date & Time\n"
-        f"Today is {day_str} at {time_str}. "
-        "Use this to reason about training timing, upcoming workouts, recovery windows, "
-        "and time elapsed since past activities. "
-        "Do not mention the date or time in responses unless directly relevant to the athlete's question."
-    )
-
-    if profile:
-        prompt += f"\n\n{profile}"
-
-    if memories:
-        lines = [f"  [{m['category']}] {m['content']}" for m in memories]
-        prompt += "\n\n## Coaching Notes (remembered from previous sessions)\n" + "\n".join(lines)
-
-    upcoming = db.get_upcoming_planned_workouts()
-    if upcoming:
-        header = "Date       | Type             | Distance | Duration | Intensity"
-        sep = "-" * 65
-        rows = []
-        for w in upcoming:
-            dist = f"{w['distance_km']} km" if w.get("distance_km") else "—"
-            dur = f"{w['duration_min']} min" if w.get("duration_min") else "—"
-            rows.append(
-                f"{w['date']:10s} | {(w['workout_type'] or '')[:16]:16s} | {dist:8s} | {dur:8s} | {w.get('intensity') or '—'}"
-            )
-        prompt += (
-            "\n\n## Upcoming Planned Workouts (next 14 days)\n"
-            + header
-            + "\n"
-            + sep
-            + "\n"
-            + "\n".join(rows)
-        )
-
     # Pin only the most recent activities every turn (cheap, always survives truncation).
-    # The full training log is seeded once in conversation history.
+    # The full training log is seeded once in conversation history via build_initial_history.
     recent = (activities or [])[:RECENT_ACTIVITIES_IN_SYSTEM]
 
-    if cfg.has_analysis and any(a.get("analysis_summary") for a in recent):
-        prompt += (
-            "\n\n## Analysis Metrics Guide\n"
-            "The ANALYSIS column in the training log contains auto-generated summaries. "
-            "Treat all metrics as equally important inputs — no single metric defines a run.\n"
-            "- **HR zones**: Z1=recovery, Z2=aerobic base, Z3=tempo, Z4=threshold, Z5=VO2max; "
-            "Z1/Z2 time builds aerobic base, high Z4/Z5 indicates intensity work\n"
-            "- **Effort efficiency score**: 0–100, normalized vs athlete's full history; "
-            "higher = more efficient pace for a given HR; tracks fitness trends over time\n"
-            "- **Pace fade**: sec/mile change in final third vs first third; "
-            "positive = slowing (fatigue or poor pacing), negative = negative split (strong finish)\n"
-            "- **Cardiac decoupling %**: HR drift relative to pace; <5% = well-coupled, "
-            "5–10% = moderate drift, >10% = high drift; most meaningful for steady aerobic runs"
-        )
-
-    recent_log = build_training_log(recent, mode)
-    prompt += (
-        f"\n\n## Recent Activities (last {RECENT_ACTIVITIES_IN_SYSTEM})\n\n```\n{recent_log}\n```"
-    )
-
-    return prompt
+    sections = [
+        cfg.system_prompt,
+        _voice_section(coach_voice),
+        _datetime_section(),
+        profile,  # already carries its own ## header from profile.py; empty string is filtered out
+        _memories_section(memories),
+        _upcoming_workouts_section(),
+        _analysis_guide_section(cfg, recent),
+        _recent_activities_section(recent, mode),
+    ]
+    return "\n\n".join(s for s in sections if s)
 
 
 def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
