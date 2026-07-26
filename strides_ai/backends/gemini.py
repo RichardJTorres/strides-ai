@@ -6,8 +6,7 @@ from google import genai
 from google.genai import types
 from google.genai.errors import ClientError
 
-from .. import db
-from .base import BaseBackend
+from .base import SAVE_MEMORY_CATEGORIES, SAVE_MEMORY_DESCRIPTION, BaseBackend
 
 DEFAULT_MODEL = "gemini-2.5-flash"
 
@@ -18,18 +17,13 @@ SAVE_MEMORY_TOOL = types.Tool(
     function_declarations=[
         types.FunctionDeclaration(
             name="save_memory",
-            description=(
-                "Save an important fact about the athlete to persistent memory. "
-                "Call this whenever the athlete mentions: goals, target races or times, "
-                "injuries or niggles, training preferences, weekly mileage targets, "
-                "or any coaching context that should be remembered in future sessions."
-            ),
+            description=SAVE_MEMORY_DESCRIPTION,
             parameters=types.Schema(
                 type=types.Type.OBJECT,
                 properties={
                     "category": types.Schema(
                         type=types.Type.STRING,
-                        enum=["goal", "race", "injury", "preference", "training", "other"],
+                        enum=SAVE_MEMORY_CATEGORIES,
                         description="Category of the memory",
                     ),
                     "content": types.Schema(
@@ -190,10 +184,7 @@ class GeminiBackend(BaseBackend):
             for part in fc_parts:
                 fc = part.function_call
                 if fc.name == "save_memory":
-                    args = dict(fc.args)
-                    category = args.get("category", "other")
-                    content = args.get("content", "")
-                    result = db.save_memory(category, content)
+                    result, category, content = self._execute_save_memory(dict(fc.args))
                     memories_saved.append((category, content))
                     tool_response_parts.append(
                         types.Part.from_function_response(

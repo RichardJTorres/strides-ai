@@ -3,6 +3,17 @@
 from abc import ABC, abstractmethod
 from typing import Callable
 
+from .. import db
+
+SAVE_MEMORY_DESCRIPTION = (
+    "Save an important fact about the athlete to persistent memory. "
+    "Call this whenever the athlete mentions: goals, target races or times, "
+    "injuries or niggles, training preferences, weekly mileage targets, "
+    "or any coaching context that should be remembered in future sessions."
+)
+
+SAVE_MEMORY_CATEGORIES: list[str] = ["goal", "race", "injury", "preference", "training", "other"]
+
 
 class BaseBackend(ABC):
     """
@@ -49,6 +60,19 @@ class BaseBackend(ABC):
         attachments: optional list of Anthropic-format content blocks (image or text)
           to prepend before the user's text in the message.
         """
+
+    def _execute_save_memory(self, args: dict) -> tuple[str, str, str]:
+        """
+        Persist a save_memory tool call to the DB.
+
+        Extracts category and content from the tool args dict, calls db.save_memory,
+        and returns (db_result, category, content) so the caller can append to history
+        and record the memory in the turn's memories_saved list.
+        """
+        category = args.get("category", "other")
+        content = args.get("content", "")
+        result = db.save_memory(category, content)
+        return result, category, content
 
     @abstractmethod
     def stateless_turn(
