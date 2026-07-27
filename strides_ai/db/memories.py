@@ -20,3 +20,24 @@ def save(session: Session, category: str, content: str) -> str:
 
 def get_all(session: Session) -> list[Memory]:
     return session.exec(select(Memory).order_by(Memory.created_at)).all()
+
+
+def update(session: Session, memory_id: int, category: str, content: str) -> Memory | None:
+    memory = session.get(Memory, memory_id)
+    if memory is None:
+        return None
+    memory.category = category
+    memory.content = content
+    session.add(memory)
+    session.commit()
+    session.refresh(memory)
+    return memory
+
+
+def delete(session: Session, memory_id: int) -> bool:
+    memory = session.get(Memory, memory_id)
+    if memory is None:
+        return False
+    session.delete(memory)
+    session.commit()
+    return True
