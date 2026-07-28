@@ -5,8 +5,9 @@ import Charts from "./pages/Charts";
 import Calendar from "./pages/Calendar";
 import Profile from "./pages/Profile";
 import Settings from "./pages/Settings";
+import Memories from "./pages/Memories";
 
-type Tab = "chat" | "activities" | "charts" | "calendar" | "profile" | "settings";
+type Tab = "chat" | "activities" | "charts" | "calendar" | "profile" | "memories" | "settings";
 export type Mode = "running" | "cycling" | "hybrid" | "lifting";
 
 export interface ThemeConfig {
@@ -89,6 +90,13 @@ const ICONS: Record<Tab, JSX.Element> = {
       <circle cx="12" cy="7" r="4"/>
     </svg>
   ),
+  memories: (
+    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+      <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+      <line x1="12" y1="22.08" x2="12" y2="12"/>
+    </svg>
+  ),
   settings: (
     <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="3"/>
@@ -103,6 +111,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "charts", label: "Charts" },
   { id: "calendar", label: "Calendar" },
   { id: "profile", label: "Profile" },
+  { id: "memories", label: "Memories" },
 ];
 
 const VALID_TABS = new Set<string>([...TABS.map((t) => t.id), "settings"]);
@@ -178,7 +187,7 @@ export default function App() {
 
   const visibleTabs = TABS.filter((t) => !hiddenTabs.has(t.id as Tab));
   const allNavTabs: { id: Tab; label: string }[] = [...visibleTabs, { id: "settings", label: "Settings" }];
-  const mobileNavTabs = allNavTabs.filter((t) => t.id !== "calendar");
+  const mobileNavTabs = allNavTabs.filter((t) => t.id !== "calendar" && t.id !== "memories");
 
   return (
     <div className="flex h-dvh bg-gray-950 text-gray-100">
@@ -227,6 +236,7 @@ export default function App() {
         {tab === "charts" && <Charts mode={mode} theme={theme} />}
         {tab === "calendar" && <Calendar />}
         {tab === "profile" && <Profile mode={mode} theme={theme} />}
+        {tab === "memories" && <Memories theme={theme} />}
         {tab === "settings" && <Settings mode={mode} setMode={setMode} theme={theme} onProviderChanged={refreshStatus} />}
       </main>
 
