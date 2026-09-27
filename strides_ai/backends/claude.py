@@ -88,7 +88,7 @@ class ClaudeBackend(BaseBackend):
         while True:
             with self._client.messages.stream(
                 model=self._model,
-                max_tokens=2048,
+                max_tokens=8192,
                 system=system,
                 messages=self._history,
                 tools=[SAVE_MEMORY_TOOL],
@@ -99,6 +99,12 @@ class ClaudeBackend(BaseBackend):
                 final = stream.get_final_message()
 
             self._history.append({"role": "assistant", "content": final.content})
+
+            if final.stop_reason == "max_tokens":
+                notice = "\n\n_[Response truncated — hit the length limit. Ask me to continue.]_"
+                on_token(notice)
+                response_text += notice
+                break
 
             if final.stop_reason != "tool_use":
                 break
@@ -122,11 +128,16 @@ class ClaudeBackend(BaseBackend):
         response_text = ""
         with self._client.messages.stream(
             model=self._model,
-            max_tokens=2048,
+            max_tokens=8192,
             system=system,
             messages=[{"role": "user", "content": user_input}],
         ) as stream:
             for chunk in stream.text_stream:
                 on_token(chunk)
                 response_text += chunk
+            final = stream.get_final_message()
+        if final.stop_reason == "max_tokens":
+            notice = "\n\n_[Response truncated — hit the length limit.]_"
+            on_token(notice)
+            response_text += notice
         return response_text
