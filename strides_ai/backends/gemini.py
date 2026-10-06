@@ -6,7 +6,12 @@ from google import genai
 from google.genai import types
 from google.genai.errors import ClientError
 
-from .base import SAVE_MEMORY_CATEGORIES, SAVE_MEMORY_DESCRIPTION, BaseBackend
+from .base import (
+    SAVE_MEMORY_CATEGORIES,
+    SAVE_MEMORY_DESCRIPTION,
+    UPDATE_TRAINING_PLAN_DESCRIPTION,
+    BaseBackend,
+)
 
 DEFAULT_MODEL = "gemini-2.5-flash"
 
@@ -32,6 +37,54 @@ SAVE_MEMORY_TOOL = types.Tool(
                     ),
                 },
                 required=["category", "content"],
+            ),
+        )
+    ]
+)
+
+UPDATE_TRAINING_PLAN_TOOL = types.Tool(
+    function_declarations=[
+        types.FunctionDeclaration(
+            name="update_training_plan",
+            description=UPDATE_TRAINING_PLAN_DESCRIPTION,
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "set": types.Schema(
+                        type=types.Type.ARRAY,
+                        description="Workouts to create or overwrite, one entry per date.",
+                        items=types.Schema(
+                            type=types.Type.OBJECT,
+                            properties={
+                                "date": types.Schema(
+                                    type=types.Type.STRING, description="ISO date, YYYY-MM-DD"
+                                ),
+                                "workout_type": types.Schema(
+                                    type=types.Type.STRING,
+                                    description=(
+                                        "e.g. Easy Run, Long Run, Tempo Run, Easy Ride, Long "
+                                        "Ride, Tempo Ride, Indoor Ride, Intervals, "
+                                        "Cross-Training, Race, Rest"
+                                    ),
+                                ),
+                                "description": types.Schema(type=types.Type.STRING),
+                                "distance_km": types.Schema(type=types.Type.NUMBER),
+                                "elevation_m": types.Schema(type=types.Type.NUMBER),
+                                "duration_min": types.Schema(type=types.Type.INTEGER),
+                                "intensity": types.Schema(
+                                    type=types.Type.STRING,
+                                    enum=["easy", "moderate", "hard", "rest"],
+                                ),
+                            },
+                            required=["date", "workout_type"],
+                        ),
+                    ),
+                    "delete": types.Schema(
+                        type=types.Type.ARRAY,
+                        description="Dates (YYYY-MM-DD) to clear from the calendar.",
+                        items=types.Schema(type=types.Type.STRING),
+                    ),
+                },
             ),
         )
     ]
@@ -105,11 +158,12 @@ class GeminiBackend(BaseBackend):
 
         config = types.GenerateContentConfig(
             system_instruction=system,
-            tools=[SAVE_MEMORY_TOOL],
+            tools=[SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL],
         )
 
         response_text = ""
         memories_saved: list[tuple[str, str]] = []
+        plan_changes: list[dict] = []
         first_turn = True
 
         while True:
@@ -192,9 +246,18 @@ class GeminiBackend(BaseBackend):
                             response={"result": result},
                         )
                     )
+                elif fc.name == "update_training_plan":
+                    result, changes = self._execute_update_training_plan(dict(fc.args))
+                    plan_changes.extend(changes)
+                    tool_response_parts.append(
+                        types.Part.from_function_response(
+                            name="update_training_plan",
+                            response={"result": result},
+                        )
+                    )
             self._history.append(types.Content(role="user", parts=tool_response_parts))
 
-        return response_text, memories_saved
+        return response_text, memories_saved, plan_changes
 
     def stateless_turn(self, system, user_input, on_token):
         config = types.GenerateContentConfig(system_instruction=system)

@@ -10,6 +10,9 @@ RECALL_MESSAGES = 40
 # Number of most-recent activities always pinned in the system prompt each turn.
 # The full training log is seeded once in conversation history via build_initial_history.
 RECENT_ACTIVITIES_IN_SYSTEM = 30
+# How far ahead planned workouts are surfaced, wide enough to cover a multi-week
+# training block the coach is asked to generate or regenerate.
+PLANNED_WORKOUTS_WINDOW_DAYS = 60
 
 VOICE_INSTRUCTIONS: dict[str, str] = {
     "supportive": (
@@ -83,7 +86,7 @@ def _memories_section(memories: list[dict]) -> str:
 
 
 def _upcoming_workouts_section() -> str:
-    upcoming = db.get_upcoming_planned_workouts()
+    upcoming = db.get_upcoming_planned_workouts(days=PLANNED_WORKOUTS_WINDOW_DAYS)
     if not upcoming:
         return ""
     header = "Date       | Type             | Distance | Duration | Intensity"
@@ -96,13 +99,32 @@ def _upcoming_workouts_section() -> str:
             f"{w['date']:10s} | {(w['workout_type'] or '')[:16]:16s} | {dist:8s} | {dur:8s} | {w.get('intensity') or '—'}"
         )
     return (
-        "## Upcoming Planned Workouts (next 14 days)\n"
+        f"## Upcoming Planned Workouts (next {PLANNED_WORKOUTS_WINDOW_DAYS} days)\n"
         + header
         + "\n"
         + sep
         + "\n"
         + "\n".join(rows)
     )
+
+
+def _calendar_prefs_section() -> str:
+    prefs = db.get_calendar_prefs()
+    today = datetime.now().date().isoformat()
+    races = sorted(
+        (r for r in prefs.get("races", []) if r.get("date", "") >= today), key=lambda r: r["date"]
+    )
+    blocked = sorted(d for d in prefs.get("blocked_days", []) if d >= today)
+    if not races and not blocked:
+        return ""
+    lines = []
+    if races:
+        lines.append("Upcoming races:")
+        lines.extend(f"  - {r['date']}: {r.get('name', 'Race')}" for r in races)
+    if blocked:
+        lines.append("Blocked-out days (do not schedule workouts on these dates):")
+        lines.extend(f"  - {d}" for d in blocked)
+    return "## Calendar Constraints\n" + "\n".join(lines)
 
 
 def _analysis_guide_section(cfg, recent: list) -> str:
@@ -149,6 +171,7 @@ def build_system(
         _datetime_section(),
         profile,  # already carries its own ## header from profile.py; empty string is filtered out
         _memories_section(memories),
+        _calendar_prefs_section(),
         _upcoming_workouts_section(),
         _analysis_guide_section(cfg, recent),
         _recent_activities_section(recent, mode),

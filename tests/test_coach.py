@@ -125,6 +125,37 @@ def test_build_system_no_upcoming_workouts_section_when_empty(tmp_db):
     assert "Upcoming Planned Workouts" not in result
 
 
+def test_build_system_injects_workout_beyond_two_weeks(tmp_db):
+    far_out = (date.today() + timedelta(days=45)).isoformat()
+    db.save_planned_workout(far_out, "Long Ride", None, 80.0, None, 240, "moderate")
+    result = build_system("", [])
+    assert "Upcoming Planned Workouts" in result
+    assert far_out in result
+
+
+def test_build_system_injects_calendar_constraints(tmp_db):
+    race_date = (date.today() + timedelta(days=10)).isoformat()
+    blocked_date = (date.today() + timedelta(days=3)).isoformat()
+    db.save_calendar_prefs([blocked_date], [{"date": race_date, "name": "Fall Century"}])
+    result = build_system("", [])
+    assert "Calendar Constraints" in result
+    assert race_date in result
+    assert "Fall Century" in result
+    assert blocked_date in result
+
+
+def test_build_system_no_calendar_constraints_section_when_empty(tmp_db):
+    result = build_system("", [])
+    assert "Calendar Constraints" not in result
+
+
+def test_build_system_calendar_constraints_excludes_past_dates(tmp_db):
+    past_date = (date.today() - timedelta(days=5)).isoformat()
+    db.save_calendar_prefs([past_date], [{"date": past_date, "name": "Old Race"}])
+    result = build_system("", [])
+    assert "Calendar Constraints" not in result
+
+
 def test_build_system_embeds_recent_activities(tmp_db):
     rows = [_make_row()]
     result = build_system("", [], activities=rows)

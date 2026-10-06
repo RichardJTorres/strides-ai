@@ -1,15 +1,29 @@
 """Calendar routes."""
 
+import asyncio
+import json
+from datetime import date as date_cls, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlmodel import Session
 
 from ...config import get_settings
+from ...coach import RECENT_ACTIVITIES_IN_SYSTEM
+from ...db import activities as act_crud
 from ...db import calendar as crud
+from ...db import memories as mem_crud
 from ...db import profiles as prof_crud
 from ...db.engine import get_session
+from ...plan_generation import (
+    PLAN_GENERATION_SYSTEM_PROMPT,
+    SURROUNDING_WINDOW_DAYS,
+    build_plan_generation_prompt,
+    parse_plan_generation_response,
+)
 from ...profile import profile_to_text
 from ...schedule import analyze_nutrition
+from ..deps import get_backend
 
 router = APIRouter()
 
@@ -26,6 +40,36 @@ class WorkoutBody(BaseModel):
     elevation_m: float | None = None
     duration_min: int | None = None
     intensity: str | None = None
+
+
+class BulkWorkoutEntry(WorkoutBody):
+    date: str
+
+
+class BulkPlanBody(BaseModel):
+    set: list[BulkWorkoutEntry] = []
+    delete: list[str] = []
+
+
+class GeneratePlanBody(BaseModel):
+    start_date: str
+    end_date: str
+    freeform_text: str = ""
+
+
+class GeneratedWorkout(BaseModel):
+    date: str
+    workout_type: str
+    description: str | None = None
+    distance_km: float | None = None
+    elevation_m: float | None = None
+    duration_min: int | None = None
+    intensity: str | None = None
+
+
+class GeneratePlanResponse(BaseModel):
+    workouts: list[GeneratedWorkout]
+    summary: str = ""
 
 
 @router.get("/calendar/prefs")
@@ -63,6 +107,82 @@ def put_planned_workout(date: str, body: WorkoutBody, session: Session = Depends
 def delete_planned_workout(date: str, session: Session = Depends(get_session)):
     crud.delete_planned_workout(session, date)
     return {"status": "ok"}
+
+
+@router.post("/calendar/plan/bulk")
+def bulk_update_plan(body: BulkPlanBody, session: Session = Depends(get_session)):
+    """Apply multiple workout upserts/deletes in one call (used to accept a generated block)."""
+    for w in body.set:
+        crud.save_planned_workout(
+            session,
+            w.date,
+            w.workout_type,
+            w.description,
+            w.distance_km,
+            w.elevation_m,
+            w.duration_min,
+            w.intensity,
+        )
+    for date in body.delete:
+        crud.delete_planned_workout(session, date)
+    return {"status": "ok", "set": len(body.set), "deleted": len(body.delete)}
+
+
+@router.post("/calendar/generate-plan", response_model=GeneratePlanResponse)
+async def generate_plan(
+    body: GeneratePlanBody,
+    request: Request,
+    session: Session = Depends(get_session),
+    backend=Depends(get_backend),
+):
+    """Generate a suggested training block for a date range. Does not write to the calendar —
+    the frontend accepts the result via POST /calendar/plan/bulk."""
+    try:
+        start = date_cls.fromisoformat(body.start_date)
+        end = date_cls.fromisoformat(body.end_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="start_date/end_date must be YYYY-MM-DD")
+    if start > end:
+        raise HTTPException(status_code=400, detail="start_date must be on or before end_date")
+
+    mode = getattr(request.app.state, "mode", "running")
+    profile_fields = prof_crud.get_fields(session, mode)
+    profile_text = profile_to_text(profile_fields, mode)
+    memories = [m.model_dump() for m in mem_crud.get_all(session)]
+    prefs = crud.get_prefs(session)
+
+    padded_start = (start - timedelta(days=SURROUNDING_WINDOW_DAYS)).isoformat()
+    padded_end = (end + timedelta(days=SURROUNDING_WINDOW_DAYS)).isoformat()
+    surrounding = [w.model_dump() for w in crud.get_plan(session, padded_start, padded_end)]
+
+    recent_activities = [a.model_dump() for a in act_crud.get_all(session)][
+        :RECENT_ACTIVITIES_IN_SYSTEM
+    ]
+
+    prompt = build_plan_generation_prompt(
+        mode,
+        profile_text,
+        memories,
+        prefs,
+        surrounding,
+        recent_activities,
+        body.start_date,
+        body.end_date,
+        body.freeform_text,
+    )
+
+    def _run_llm():
+        return backend.stateless_turn(
+            PLAN_GENERATION_SYSTEM_PROMPT, prompt, on_token=lambda _: None
+        )
+
+    try:
+        text = await asyncio.get_event_loop().run_in_executor(None, _run_llm)
+        return parse_plan_generation_response(text, body.start_date, body.end_date)
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to parse generated plan: {exc}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Plan generation failed: {exc}")
 
 
 @router.post("/calendar/plan/{date}/nutrition")

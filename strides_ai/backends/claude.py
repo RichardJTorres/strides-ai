@@ -4,7 +4,12 @@ import time
 
 import anthropic
 
-from .base import SAVE_MEMORY_CATEGORIES, SAVE_MEMORY_DESCRIPTION, BaseBackend
+from .base import (
+    SAVE_MEMORY_CATEGORIES,
+    SAVE_MEMORY_DESCRIPTION,
+    UPDATE_TRAINING_PLAN_DESCRIPTION,
+    BaseBackend,
+)
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
@@ -26,6 +31,46 @@ SAVE_MEMORY_TOOL = {
             },
         },
         "required": ["category", "content"],
+    },
+}
+
+_WORKOUT_ENTRY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "date": {"type": "string", "description": "ISO date, YYYY-MM-DD"},
+        "workout_type": {
+            "type": "string",
+            "description": (
+                "e.g. Easy Run, Long Run, Tempo Run, Easy Ride, Long Ride, Tempo Ride, "
+                "Indoor Ride, Intervals, Cross-Training, Race, Rest"
+            ),
+        },
+        "description": {"type": "string"},
+        "distance_km": {"type": "number"},
+        "elevation_m": {"type": "number"},
+        "duration_min": {"type": "integer"},
+        "intensity": {"type": "string", "enum": ["easy", "moderate", "hard", "rest"]},
+    },
+    "required": ["date", "workout_type"],
+}
+
+UPDATE_TRAINING_PLAN_TOOL = {
+    "name": "update_training_plan",
+    "description": UPDATE_TRAINING_PLAN_DESCRIPTION,
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "set": {
+                "type": "array",
+                "description": "Workouts to create or overwrite, one entry per date.",
+                "items": _WORKOUT_ENTRY_SCHEMA,
+            },
+            "delete": {
+                "type": "array",
+                "description": "Dates (YYYY-MM-DD) to clear from the calendar.",
+                "items": {"type": "string"},
+            },
+        },
     },
 }
 
@@ -84,6 +129,7 @@ class ClaudeBackend(BaseBackend):
         self._history.append({"role": "user", "content": content})
         response_text = ""
         memories_saved: list[tuple[str, str]] = []
+        plan_changes: list[dict] = []
 
         while True:
             with self._client.messages.stream(
@@ -91,7 +137,7 @@ class ClaudeBackend(BaseBackend):
                 max_tokens=8192,
                 system=system,
                 messages=self._history,
-                tools=[SAVE_MEMORY_TOOL],
+                tools=[SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL],
             ) as stream:
                 for chunk in stream.text_stream:
                     on_token(chunk)
@@ -119,10 +165,16 @@ class ClaudeBackend(BaseBackend):
                     tool_results.append(
                         {"type": "tool_result", "tool_use_id": block.id, "content": result}
                     )
+                elif block.name == "update_training_plan":
+                    result, changes = self._execute_update_training_plan(block.input)
+                    plan_changes.extend(changes)
+                    tool_results.append(
+                        {"type": "tool_result", "tool_use_id": block.id, "content": result}
+                    )
 
             self._history.append({"role": "user", "content": tool_results})
 
-        return response_text, memories_saved
+        return response_text, memories_saved, plan_changes
 
     def stateless_turn(self, system, user_input, on_token):
         response_text = ""

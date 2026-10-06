@@ -54,14 +54,14 @@ The Python package has one entry point (`pyproject.toml`): `strides-ai-web` → 
 ### LLM backends (`strides_ai/backends/`)
 
 `BaseBackend` (ABC) defines two methods:
-- `stream_turn(system, user_input, on_token, attachments) → (text, memories)` — stateful; appends to `self._history`. Handles `save_memory` tool calls in a loop until the model stops.
-- `stateless_turn(system, user_input, on_token) → text` — one-shot, no history. Used for activity deep-dive analysis.
+- `stream_turn(system, user_input, on_token, attachments) → (text, memories, plan_changes)` — stateful; appends to `self._history`. Handles `save_memory` and `update_training_plan` tool calls in a loop until the model stops. `update_training_plan` lets the coach create/overwrite (`set`) or remove (`delete`) planned workouts on the shared `training_plan` calendar — used to generate a training block or regenerate part of one when the calendar changes.
+- `stateless_turn(system, user_input, on_token) → text` — one-shot, no history, no tools. Used for activity deep-dive analysis.
 
 Select backend with `PROVIDER=claude` (default), `PROVIDER=gemini`, `PROVIDER=openai`, or `PROVIDER=ollama`.
 
 ### System prompt assembly (`strides_ai/coach.py`)
 
-On every turn `build_system()` assembles: mode-specific base prompt → current date/time → athlete profile text → coaching memories → upcoming planned workouts (next 14 days) → recent activities training log (last 30, `RECENT_ACTIVITIES_IN_SYSTEM`).
+On every turn `build_system()` assembles: mode-specific base prompt → current date/time → athlete profile text → coaching memories → calendar constraints (upcoming races and blocked-out days from `calendar_prefs`) → upcoming planned workouts (next `PLANNED_WORKOUTS_WINDOW_DAYS` days, default 60) → recent activities training log (last 30, `RECENT_ACTIVITIES_IN_SYSTEM`).
 
 At session start, `build_initial_history()` seeds the full activity log (all activities) as the first exchange in `_history`, so older runs are accessible even though the system prompt only carries the 30 most recent. Last 40 messages (`RECALL_MESSAGES`) from the DB are appended after.
 
@@ -93,7 +93,9 @@ Sync backfills up to 10 pending/unanalyzed activities per cycle. Strava 429 resp
 
 ### Calendar feature (`strides_ai/db/calendar.py`, `strides_ai/schedule.py`)
 
-Planned workouts stored in `training_plan` table (date PK, type, distance, duration, intensity, notes). Frontend overlays actual Strava activities alongside plans. Nutrition advice is generated per-workout by a separate `stateless_turn` call (Claude Haiku by default via `schedule.py`), returning structured JSON (calories pre/during/post, hydration, notes). Results are cached; can be regenerated.
+Planned workouts stored in `training_plan` table (date PK, type, distance, duration, intensity, notes), shared across all coaching modes. Frontend overlays actual Strava activities alongside plans. Nutrition advice is generated per-workout by a separate `stateless_turn` call (Claude Haiku by default via `schedule.py`), returning structured JSON (calories pre/during/post, hydration, notes). Results are cached; can be regenerated.
+
+The chat coach can also write to this calendar directly via the `update_training_plan` tool (see "LLM backends" above) — generating a training block, adjusting individual days, or regenerating part of a block (e.g. after a missed workout or new conflict) by combining `delete` and `set` in one call. Writes are surfaced to the frontend as a `[PLAN_UPDATED]` SSE sentinel, shown as a "Calendar updated" confirmation in the chat UI.
 
 ### Strava sync (`strides_ai/sync.py`)
 

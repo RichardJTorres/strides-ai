@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const DAYS_OF_WEEK = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 const WORKOUT_TYPES = [
-  "Easy Run", "Long Run", "Tempo Run", "Intervals",
-  "Race", "Cross-Training", "Rest",
+  "Easy Run", "Long Run", "Tempo Run",
+  "Easy Ride", "Long Ride", "Tempo Ride", "Indoor Ride",
+  "Intervals", "Race", "Cross-Training", "Rest",
 ];
 
 const INTENSITIES = ["easy", "moderate", "hard", "rest"];
@@ -14,6 +15,10 @@ const WORKOUT_COLORS: Record<string, string> = {
   "Easy Run":       "bg-green-500/20 text-green-300 border-green-500/30",
   "Long Run":       "bg-purple-500/20 text-purple-300 border-purple-500/30",
   "Tempo Run":      "bg-orange-500/20 text-orange-300 border-orange-500/30",
+  "Easy Ride":      "bg-teal-500/20 text-teal-300 border-teal-500/30",
+  "Long Ride":      "bg-cyan-500/20 text-cyan-300 border-cyan-500/30",
+  "Tempo Ride":     "bg-yellow-500/20 text-yellow-300 border-yellow-500/30",
+  "Indoor Ride":    "bg-indigo-500/20 text-indigo-300 border-indigo-500/30",
   "Intervals":      "bg-red-500/20 text-red-300 border-red-500/30",
   "Race":           "bg-amber-500/20 text-amber-300 border-amber-500/30",
   "Cross-Training": "bg-blue-500/20 text-blue-300 border-blue-500/30",
@@ -64,6 +69,28 @@ interface Prefs {
   races: Race[];
 }
 
+interface GeneratedWorkout {
+  date: string;
+  workout_type: string;
+  description?: string | null;
+  distance_km?: number | null;
+  elevation_m?: number | null;
+  duration_min?: number | null;
+  intensity?: string | null;
+}
+
+interface GeneratePlanResult {
+  workouts: GeneratedWorkout[];
+  summary: string;
+}
+
+interface GridCell {
+  date: Date;
+  dateStr: string;
+  dayNum: number;
+  inCurrentMonth: boolean;
+}
+
 const EMPTY_FORM = {
   workout_type: "Easy Run",
   description: "",
@@ -107,6 +134,24 @@ export default function Calendar() {
   const [showRaceForm, setShowRaceForm] = useState(false);
   const [raceForm, setRaceForm] = useState({ date: "", name: "", target_time: "" });
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const detailPanelRef = useRef<HTMLDivElement>(null);
+
+  const [genModalOpen, setGenModalOpen] = useState(false);
+  const [genStart, setGenStart] = useState(todayStr);
+  const [genEnd, setGenEnd] = useState(todayStr);
+  const [genFreeform, setGenFreeform] = useState("");
+  const [genLoading, setGenLoading] = useState(false);
+  const [genAccepting, setGenAccepting] = useState(false);
+  const [genError, setGenError] = useState<string | null>(null);
+  const [genResult, setGenResult] = useState<GeneratePlanResult | null>(null);
+
+  // On small/short screens the detail panel can render below the fold once a day
+  // is selected — scroll it into view so it's never left invisible off-screen.
+  useEffect(() => {
+    if (selectedDate) {
+      detailPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [selectedDate]);
 
   useEffect(() => {
     fetch("/api/calendar/prefs")
@@ -224,11 +269,69 @@ export default function Calendar() {
     }
   };
 
-  const openDay = (date: string) => {
-    if (selectedDate === date) {
-      setSelectedDate(null);
-      return;
+  const openGenerateModal = () => {
+    setGenStart(todayStr);
+    setGenEnd(todayStr);
+    setGenFreeform("");
+    setGenResult(null);
+    setGenError(null);
+    setGenModalOpen(true);
+  };
+
+  const generatePlan = async () => {
+    if (!genStart || !genEnd) return;
+    setGenLoading(true);
+    setGenError(null);
+    setGenResult(null);
+    try {
+      const res = await fetch("/api/calendar/generate-plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          start_date: genStart,
+          end_date: genEnd,
+          freeform_text: genFreeform,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setGenError(err.detail || "Failed to generate training block.");
+        return;
+      }
+      setGenResult(await res.json());
+    } catch {
+      setGenError("Failed to generate training block. Check your connection and try again.");
+    } finally {
+      setGenLoading(false);
     }
+  };
+
+  const acceptGeneratedPlan = async () => {
+    if (!genResult || genResult.workouts.length === 0) return;
+    setGenAccepting(true);
+    setGenError(null);
+    try {
+      const res = await fetch("/api/calendar/plan/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ set: genResult.workouts }),
+      });
+      if (!res.ok) {
+        setGenError("Failed to save the training block.");
+        return;
+      }
+      setPlan(prev => {
+        const next = { ...prev };
+        for (const w of genResult.workouts) next[w.date] = w;
+        return next;
+      });
+      setGenModalOpen(false);
+    } finally {
+      setGenAccepting(false);
+    }
+  };
+
+  const selectDate = (date: string) => {
     setSelectedDate(date);
     setEditMode(false);
     setConfirmingDelete(false);
@@ -241,6 +344,19 @@ export default function Calendar() {
       duration_min: existing.duration_min?.toString() || "",
       intensity: existing.intensity || "easy",
     } : EMPTY_FORM);
+  };
+
+  const openDay = (date: string) => {
+    if (selectedDate === date) {
+      setSelectedDate(null);
+      return;
+    }
+    selectDate(date);
+  };
+
+  const goToToday = () => {
+    setCurrentMonth(new Date(today.getFullYear(), today.getMonth(), 1));
+    selectDate(todayStr);
   };
 
   const startEdit = () => {
@@ -256,27 +372,28 @@ export default function Calendar() {
     setEditMode(true);
   };
 
-  // Calendar grid helpers
+  // Calendar grid helpers — always render full weeks, including the leading/trailing
+  // days of the adjacent months, so a training week is never cut off mid-row.
   const daysInMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).getDate();
   const firstDow = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1).getDay();
+  const totalCells = Math.ceil((firstDow + daysInMonth) / 7) * 7;
+  const gridStart = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1 - firstDow);
 
-  // Build week rows: arrays of 7 (day number | null for padding)
-  const weeks: (number | null)[][] = [];
-  {
-    let week: (number | null)[] = Array(firstDow).fill(null);
-    for (let day = 1; day <= daysInMonth; day++) {
-      week.push(day);
-      if (week.length === 7) { weeks.push(week); week = []; }
-    }
-    if (week.length > 0) {
-      while (week.length < 7) week.push(null);
-      weeks.push(week);
-    }
-  }
+  const dateToStr = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
-  const cellDateStr = (day: number) =>
-    new Date(currentMonth.getFullYear(), currentMonth.getMonth(), day)
-      .toISOString().slice(0, 10);
+  const gridCells: GridCell[] = Array.from({ length: totalCells }, (_, i) => {
+    const d = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + i);
+    return {
+      date: d,
+      dateStr: dateToStr(d),
+      dayNum: d.getDate(),
+      inCurrentMonth: d.getMonth() === currentMonth.getMonth(),
+    };
+  });
+
+  const weeks: GridCell[][] = [];
+  for (let i = 0; i < gridCells.length; i += 7) weeks.push(gridCells.slice(i, i + 7));
 
   const dowName = (dateStr: string) =>
     DAY_NAMES[new Date(dateStr + "T12:00:00").getDay()];
@@ -296,6 +413,15 @@ export default function Calendar() {
 
       {/* ── Left sidebar ── */}
       <aside className="w-56 flex-shrink-0 border-r border-zinc-800 overflow-y-auto p-4 space-y-6">
+
+        <div>
+          <button
+            onClick={openGenerateModal}
+            className="w-full text-sm bg-green-700 hover:bg-green-600 text-white rounded px-3 py-2 font-medium"
+          >
+            + Generate Training Block
+          </button>
+        </div>
 
         <div>
           <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">Races</h3>
@@ -362,15 +488,21 @@ export default function Calendar() {
       </aside>
 
       {/* ── Main column ── */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-y-auto">
 
         {/* ── Calendar grid ── */}
         <div className="flex-shrink-0">
           <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
-            <button
-              onClick={() => setCurrentMonth(m => new Date(m.getFullYear(), m.getMonth() - 1, 1))}
-              className="text-zinc-400 hover:text-zinc-200 px-2 text-lg"
-            >‹</button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={goToToday}
+                className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded px-2 py-1 mr-1"
+              >Today</button>
+              <button
+                onClick={() => setCurrentMonth(m => new Date(m.getFullYear(), m.getMonth() - 1, 1))}
+                className="text-zinc-400 hover:text-zinc-200 px-2 text-lg"
+              >‹</button>
+            </div>
             <h2 className="text-sm font-semibold text-zinc-200">
               {currentMonth.toLocaleString("default", { month: "long", year: "numeric" })}
             </h2>
@@ -390,30 +522,28 @@ export default function Calendar() {
             </div>
 
             {/* Week rows */}
-            {weeks.map((weekDays, wi) => {
-              const plannedKm = weekDays.reduce<number>((sum, day) => {
-                if (!day) return sum;
-                const w = plan[cellDateStr(day)];
+            {weeks.map((weekCells, wi) => {
+              const plannedKm = weekCells.reduce<number>((sum, cell) => {
+                const w = plan[cell.dateStr];
                 return sum + (w && w.workout_type !== "Rest" ? (w.distance_km ?? 0) : 0);
               }, 0);
-              const actualKm = weekDays.reduce<number>((sum, day) => {
-                if (!day) return sum;
-                return sum + (activities[cellDateStr(day)] ?? []).reduce<number>(
+              const actualKm = weekCells.reduce<number>((sum, cell) => {
+                return sum + (activities[cell.dateStr] ?? []).reduce<number>(
                   (s, a) => s + (a.distance_m ?? 0) / 1000, 0
                 );
               }, 0);
 
               return (
                 <div key={wi} className="flex gap-1 mb-3">
-                  {weekDays.map((day, di) => {
-                    if (!day) return <div key={`pad-${wi}-${di}`} className="flex-1" />;
-                    const dateStr = cellDateStr(day);
+                  {weekCells.map(cell => {
+                    const dateStr = cell.dateStr;
                     const workout = plan[dateStr];
                     const dayActivities = activities[dateStr] ?? [];
                     const isToday = dateStr === todayStr;
                     const isSelected = selectedDate === dateStr;
                     const isBlocked = prefs.blocked_days.includes(dateStr);
                     const race = raceOnDate(dateStr);
+                    const showMonthLabel = cell.dayNum === 1 && !cell.inCurrentMonth;
 
                     return (
                       <div
@@ -423,11 +553,14 @@ export default function Calendar() {
                           "flex-1 min-h-16 p-1.5 rounded cursor-pointer border transition-colors",
                           isSelected ? "border-zinc-400 bg-zinc-700/60" : "border-zinc-800 hover:border-zinc-600",
                           isBlocked ? "opacity-40" : "",
+                          !cell.inCurrentMonth ? "opacity-55" : "",
                           "bg-zinc-800/20",
                         ].join(" ")}
                       >
-                        <div className={`text-xs font-medium mb-1 flex items-center gap-1 ${isToday ? "text-green-400" : "text-zinc-400"}`}>
-                          {day}
+                        <div className={`text-xs font-medium mb-1 flex items-center gap-1 ${isToday ? "text-green-400" : cell.inCurrentMonth ? "text-zinc-400" : "text-zinc-600"}`}>
+                          {showMonthLabel
+                            ? `${cell.date.toLocaleString("default", { month: "short" })} ${cell.dayNum}`
+                            : cell.dayNum}
                           {isToday && <span className="w-1.5 h-1.5 bg-green-400 rounded-full" />}
                         </div>
                         {race && (
@@ -477,7 +610,7 @@ export default function Calendar() {
 
         {/* ── Detail panel (below calendar) ── */}
         {selectedDate && (
-          <div className="flex-1 border-t border-zinc-800 overflow-y-auto">
+          <div ref={detailPanelRef} className="border-t border-zinc-800">
             <div className="p-4 flex gap-6 items-start">
 
               {/* Col 1: date info + planned workout */}
@@ -721,6 +854,133 @@ export default function Calendar() {
           </div>
         )}
       </div>
+
+      {/* ── Generate training block modal ── */}
+      {genModalOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-black/60"
+            onClick={() => !genLoading && !genAccepting && setGenModalOpen(false)}
+          />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
+            <div className="pointer-events-auto bg-zinc-900 border border-zinc-700 rounded-lg w-full max-w-lg max-h-[85vh] overflow-y-auto shadow-2xl">
+              <div className="px-5 py-4 border-b border-zinc-800 flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-zinc-200">Generate Training Block</h3>
+                <button
+                  onClick={() => setGenModalOpen(false)}
+                  className="text-zinc-500 hover:text-zinc-300 text-xl leading-none"
+                >×</button>
+              </div>
+
+              <div className="p-5 space-y-4">
+                {!genResult ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs text-zinc-500 mb-1 block">Start date</label>
+                        <input
+                          type="date" value={genStart}
+                          onChange={e => setGenStart(e.target.value)}
+                          className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-zinc-500 mb-1 block">End date</label>
+                        <input
+                          type="date" value={genEnd}
+                          onChange={e => setGenEnd(e.target.value)}
+                          className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
+                        />
+                      </div>
+                    </div>
+                    {genStart && genEnd && genStart > genEnd && (
+                      <p className="text-xs text-red-400">Start date must be on or before end date.</p>
+                    )}
+                    <div>
+                      <label className="text-xs text-zinc-500 mb-1 block">Notes (optional)</label>
+                      <textarea
+                        rows={3}
+                        placeholder={'e.g. "I have a century ride Nov 15, focus on climbing" or "I\'m traveling Oct 10-12, keep it light"'}
+                        value={genFreeform}
+                        onChange={e => setGenFreeform(e.target.value)}
+                        className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200 resize-none"
+                      />
+                    </div>
+                    {genError && <p className="text-xs text-red-400">{genError}</p>}
+                    <button
+                      onClick={generatePlan}
+                      disabled={genLoading || !genStart || !genEnd || genStart > genEnd}
+                      className="w-full text-sm bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white rounded px-3 py-2 font-medium"
+                    >
+                      {genLoading ? "Generating…" : "Generate"}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {genResult.summary && (
+                      <p className="text-sm text-zinc-300 leading-relaxed">{genResult.summary}</p>
+                    )}
+                    {genResult.workouts.length === 0 ? (
+                      <p className="text-sm text-zinc-500 italic">No workouts suggested for this range.</p>
+                    ) : (
+                      <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                        {genResult.workouts.map(w => (
+                          <div
+                            key={w.date}
+                            className={`px-3 py-2 rounded border text-sm ${WORKOUT_COLORS[w.workout_type] ?? "bg-zinc-700/50 text-zinc-400 border-zinc-600/30"}`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-medium">{w.date} — {w.workout_type}</span>
+                              <span className="text-xs opacity-70 text-right">
+                                {[
+                                  w.distance_km ? `${w.distance_km}km` : null,
+                                  w.duration_min ? `${w.duration_min}min` : null,
+                                  w.intensity,
+                                ].filter(Boolean).join(" · ")}
+                              </span>
+                            </div>
+                            {w.description && (
+                              <div className="text-xs opacity-80 mt-0.5">{w.description}</div>
+                            )}
+                            {plan[w.date] && (
+                              <div className="text-xs text-amber-400 mt-0.5">
+                                ⚠ replaces existing "{plan[w.date].workout_type}"
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {genError && <p className="text-xs text-red-400">{genError}</p>}
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        onClick={acceptGeneratedPlan}
+                        disabled={genAccepting || genResult.workouts.length === 0}
+                        className="flex-1 text-sm bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white rounded px-3 py-2 font-medium"
+                      >
+                        {genAccepting ? "Adding…" : "Accept & Add to Calendar"}
+                      </button>
+                      <button
+                        onClick={generatePlan}
+                        disabled={genLoading || genAccepting}
+                        className="text-sm bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 text-zinc-300 rounded px-3 py-2"
+                      >
+                        {genLoading ? "Regenerating…" : "Regenerate"}
+                      </button>
+                      <button
+                        onClick={() => setGenModalOpen(false)}
+                        className="text-sm bg-zinc-800 hover:bg-zinc-700 text-zinc-400 rounded px-3 py-2"
+                      >
+                        Discard
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

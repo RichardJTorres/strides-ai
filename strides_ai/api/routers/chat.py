@@ -92,7 +92,7 @@ def _run_turn(
     # Needs its own session — the request-scoped session is not safe to share across threads.
     with Session(get_engine()) as thread_session:
         try:
-            response_text, memories_saved = backend.stream_turn(
+            response_text, memories_saved, plan_changes = backend.stream_turn(
                 system,
                 message,
                 lambda chunk: _on_token(chunk, token_queue, cancel_event),
@@ -104,6 +104,8 @@ def _run_turn(
                     "[MEMORIES]"
                     + json.dumps([{"category": c, "content": t} for c, t in memories_saved])
                 )
+            if plan_changes:
+                token_queue.put("[PLAN_UPDATED]" + json.dumps(plan_changes))
             conv_crud.save(
                 thread_session, "assistant", response_text, mode=mode, model=backend.label
             )
