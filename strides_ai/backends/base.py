@@ -14,6 +14,18 @@ SAVE_MEMORY_DESCRIPTION = (
 
 SAVE_MEMORY_CATEGORIES: list[str] = ["goal", "race", "injury", "preference", "training", "other"]
 
+UPDATE_TRAINING_PLAN_DESCRIPTION = (
+    "Create, update, or remove planned workouts on the athlete's training calendar. "
+    "Use `set` to schedule or overwrite workouts (one entry per date, `date` and `workout_type` "
+    "required) and `delete` to clear a date back to a rest day. Always check the "
+    "'Upcoming Planned Workouts' and 'Calendar Constraints' sections of this prompt first so you "
+    "work around races, blocked-out days, and workouts already scheduled — never schedule over "
+    "them without the athlete's go-ahead. When the athlete says they can't complete a workout, or "
+    "a conflict shows up on a date you'd otherwise use, delete or move that day rather than "
+    "double-booking it. When regenerating a whole block, combine `delete` for the days that need "
+    "to change with `set` for their replacements in the same call."
+)
+
 
 class BaseBackend(ABC):
     """
@@ -50,12 +62,14 @@ class BaseBackend(ABC):
         user_input: str,
         on_token: Callable[[str], None],
         attachments: list[dict] | None = None,
-    ) -> tuple[str, list[tuple[str, str]]]:
+    ) -> tuple[str, list[tuple[str, str]], list[dict]]:
         """
         Append user_input to history, call on_token(chunk) for each text token,
         handle any tool calls, and return:
           - full response text
           - list of (category, content) tuples for memories saved this turn
+          - list of {"action": "set"|"delete", "date": ..., "workout_type"?: ...} dicts
+            for training plan changes made this turn
 
         attachments: optional list of Anthropic-format content blocks (image or text)
           to prepend before the user's text in the message.
@@ -73,6 +87,49 @@ class BaseBackend(ABC):
         content = args.get("content", "")
         result = db.save_memory(category, content)
         return result, category, content
+
+    def _execute_update_training_plan(self, args: dict) -> tuple[str, list[dict]]:
+        """
+        Persist an update_training_plan tool call to the DB.
+
+        Applies each `set` entry (upsert) and each `delete` date (removal) from the
+        tool args, and returns (summary_string, changes) so the caller can append
+        summary_string as the tool_result and record changes in plan_changes.
+        """
+        changes: list[dict] = []
+        set_summaries: list[str] = []
+        for workout in args.get("set", []) or []:
+            date = workout.get("date")
+            if not date:
+                continue
+            workout_type = workout.get("workout_type", "Workout")
+            db.save_planned_workout(
+                date,
+                workout_type,
+                workout.get("description"),
+                workout.get("distance_km"),
+                workout.get("elevation_m"),
+                workout.get("duration_min"),
+                workout.get("intensity"),
+            )
+            changes.append({"action": "set", "date": date, "workout_type": workout_type})
+            set_summaries.append(f"{date} ({workout_type})")
+
+        delete_summaries: list[str] = []
+        for date in args.get("delete", []) or []:
+            db.delete_planned_workout(date)
+            changes.append({"action": "delete", "date": date})
+            delete_summaries.append(date)
+
+        parts = []
+        if set_summaries:
+            parts.append(f"Scheduled {len(set_summaries)} workout(s): {', '.join(set_summaries)}")
+        if delete_summaries:
+            parts.append(
+                f"Removed {len(delete_summaries)} workout(s): {', '.join(delete_summaries)}"
+            )
+        summary = ". ".join(parts) if parts else "No changes made."
+        return summary, changes
 
     @abstractmethod
     def stateless_turn(

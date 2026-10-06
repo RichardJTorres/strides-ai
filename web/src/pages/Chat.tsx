@@ -16,6 +16,12 @@ interface Memory {
   content: string;
 }
 
+interface PlanChange {
+  action: "set" | "delete";
+  date: string;
+  workout_type?: string;
+}
+
 interface Props {
   mode: Mode;
   theme: ThemeConfig;
@@ -43,6 +49,7 @@ function TypingIndicator() {
 const MessageList = memo(function MessageList({
   messages,
   savedMemories,
+  planChanges,
   streamingIndex,
   highlightedId,
   hasOlderMessages,
@@ -55,6 +62,7 @@ const MessageList = memo(function MessageList({
 }: {
   messages: Message[];
   savedMemories: Memory[];
+  planChanges: PlanChange[];
   streamingIndex: number | null;
   highlightedId: number | null;
   hasOlderMessages: boolean;
@@ -166,6 +174,27 @@ const MessageList = memo(function MessageList({
           </div>
         )}
 
+        {planChanges.length > 0 && (
+          <div className="mt-2 text-xs text-gray-600 italic text-center">
+            Calendar updated:{" "}
+            {planChanges.filter((c) => c.action === "set").length > 0 &&
+              `scheduled ${planChanges.filter((c) => c.action === "set").length}`}
+            {planChanges.filter((c) => c.action === "set").length > 0 &&
+              planChanges.filter((c) => c.action === "delete").length > 0 &&
+              ", "}
+            {planChanges.filter((c) => c.action === "delete").length > 0 &&
+              `removed ${planChanges.filter((c) => c.action === "delete").length}`}
+            {" — "}
+            <button
+              type="button"
+              onClick={() => { window.location.hash = "#calendar"; }}
+              className="underline hover:text-gray-400"
+            >
+              View calendar
+            </button>
+          </div>
+        )}
+
         <div ref={bottomRef} />
       </div>
     </div>
@@ -206,6 +235,7 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
   const [input, setInput] = useState("");
   const [streamingIndex, setStreamingIndex] = useState<number | null>(null);
   const [savedMemories, setSavedMemories] = useState<Memory[]>([]);
+  const [planChanges, setPlanChanges] = useState<PlanChange[]>([]);
 
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
@@ -239,6 +269,7 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
     setOldestLoadedId(null);
     setHasOlderMessages(false);
     setSavedMemories([]);
+    setPlanChanges([]);
     setSearchOpen(false);
     sessionStorage.removeItem(SCROLL_KEY);
 
@@ -458,6 +489,7 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
       textareaRef.current.style.overflowY = "hidden";
     }
     setSavedMemories([]);
+    setPlanChanges([]);
 
     const assistantIndex = messages.length + 1;
 
@@ -519,6 +551,16 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
             try {
               const mems: Memory[] = JSON.parse(payload.slice(10));
               setSavedMemories(mems);
+            } catch {
+              // ignore
+            }
+            continue;
+          }
+
+          if (payload.startsWith("[PLAN_UPDATED]")) {
+            try {
+              const changes: PlanChange[] = JSON.parse(payload.slice(14));
+              setPlanChanges(changes);
             } catch {
               // ignore
             }
@@ -658,6 +700,7 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
       <MessageList
         messages={messages}
         savedMemories={savedMemories}
+        planChanges={planChanges}
         streamingIndex={streamingIndex}
         highlightedId={highlightedId}
         hasOlderMessages={hasOlderMessages}

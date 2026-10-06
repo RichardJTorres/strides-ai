@@ -5,7 +5,12 @@ import time
 
 import httpx
 
-from .base import SAVE_MEMORY_CATEGORIES, SAVE_MEMORY_DESCRIPTION, BaseBackend
+from .base import (
+    SAVE_MEMORY_CATEGORIES,
+    SAVE_MEMORY_DESCRIPTION,
+    UPDATE_TRAINING_PLAN_DESCRIPTION,
+    BaseBackend,
+)
 
 DEFAULT_HOST = "http://localhost:11434"
 
@@ -29,6 +34,51 @@ SAVE_MEMORY_TOOL = {
                 },
             },
             "required": ["category", "content"],
+        },
+    },
+}
+
+UPDATE_TRAINING_PLAN_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "update_training_plan",
+        "description": UPDATE_TRAINING_PLAN_DESCRIPTION,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "set": {
+                    "type": "array",
+                    "description": "Workouts to create or overwrite, one entry per date.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "date": {"type": "string", "description": "ISO date, YYYY-MM-DD"},
+                            "workout_type": {
+                                "type": "string",
+                                "description": (
+                                    "e.g. Easy Run, Long Run, Tempo Run, Easy Ride, Long Ride, "
+                                    "Tempo Ride, Indoor Ride, Intervals, Cross-Training, Race, "
+                                    "Rest"
+                                ),
+                            },
+                            "description": {"type": "string"},
+                            "distance_km": {"type": "number"},
+                            "elevation_m": {"type": "number"},
+                            "duration_min": {"type": "integer"},
+                            "intensity": {
+                                "type": "string",
+                                "enum": ["easy", "moderate", "hard", "rest"],
+                            },
+                        },
+                        "required": ["date", "workout_type"],
+                    },
+                },
+                "delete": {
+                    "type": "array",
+                    "description": "Dates (YYYY-MM-DD) to clear from the calendar.",
+                    "items": {"type": "string"},
+                },
+            },
         },
     },
 }
@@ -91,6 +141,7 @@ class OllamaBackend(BaseBackend):
         self._history.append({"role": "user", "content": user_input})
         response_text = ""
         memories_saved: list[tuple[str, str]] = []
+        plan_changes: list[dict] = []
 
         while True:
             # Prepend system message each call (Ollama has no separate system param)
@@ -101,7 +152,7 @@ class OllamaBackend(BaseBackend):
 
             body: dict = {"model": self._model, "messages": messages, "stream": True}
             if self._supports_tools is not False:
-                body["tools"] = [SAVE_MEMORY_TOOL]
+                body["tools"] = [SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL]
 
             retry_without_tools = False
             with httpx.Client(timeout=120) as client:
@@ -146,8 +197,12 @@ class OllamaBackend(BaseBackend):
                     result, category, content = self._execute_save_memory(fn.get("arguments", {}))
                     memories_saved.append((category, content))
                     self._history.append({"role": "tool", "content": result})
+                elif fn.get("name") == "update_training_plan":
+                    result, changes = self._execute_update_training_plan(fn.get("arguments", {}))
+                    plan_changes.extend(changes)
+                    self._history.append({"role": "tool", "content": result})
 
-        return response_text, memories_saved
+        return response_text, memories_saved, plan_changes
 
     def stateless_turn(self, system, user_input, on_token):
         messages = [

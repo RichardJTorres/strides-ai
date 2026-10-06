@@ -68,7 +68,7 @@ def test_claude_stream_turn_text(mock_anthropic):
     from strides_ai.backends.claude import ClaudeBackend
 
     on_token, tokens = _collect()
-    text, memories = ClaudeBackend("key", []).stream_turn("sys", "hi", on_token)
+    text, memories, _ = ClaudeBackend("key", []).stream_turn("sys", "hi", on_token)
 
     assert text == "Hello world"
     assert tokens == ["Hello", " world"]
@@ -129,7 +129,7 @@ def test_claude_stream_turn_saves_memory(mock_anthropic, mocker):
 
     from strides_ai.backends.claude import ClaudeBackend
 
-    text, memories = ClaudeBackend("key", []).stream_turn("sys", "save it", lambda _: None)
+    text, memories, _ = ClaudeBackend("key", []).stream_turn("sys", "save it", lambda _: None)
 
     mock_db.assert_called_once_with("goal", "BQ 2025")
     assert memories == [("goal", "BQ 2025")]
@@ -153,12 +153,40 @@ def test_claude_stream_turn_multiple_tool_calls(mock_anthropic, mocker):
 
     from strides_ai.backends.claude import ClaudeBackend
 
-    _, memories = ClaudeBackend("key", []).stream_turn("sys", "save both", lambda _: None)
+    _, memories, _ = ClaudeBackend("key", []).stream_turn("sys", "save both", lambda _: None)
 
     assert mock_db.call_count == 2
     assert len(memories) == 2
     assert ("goal", "sub-3 marathon") in memories
     assert ("injury", "left IT band") in memories
+
+
+def test_claude_stream_turn_updates_training_plan(mock_anthropic, mocker):
+    mock_set = mocker.patch("strides_ai.backends.base.db.save_planned_workout")
+    mock_delete = mocker.patch("strides_ai.backends.base.db.delete_planned_workout")
+    tool_block = _claude_tool_block(
+        "update_training_plan",
+        {
+            "set": [{"date": "2026-10-01", "workout_type": "Long Ride", "distance_km": 60}],
+            "delete": ["2026-10-03"],
+        },
+    )
+    mock_anthropic.return_value.messages.stream.side_effect = [
+        _claude_stream([], stop_reason="tool_use", content_blocks=[tool_block]),
+        _claude_stream(["Updated your plan."]),
+    ]
+
+    from strides_ai.backends.claude import ClaudeBackend
+
+    text, _, plan_changes = ClaudeBackend("key", []).stream_turn("sys", "plan it", lambda _: None)
+
+    mock_set.assert_called_once_with("2026-10-01", "Long Ride", None, 60, None, None, None)
+    mock_delete.assert_called_once_with("2026-10-03")
+    assert plan_changes == [
+        {"action": "set", "date": "2026-10-01", "workout_type": "Long Ride"},
+        {"action": "delete", "date": "2026-10-03"},
+    ]
+    assert text == "Updated your plan."
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -238,7 +266,7 @@ def test_gemini_stream_turn_text(mock_genai):
     from strides_ai.backends.gemini import GeminiBackend
 
     on_token, tokens = _collect()
-    text, memories = GeminiBackend("key", []).stream_turn("sys", "hi", on_token)
+    text, memories, _ = GeminiBackend("key", []).stream_turn("sys", "hi", on_token)
 
     assert text == "Hello world"
     assert tokens == ["Hello", " world"]
@@ -272,12 +300,42 @@ def test_gemini_stream_turn_saves_memory(mock_genai, mocker):
     from strides_ai.backends.gemini import GeminiBackend
 
     on_token, tokens = _collect()
-    text, memories = GeminiBackend("key", []).stream_turn("sys", "save injury", on_token)
+    text, memories, _ = GeminiBackend("key", []).stream_turn("sys", "save injury", on_token)
 
     mock_db.assert_called_once_with("injury", "knee pain")
     assert memories == [("injury", "knee pain")]
     assert text == "Noted your injury."
     assert "Noted your injury." in tokens
+
+
+def test_gemini_stream_turn_updates_training_plan(mock_genai, mocker):
+    mock_set = mocker.patch("strides_ai.backends.base.db.save_planned_workout")
+    mock_delete = mocker.patch("strides_ai.backends.base.db.delete_planned_workout")
+    mock_client = mock_genai.return_value
+    mock_client.models.generate_content_stream.return_value = iter(
+        [
+            _gemini_fc_chunk(
+                "update_training_plan",
+                {
+                    "set": [{"date": "2026-10-01", "workout_type": "Long Ride"}],
+                    "delete": ["2026-10-03"],
+                },
+            )
+        ]
+    )
+    mock_client.models.generate_content.return_value = _gemini_text_response("Updated your plan.")
+
+    from strides_ai.backends.gemini import GeminiBackend
+
+    text, _, plan_changes = GeminiBackend("key", []).stream_turn("sys", "plan it", lambda _: None)
+
+    mock_set.assert_called_once_with("2026-10-01", "Long Ride", None, None, None, None, None)
+    mock_delete.assert_called_once_with("2026-10-03")
+    assert plan_changes == [
+        {"action": "set", "date": "2026-10-01", "workout_type": "Long Ride"},
+        {"action": "delete", "date": "2026-10-03"},
+    ]
+    assert text == "Updated your plan."
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -351,7 +409,7 @@ def test_openai_stream_turn_text(mock_openai):
     from strides_ai.backends.openai import OpenAIBackend
 
     on_token, tokens = _collect()
-    text, memories = OpenAIBackend("key", []).stream_turn("sys", "hi", on_token)
+    text, memories, _ = OpenAIBackend("key", []).stream_turn("sys", "hi", on_token)
 
     assert text == "Hello world"
     assert tokens == ["Hello", " world"]
@@ -401,7 +459,7 @@ def test_openai_stream_turn_saves_memory(mock_openai, mocker):
     from strides_ai.backends.openai import OpenAIBackend
 
     on_token, tokens = _collect()
-    text, memories = OpenAIBackend("key", []).stream_turn("sys", "save goal", on_token)
+    text, memories, _ = OpenAIBackend("key", []).stream_turn("sys", "save goal", on_token)
 
     mock_db.assert_called_once_with("goal", "BQ 2025")
     assert memories == [("goal", "BQ 2025")]
@@ -452,6 +510,35 @@ def test_openai_assembles_split_tool_arguments(mock_openai, mocker):
     OpenAIBackend("key", []).stream_turn("sys", "remember race", lambda _: None)
 
     mock_db.assert_called_once_with("race", "Boston 2026")
+
+
+def test_openai_stream_turn_updates_training_plan(mock_openai, mocker):
+    mock_set = mocker.patch("strides_ai.backends.base.db.save_planned_workout")
+    mock_delete = mocker.patch("strides_ai.backends.base.db.delete_planned_workout")
+    mock_client = mock_openai.return_value
+    args = json.dumps(
+        {
+            "set": [{"date": "2026-10-01", "workout_type": "Long Ride"}],
+            "delete": ["2026-10-03"],
+        }
+    )
+    tc = _oai_tc_delta(0, "call_plan", "update_training_plan", args)
+    mock_client.chat.completions.create.side_effect = [
+        _oai_stream([_oai_chunk(tool_calls=[tc])]),
+        _oai_stream([_oai_chunk("Updated your plan.")]),
+    ]
+
+    from strides_ai.backends.openai import OpenAIBackend
+
+    text, _, plan_changes = OpenAIBackend("key", []).stream_turn("sys", "plan it", lambda _: None)
+
+    mock_set.assert_called_once_with("2026-10-01", "Long Ride", None, None, None, None, None)
+    mock_delete.assert_called_once_with("2026-10-03")
+    assert plan_changes == [
+        {"action": "set", "date": "2026-10-01", "workout_type": "Long Ride"},
+        {"action": "delete", "date": "2026-10-03"},
+    ]
+    assert text == "Updated your plan."
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -528,7 +615,7 @@ def test_ollama_stream_turn_text(mocker):
     from strides_ai.backends.ollama import OllamaBackend
 
     on_token, tokens = _collect()
-    text, memories = OllamaBackend("llama3.1", []).stream_turn("sys", "hi", on_token)
+    text, memories, _ = OllamaBackend("llama3.1", []).stream_turn("sys", "hi", on_token)
 
     assert text == "Hello world"
     assert tokens == ["Hello", " world"]
@@ -564,12 +651,45 @@ def test_ollama_stream_turn_saves_memory(mocker):
     from strides_ai.backends.ollama import OllamaBackend
 
     on_token, tokens = _collect()
-    text, memories = OllamaBackend("llama3.1", []).stream_turn("sys", "save training", on_token)
+    text, memories, _ = OllamaBackend("llama3.1", []).stream_turn("sys", "save training", on_token)
 
     mock_db.assert_called_once_with("training", "80 km/week base")
     assert memories == [("training", "80 km/week base")]
     assert text == "Saved."
     assert "Saved." in tokens
+
+
+def test_ollama_stream_turn_updates_training_plan(mocker):
+    mock_set = mocker.patch("strides_ai.backends.base.db.save_planned_workout")
+    mock_delete = mocker.patch("strides_ai.backends.base.db.delete_planned_workout")
+    tool_call = {
+        "function": {
+            "name": "update_training_plan",
+            "arguments": {
+                "set": [{"date": "2026-10-01", "workout_type": "Long Ride"}],
+                "delete": ["2026-10-03"],
+            },
+        }
+    }
+    _ollama_http_client(
+        mocker,
+        [_ollama_chunk("", done=True, tool_calls=[tool_call])],
+        [_ollama_chunk("Updated your plan.", done=True)],
+    )
+
+    from strides_ai.backends.ollama import OllamaBackend
+
+    text, _, plan_changes = OllamaBackend("llama3.1", []).stream_turn(
+        "sys", "plan it", lambda _: None
+    )
+
+    mock_set.assert_called_once_with("2026-10-01", "Long Ride", None, None, None, None, None)
+    mock_delete.assert_called_once_with("2026-10-03")
+    assert plan_changes == [
+        {"action": "set", "date": "2026-10-01", "workout_type": "Long Ride"},
+        {"action": "delete", "date": "2026-10-03"},
+    ]
+    assert text == "Updated your plan."
 
 
 def test_ollama_retries_without_tools_on_400(mocker):
@@ -605,7 +725,7 @@ def test_ollama_retries_without_tools_on_400(mocker):
     from strides_ai.backends.ollama import OllamaBackend
 
     b = OllamaBackend("llama3.1", [])
-    text, _ = b.stream_turn("sys", "hi", lambda _: None)
+    text, _, _ = b.stream_turn("sys", "hi", lambda _: None)
 
     assert text == "ok"
     assert b._supports_tools is False

@@ -5,7 +5,12 @@ import time
 
 import openai as _openai
 
-from .base import SAVE_MEMORY_CATEGORIES, SAVE_MEMORY_DESCRIPTION, BaseBackend
+from .base import (
+    SAVE_MEMORY_CATEGORIES,
+    SAVE_MEMORY_DESCRIPTION,
+    UPDATE_TRAINING_PLAN_DESCRIPTION,
+    BaseBackend,
+)
 
 DEFAULT_MODEL = "gpt-4o"
 
@@ -29,6 +34,51 @@ SAVE_MEMORY_TOOL = {
                 },
             },
             "required": ["category", "content"],
+        },
+    },
+}
+
+UPDATE_TRAINING_PLAN_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "update_training_plan",
+        "description": UPDATE_TRAINING_PLAN_DESCRIPTION,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "set": {
+                    "type": "array",
+                    "description": "Workouts to create or overwrite, one entry per date.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "date": {"type": "string", "description": "ISO date, YYYY-MM-DD"},
+                            "workout_type": {
+                                "type": "string",
+                                "description": (
+                                    "e.g. Easy Run, Long Run, Tempo Run, Easy Ride, Long Ride, "
+                                    "Tempo Ride, Indoor Ride, Intervals, Cross-Training, Race, "
+                                    "Rest"
+                                ),
+                            },
+                            "description": {"type": "string"},
+                            "distance_km": {"type": "number"},
+                            "elevation_m": {"type": "number"},
+                            "duration_min": {"type": "integer"},
+                            "intensity": {
+                                "type": "string",
+                                "enum": ["easy", "moderate", "hard", "rest"],
+                            },
+                        },
+                        "required": ["date", "workout_type"],
+                    },
+                },
+                "delete": {
+                    "type": "array",
+                    "description": "Dates (YYYY-MM-DD) to clear from the calendar.",
+                    "items": {"type": "string"},
+                },
+            },
         },
     },
 }
@@ -92,6 +142,7 @@ class OpenAIBackend(BaseBackend):
         self._history.append({"role": "user", "content": user_input})
         response_text = ""
         memories_saved: list[tuple[str, str]] = []
+        plan_changes: list[dict] = []
 
         while True:
             messages = [{"role": "system", "content": system}, *self._history]
@@ -103,7 +154,7 @@ class OpenAIBackend(BaseBackend):
             with self._client.chat.completions.create(
                 model=self._model,
                 messages=messages,
-                tools=[SAVE_MEMORY_TOOL],
+                tools=[SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL],
                 tool_choice="auto",
                 stream=True,
             ) as stream:
@@ -163,18 +214,24 @@ class OpenAIBackend(BaseBackend):
 
             # Execute tool calls and append results
             for tc in tool_calls:
+                try:
+                    args = json.loads(tc["arguments"])
+                except json.JSONDecodeError:
+                    args = {}
                 if tc["name"] == "save_memory":
-                    try:
-                        args = json.loads(tc["arguments"])
-                    except json.JSONDecodeError:
-                        args = {}
                     result, category, content = self._execute_save_memory(args)
                     memories_saved.append((category, content))
                     self._history.append(
                         {"role": "tool", "tool_call_id": tc["id"], "content": result}
                     )
+                elif tc["name"] == "update_training_plan":
+                    result, changes = self._execute_update_training_plan(args)
+                    plan_changes.extend(changes)
+                    self._history.append(
+                        {"role": "tool", "tool_call_id": tc["id"], "content": result}
+                    )
 
-        return response_text, memories_saved
+        return response_text, memories_saved, plan_changes
 
     def stateless_turn(self, system, user_input, on_token):
         messages = [
