@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from datetime import date as date_cls, timedelta
+from datetime import date as date_cls, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -22,7 +22,19 @@ from ...plan_generation import (
     parse_plan_generation_response,
 )
 from ...profile import profile_to_text
+from ...route_analysis import (
+    ROUTE_ANALYSIS_SYSTEM_PROMPT,
+    build_route_analysis_prompt,
+    parse_route_analysis_response,
+)
 from ...schedule import analyze_nutrition
+from ...sources.base import NoDataError
+from ...sources.ridewithgps import (
+    condense_elevation_profile,
+    extract_route_id,
+    fetch_route_detail,
+    fetch_route_summary,
+)
 from ..deps import get_backend
 
 router = APIRouter()
@@ -40,6 +52,7 @@ class WorkoutBody(BaseModel):
     elevation_m: float | None = None
     duration_min: int | None = None
     intensity: str | None = None
+    route_url: str | None = None
 
 
 class BulkWorkoutEntry(WorkoutBody):
@@ -99,6 +112,7 @@ def put_planned_workout(date: str, body: WorkoutBody, session: Session = Depends
         body.elevation_m,
         body.duration_min,
         body.intensity,
+        body.route_url,
     )
     return {"status": "ok", "date": date}
 
@@ -122,6 +136,7 @@ def bulk_update_plan(body: BulkPlanBody, session: Session = Depends(get_session)
             w.elevation_m,
             w.duration_min,
             w.intensity,
+            w.route_url,
         )
     for date in body.delete:
         crud.delete_planned_workout(session, date)
@@ -207,3 +222,81 @@ def analyze_workout_nutrition(
     nutrition = analyze_nutrition(workout, profile_text, api_key)
     crud.save_workout_nutrition(session, date, nutrition)
     return nutrition
+
+
+@router.get("/calendar/route-preview")
+def route_preview(url: str):
+    """Look up a RideWithGPS route's headline stats, used to autofill distance/elevation
+    while the athlete is still typing a route URL into a workout form (no date/workout
+    required, and nothing is persisted)."""
+    try:
+        route_id = extract_route_id(url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    try:
+        return fetch_route_summary(route_id)
+    except NoDataError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.post("/calendar/plan/{date}/analyze-route")
+async def analyze_workout_route(
+    date: str,
+    request: Request,
+    force: bool = False,
+    session: Session = Depends(get_session),
+    backend=Depends(get_backend),
+):
+    """Fetch the workout's RideWithGPS route and judge whether it fits the workout's goal."""
+    plan = crud.get_plan(session)
+    workout = next((w.model_dump() for w in plan if w.date == date), None)
+    if not workout:
+        raise HTTPException(status_code=404, detail="No planned workout found for this date")
+    if not workout.get("route_url"):
+        raise HTTPException(status_code=400, detail="No route URL attached to this workout")
+
+    if workout.get("route_analysis_json") and not force:
+        return {
+            "cached": True,
+            "analyzed_at": workout.get("route_analyzed_at"),
+            "model": workout.get("route_analysis_model"),
+            **json.loads(workout["route_analysis_json"]),
+        }
+
+    try:
+        route_id = extract_route_id(workout["route_url"])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    try:
+        route_detail = fetch_route_detail(route_id)
+    except NoDataError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    elevation_profile = condense_elevation_profile(route_detail["track_points"])
+
+    mode = getattr(request.app.state, "mode", "running")
+    profile_fields = prof_crud.get_fields(session, mode)
+    profile_text = profile_to_text(profile_fields, mode)
+
+    prompt = build_route_analysis_prompt(workout, route_detail, elevation_profile, profile_text)
+
+    def _run_llm():
+        return backend.stateless_turn(ROUTE_ANALYSIS_SYSTEM_PROMPT, prompt, on_token=lambda _: None)
+
+    try:
+        text = await asyncio.get_event_loop().run_in_executor(None, _run_llm)
+        analysis = parse_route_analysis_response(text)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to parse route analysis: {exc}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Route analysis failed: {exc}")
+
+    analyzed_at = datetime.now(timezone.utc).isoformat()
+    crud.save_route_analysis(session, date, analysis, analyzed_at, backend.label)
+    return {"cached": False, "analyzed_at": analyzed_at, "model": backend.label, **analysis}

@@ -84,6 +84,7 @@ __all__ = [
     "save_planned_workout",
     "delete_planned_workout",
     "save_workout_nutrition",
+    "save_route_analysis",
     "get_upcoming_planned_workouts",
     "upsert_exercise_template",
     "get_exercise_template_muscle_map",
@@ -275,10 +276,19 @@ def save_planned_workout(
     elevation_m: float | None,
     duration_min: int | None,
     intensity: str | None,
+    route_url: str | None = None,
 ) -> None:
     with _session() as s:
         _cal.save_planned_workout(
-            s, date, workout_type, description, distance_km, elevation_m, duration_min, intensity
+            s,
+            date,
+            workout_type,
+            description,
+            distance_km,
+            elevation_m,
+            duration_min,
+            intensity,
+            route_url,
         )
 
 
@@ -290,6 +300,11 @@ def delete_planned_workout(date: str) -> None:
 def save_workout_nutrition(date: str, nutrition: dict) -> None:
     with _session() as s:
         _cal.save_workout_nutrition(s, date, nutrition)
+
+
+def save_route_analysis(date: str, analysis: dict, analyzed_at: str, model: str) -> None:
+    with _session() as s:
+        _cal.save_route_analysis(s, date, analysis, analyzed_at, model)
 
 
 def get_upcoming_planned_workouts(days: int = 14) -> list[dict]:

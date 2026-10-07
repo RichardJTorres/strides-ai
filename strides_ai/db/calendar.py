@@ -57,6 +57,7 @@ def save_planned_workout(
     elevation_m: float | None,
     duration_min: int | None,
     intensity: str | None,
+    route_url: str | None = None,
 ) -> None:
     """Upsert a user-entered planned workout."""
     stmt = sqlite_insert(TrainingPlan).values(
@@ -67,6 +68,7 @@ def save_planned_workout(
         elevation_m=elevation_m,
         duration_min=duration_min,
         intensity=intensity,
+        route_url=route_url,
     )
     stmt = stmt.on_conflict_do_update(
         index_elements=["date"],
@@ -77,7 +79,11 @@ def save_planned_workout(
             "elevation_m": elevation_m,
             "duration_min": duration_min,
             "intensity": intensity,
+            "route_url": route_url,
             "nutrition_json": None,
+            "route_analysis_json": None,
+            "route_analyzed_at": None,
+            "route_analysis_model": None,
             "created_at": sa.text("datetime('now')"),
         },
     )
@@ -96,6 +102,18 @@ def save_workout_nutrition(session: Session, date: str, nutrition: dict) -> None
     row = session.get(TrainingPlan, date)
     if row:
         row.nutrition_json = json.dumps(nutrition)
+        session.add(row)
+        session.commit()
+
+
+def save_route_analysis(
+    session: Session, date: str, analysis: dict, analyzed_at: str, model: str
+) -> None:
+    row = session.get(TrainingPlan, date)
+    if row:
+        row.route_analysis_json = json.dumps(analysis)
+        row.route_analyzed_at = analyzed_at
+        row.route_analysis_model = model
         session.add(row)
         session.commit()
 
