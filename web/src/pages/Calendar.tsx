@@ -34,6 +34,15 @@ interface Workout {
   duration_min?: number | null;
   intensity?: string | null;
   nutrition_json?: string | null;
+  route_url?: string | null;
+  route_analysis_json?: string | null;
+  route_analyzed_at?: string | null;
+}
+
+interface RouteAnalysis {
+  verdict: string;
+  explanation: string;
+  suggestion?: string | null;
 }
 
 interface Activity {
@@ -56,6 +65,12 @@ interface NutritionData {
   hydration_during_ml: number;
   hydration_post_ml: number;
   notes: string;
+}
+
+interface RoutePreview {
+  name?: string | null;
+  distance_m?: number | null;
+  elevation_gain_m?: number | null;
 }
 
 interface Race {
@@ -98,6 +113,15 @@ const EMPTY_FORM = {
   elevation_m: "",
   duration_min: "",
   intensity: "easy",
+  route_url: "",
+};
+
+const VERDICT_STYLES: Record<string, { cls: string; label: string }> = {
+  good_match: { cls: "bg-green-500/20 text-green-300 border-green-500/30", label: "✓ Good match" },
+  too_hard: { cls: "bg-red-500/20 text-red-300 border-red-500/30", label: "⚠ Too hard" },
+  too_easy: { cls: "bg-blue-500/20 text-blue-300 border-blue-500/30", label: "⚠ Too easy" },
+  wrong_terrain: { cls: "bg-orange-500/20 text-orange-300 border-orange-500/30", label: "⚠ Wrong terrain" },
+  needs_info: { cls: "bg-zinc-700/50 text-zinc-400 border-zinc-600/30", label: "? Needs info" },
 };
 
 function fmtDuration(seconds: number): string {
@@ -117,6 +141,18 @@ function fmtPace(sPerKm: number | null): string {
 
 const RUN_TYPES = new Set(["Run", "TrailRun", "VirtualRun"]);
 
+const isRideWithGpsRouteUrl = (url: string) => /ridewithgps\.com\/routes\/\d+/i.test(url);
+
+async function fetchRoutePreview(url: string): Promise<RoutePreview | null> {
+  try {
+    const res = await fetch(`/api/calendar/route-preview?url=${encodeURIComponent(url)}`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
 export default function Calendar() {
   const today = new Date();
   const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
@@ -130,6 +166,13 @@ export default function Calendar() {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [nutritionLoading, setNutritionLoading] = useState(false);
+  const [routeAnalysisLoading, setRouteAnalysisLoading] = useState(false);
+  const [routeAnalysisError, setRouteAnalysisError] = useState<string | null>(null);
+  const [showRouteForm, setShowRouteForm] = useState(false);
+  const [routeUrlDraft, setRouteUrlDraft] = useState("");
+  const [savingRouteUrl, setSavingRouteUrl] = useState(false);
+  const [routePreviewLoading, setRoutePreviewLoading] = useState(false);
+  const [routePreviewNotice, setRoutePreviewNotice] = useState<string | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [showRaceForm, setShowRaceForm] = useState(false);
   const [raceForm, setRaceForm] = useState({ date: "", name: "", target_time: "" });
@@ -218,6 +261,40 @@ export default function Calendar() {
     savePrefs(updated);
   };
 
+  // While the create/edit form is showing (either editing an existing workout, or adding a
+  // brand-new one — which renders the same form without editMode ever becoming true), autofill
+  // distance/elevation from a pasted RideWithGPS link.
+  useEffect(() => {
+    const existingWorkout = selectedDate ? plan[selectedDate] : null;
+    const formVisible = !!selectedDate && (!existingWorkout || editMode);
+    if (!formVisible) return;
+    const url = form.route_url.trim();
+    if (!isRideWithGpsRouteUrl(url)) {
+      setRoutePreviewNotice(null);
+      return;
+    }
+    setRoutePreviewLoading(true);
+    setRoutePreviewNotice(null);
+    const timer = setTimeout(async () => {
+      const preview = await fetchRoutePreview(url);
+      setRoutePreviewLoading(false);
+      if (!preview) {
+        setRoutePreviewNotice("Couldn't fetch that route (it may be private or not exist).");
+        return;
+      }
+      setForm(f => ({
+        ...f,
+        distance_km: preview.distance_m ? (preview.distance_m / 1000).toFixed(1) : f.distance_km,
+        elevation_m: preview.elevation_gain_m
+          ? Math.round(preview.elevation_gain_m).toString()
+          : f.elevation_m,
+      }));
+      setRoutePreviewNotice(`Filled in distance/elevation from "${preview.name || "route"}".`);
+    }, 600);
+    return () => { clearTimeout(timer); setRoutePreviewLoading(false); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.route_url, editMode, selectedDate, plan]);
+
   const saveWorkout = async () => {
     if (!selectedDate) return;
     const body = {
@@ -227,6 +304,7 @@ export default function Calendar() {
       elevation_m: form.elevation_m ? parseFloat(form.elevation_m) : null,
       duration_min: form.duration_min ? parseInt(form.duration_min) : null,
       intensity: form.intensity,
+      route_url: form.route_url || null,
     };
     const res = await fetch(`/api/calendar/plan/${selectedDate}`, {
       method: "PUT",
@@ -266,6 +344,74 @@ export default function Calendar() {
       }
     } finally {
       setNutritionLoading(false);
+    }
+  };
+
+  const analyzeRoute = async (force = false) => {
+    if (!selectedDate) return;
+    setRouteAnalysisLoading(true);
+    setRouteAnalysisError(null);
+    try {
+      const res = await fetch(
+        `/api/calendar/plan/${selectedDate}/analyze-route${force ? "?force=true" : ""}`,
+        { method: "POST" }
+      );
+      const result = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setPlan(prev => ({
+          ...prev,
+          [selectedDate]: {
+            ...prev[selectedDate],
+            route_analysis_json: JSON.stringify({
+              verdict: result.verdict,
+              explanation: result.explanation,
+              suggestion: result.suggestion,
+            }),
+            route_analyzed_at: result.analyzed_at,
+          },
+        }));
+      } else {
+        setRouteAnalysisError(result.detail || "Failed to analyze route.");
+      }
+    } catch {
+      setRouteAnalysisError("Failed to analyze route. Check your connection and try again.");
+    } finally {
+      setRouteAnalysisLoading(false);
+    }
+  };
+
+  // Quick add/edit of just the route URL, without entering full edit mode. Also autofills
+  // distance/elevation from the route when one is attached, same as the full edit form.
+  const saveRouteUrl = async () => {
+    if (!selectedDate || !selectedWorkout) return;
+    setSavingRouteUrl(true);
+    try {
+      const url = routeUrlDraft.trim();
+      const preview = url && isRideWithGpsRouteUrl(url) ? await fetchRoutePreview(url) : null;
+      const body = {
+        workout_type: selectedWorkout.workout_type,
+        description: selectedWorkout.description ?? null,
+        distance_km: preview?.distance_m
+          ? Number((preview.distance_m / 1000).toFixed(1))
+          : selectedWorkout.distance_km ?? null,
+        elevation_m: preview?.elevation_gain_m
+          ? Math.round(preview.elevation_gain_m)
+          : selectedWorkout.elevation_m ?? null,
+        duration_min: selectedWorkout.duration_min ?? null,
+        intensity: selectedWorkout.intensity ?? null,
+        route_url: url || null,
+      };
+      const res = await fetch(`/api/calendar/plan/${selectedDate}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        setPlan(prev => ({ ...prev, [selectedDate]: { date: selectedDate, ...body } }));
+        setShowRouteForm(false);
+      }
+    } finally {
+      setSavingRouteUrl(false);
     }
   };
 
@@ -335,6 +481,9 @@ export default function Calendar() {
     setSelectedDate(date);
     setEditMode(false);
     setConfirmingDelete(false);
+    setRouteAnalysisError(null);
+    setShowRouteForm(false);
+    setRoutePreviewNotice(null);
     const existing = plan[date];
     setForm(existing ? {
       workout_type: existing.workout_type || "Easy Run",
@@ -343,6 +492,7 @@ export default function Calendar() {
       elevation_m: existing.elevation_m?.toString() || "",
       duration_min: existing.duration_min?.toString() || "",
       intensity: existing.intensity || "easy",
+      route_url: existing.route_url || "",
     } : EMPTY_FORM);
   };
 
@@ -368,7 +518,9 @@ export default function Calendar() {
       elevation_m: existing?.elevation_m?.toString() || "",
       duration_min: existing?.duration_min?.toString() || "",
       intensity: existing?.intensity || "easy",
+      route_url: existing?.route_url || "",
     });
+    setRoutePreviewNotice(null);
     setEditMode(true);
   };
 
@@ -404,6 +556,9 @@ export default function Calendar() {
   const selectedActivities = selectedDate ? (activities[selectedDate] ?? []) : [];
   const selectedNutrition: NutritionData | null = selectedWorkout?.nutrition_json
     ? JSON.parse(selectedWorkout.nutrition_json)
+    : null;
+  const selectedRouteAnalysis: RouteAnalysis | null = selectedWorkout?.route_analysis_json
+    ? JSON.parse(selectedWorkout.route_analysis_json)
     : null;
 
   const showNutritionCol = selectedWorkout && !editMode && selectedWorkout.workout_type !== "Rest";
@@ -671,6 +826,74 @@ export default function Calendar() {
                     {selectedWorkout.description && (
                       <p className="text-xs text-zinc-400 leading-relaxed">{selectedWorkout.description}</p>
                     )}
+                    {showRouteForm ? (
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="url"
+                          autoFocus
+                          placeholder="https://ridewithgps.com/routes/..."
+                          value={routeUrlDraft}
+                          onChange={e => setRouteUrlDraft(e.target.value)}
+                          onKeyDown={e => { if (e.key === "Enter") saveRouteUrl(); if (e.key === "Escape") setShowRouteForm(false); }}
+                          className="flex-1 text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-200"
+                        />
+                        <button
+                          onClick={saveRouteUrl}
+                          disabled={savingRouteUrl}
+                          className="text-xs bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white rounded px-2 py-1"
+                        >{savingRouteUrl ? "Saving…" : "Save"}</button>
+                        <button
+                          onClick={() => setShowRouteForm(false)}
+                          className="text-xs text-zinc-500 hover:text-zinc-300 px-1"
+                        >Cancel</button>
+                      </div>
+                    ) : selectedWorkout.route_url ? (
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <a
+                              href={selectedWorkout.route_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-xs text-cyan-400 hover:text-cyan-300 underline"
+                            >View route on RideWithGPS ↗</a>
+                            <button
+                              onClick={() => { setRouteUrlDraft(selectedWorkout.route_url || ""); setShowRouteForm(true); }}
+                              className="text-xs text-zinc-500 hover:text-zinc-300"
+                            >Change</button>
+                          </div>
+                          <button
+                            onClick={() => analyzeRoute(!!selectedRouteAnalysis)}
+                            disabled={routeAnalysisLoading}
+                            className="text-xs bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 text-zinc-300 rounded px-2 py-0.5"
+                          >
+                            {routeAnalysisLoading ? "Analyzing…" : selectedRouteAnalysis ? "Refresh" : "Analyze Route"}
+                          </button>
+                        </div>
+                        {routeAnalysisError && (
+                          <p className="text-xs text-red-400">{routeAnalysisError}</p>
+                        )}
+                        {selectedRouteAnalysis && (
+                          <div className={`px-3 py-2 rounded border text-xs ${VERDICT_STYLES[selectedRouteAnalysis.verdict]?.cls ?? VERDICT_STYLES.needs_info.cls}`}>
+                            <div className="font-medium mb-1">
+                              {VERDICT_STYLES[selectedRouteAnalysis.verdict]?.label ?? selectedRouteAnalysis.verdict}
+                            </div>
+                            <p className="opacity-90 leading-relaxed">{selectedRouteAnalysis.explanation}</p>
+                            {selectedRouteAnalysis.suggestion && (
+                              <p className="opacity-90 leading-relaxed mt-1">
+                                <span className="font-medium">Suggestion: </span>
+                                {selectedRouteAnalysis.suggestion}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => { setRouteUrlDraft(""); setShowRouteForm(true); }}
+                        className="text-xs text-zinc-500 hover:text-zinc-300"
+                      >+ Add RideWithGPS route</button>
+                    )}
                     <div className="flex items-center gap-2">
                       <button onClick={startEdit} className="text-sm bg-zinc-700 hover:bg-zinc-600 text-zinc-200 rounded px-4 py-2">Edit</button>
                       {confirmingDelete ? (
@@ -748,6 +971,22 @@ export default function Calendar() {
                         onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
                         className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200 resize-none"
                       />
+                    </div>
+                    <div>
+                      <label className="text-xs text-zinc-500 mb-1 block">RideWithGPS route URL (optional)</label>
+                      <input
+                        type="url"
+                        placeholder="https://ridewithgps.com/routes/..."
+                        value={form.route_url}
+                        onChange={e => setForm(f => ({ ...f, route_url: e.target.value }))}
+                        className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
+                      />
+                      {routePreviewLoading && (
+                        <p className="text-xs text-zinc-500 mt-1">Fetching route details…</p>
+                      )}
+                      {!routePreviewLoading && routePreviewNotice && (
+                        <p className="text-xs text-zinc-500 mt-1">{routePreviewNotice}</p>
+                      )}
                     </div>
                     <div className="flex gap-2">
                       <button

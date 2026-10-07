@@ -97,6 +97,8 @@ Planned workouts stored in `training_plan` table (date PK, type, distance, durat
 
 The chat coach can also write to this calendar directly via the `update_training_plan` tool (see "LLM backends" above) — generating a training block, adjusting individual days, or regenerating part of a block (e.g. after a missed workout or new conflict) by combining `delete` and `set` in one call. Writes are surfaced to the frontend as a `[PLAN_UPDATED]` SSE sentinel, shown as a "Calendar updated" confirmation in the chat UI.
 
+A planned workout can also have a RideWithGPS route URL attached (`route_url`). `POST /calendar/plan/{date}/analyze-route` fetches the route (`strides_ai/sources/ridewithgps.py`, via RideWithGPS's unauthenticated legacy `routes/{id}.json` endpoint — public routes only, no API key needed) and asks the LLM (`strides_ai/route_analysis.py`) whether its distance/elevation/terrain actually fits the workout's stated goal, returning a `verdict`/`explanation`/`suggestion`. Cached in `route_analysis_json`; cleared whenever the workout is edited, same as `nutrition_json`; `?force=true` regenerates.
+
 ### Strava sync (`strides_ai/sync.py`)
 
 Incremental by default — stops at the first activity ID already in the DB. Full sync re-fetches all pages. Cadence is doubled (Strava sends half-cadence). Pace derived: `moving_time_s / (distance_m / 1000)`. OAuth2 in `auth.py` — tokens stored in `~/.strides_ai/token.json`, auto-refreshed.

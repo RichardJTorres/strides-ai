@@ -145,6 +145,10 @@ class TrainingPlan(SQLModel, table=True):
     duration_min: Optional[int] = None
     intensity: Optional[str] = None
     nutrition_json: Optional[str] = None
+    route_url: Optional[str] = None
+    route_analysis_json: Optional[str] = None
+    route_analyzed_at: Optional[str] = None
+    route_analysis_model: Optional[str] = None
     created_at: Optional[str] = Field(
         default=None,
         sa_column=Column(sa.Text, server_default=sa.text("datetime('now')")),
