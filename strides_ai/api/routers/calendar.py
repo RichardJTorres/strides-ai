@@ -28,13 +28,9 @@ from ...route_analysis import (
     parse_route_analysis_response,
 )
 from ...schedule import analyze_nutrition
-from ...sources.base import NoDataError
-from ...sources.ridewithgps import (
-    condense_elevation_profile,
-    extract_route_id,
-    fetch_route_detail,
-    fetch_route_summary,
-)
+from ...sources.base import AuthError, ConfigurationError, NoDataError
+from ...sources.ridewithgps import condense_elevation_profile
+from ...sources.routes import fetch_route_detail, fetch_route_summary
 from ..deps import get_backend
 
 router = APIRouter()
@@ -226,18 +222,19 @@ def analyze_workout_nutrition(
 
 @router.get("/calendar/route-preview")
 def route_preview(url: str):
-    """Look up a RideWithGPS route's headline stats, used to autofill distance/elevation
-    while the athlete is still typing a route URL into a workout form (no date/workout
-    required, and nothing is persisted)."""
+    """Look up a route's headline stats (Strava or RideWithGPS), used to autofill
+    distance/elevation while the athlete is still typing a route URL into a workout form (no
+    date/workout required, and nothing is persisted)."""
     try:
-        route_id = extract_route_id(url)
+        return fetch_route_summary(url)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-
-    try:
-        return fetch_route_summary(route_id)
     except NoDataError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except ConfigurationError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    except AuthError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
@@ -250,7 +247,8 @@ async def analyze_workout_route(
     session: Session = Depends(get_session),
     backend=Depends(get_backend),
 ):
-    """Fetch the workout's RideWithGPS route and judge whether it fits the workout's goal."""
+    """Fetch the workout's route (Strava or RideWithGPS) and judge whether it fits the
+    workout's goal."""
     plan = crud.get_plan(session)
     workout = next((w.model_dump() for w in plan if w.date == date), None)
     if not workout:
@@ -267,14 +265,15 @@ async def analyze_workout_route(
         }
 
     try:
-        route_id = extract_route_id(workout["route_url"])
+        route_detail = fetch_route_detail(workout["route_url"])
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-
-    try:
-        route_detail = fetch_route_detail(route_id)
     except NoDataError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except ConfigurationError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    except AuthError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
