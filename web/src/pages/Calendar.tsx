@@ -3,11 +3,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 const DAYS_OF_WEEK = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-const WORKOUT_TYPES = [
-  "Easy Run", "Long Run", "Tempo Run",
-  "Easy Ride", "Long Ride", "Tempo Ride", "Indoor Ride",
-  "Intervals", "Race", "Cross-Training", "Rest",
+const WORKOUT_TYPE_GROUPS: { label: string; types: string[] }[] = [
+  { label: "Running", types: ["Easy Run", "Long Run", "Tempo Run", "Running Race"] },
+  { label: "Cycling", types: ["Easy Ride", "Long Ride", "Tempo Ride", "Indoor Ride", "Cycling Race"] },
+  // Generic "Race" kept for existing entries predating the sport-specific race types above;
+  // left out of Running/Cycling since it can't be sport-categorized automatically.
+  { label: "Other", types: ["Intervals", "Race", "Cross-Training", "Yoga", "Rest"] },
 ];
+// Route (Strava or RideWithGPS) only makes sense for Running/Cycling types — a generic
+// "Race"/"Intervals" could be either sport, so it's left out rather than guessing.
+const ROUTE_CAPABLE_WORKOUT_TYPES = new Set([
+  ...WORKOUT_TYPE_GROUPS[0].types,
+  ...WORKOUT_TYPE_GROUPS[1].types,
+]);
+// Distance/elevation don't apply to these.
+const NO_DISTANCE_WORKOUT_TYPES = new Set(["Yoga", "Rest"]);
 
 const INTENSITIES = ["easy", "moderate", "hard", "rest"];
 
@@ -19,9 +29,12 @@ const WORKOUT_COLORS: Record<string, string> = {
   "Long Ride":      "bg-cyan-500/20 text-cyan-300 border-cyan-500/30",
   "Tempo Ride":     "bg-yellow-500/20 text-yellow-300 border-yellow-500/30",
   "Indoor Ride":    "bg-indigo-500/20 text-indigo-300 border-indigo-500/30",
+  "Running Race":   "bg-amber-500/20 text-amber-300 border-amber-500/30",
+  "Cycling Race":   "bg-amber-500/20 text-amber-300 border-amber-500/30",
   "Intervals":      "bg-red-500/20 text-red-300 border-red-500/30",
   "Race":           "bg-amber-500/20 text-amber-300 border-amber-500/30",
   "Cross-Training": "bg-blue-500/20 text-blue-300 border-blue-500/30",
+  "Yoga":           "bg-pink-500/20 text-pink-300 border-pink-500/30",
   "Rest":           "bg-zinc-700/50 text-zinc-400 border-zinc-600/30",
 };
 
@@ -141,7 +154,7 @@ function fmtPace(sPerKm: number | null): string {
 
 const RUN_TYPES = new Set(["Run", "TrailRun", "VirtualRun"]);
 
-const isRideWithGpsRouteUrl = (url: string) => /ridewithgps\.com\/routes\/\d+/i.test(url);
+const isRouteUrl = (url: string) => /(?:ridewithgps|strava)\.com\/routes\/\d+/i.test(url);
 
 async function fetchRoutePreview(url: string): Promise<RoutePreview | null> {
   try {
@@ -269,7 +282,7 @@ export default function Calendar() {
     const formVisible = !!selectedDate && (!existingWorkout || editMode);
     if (!formVisible) return;
     const url = form.route_url.trim();
-    if (!isRideWithGpsRouteUrl(url)) {
+    if (!isRouteUrl(url)) {
       setRoutePreviewNotice(null);
       return;
     }
@@ -297,14 +310,16 @@ export default function Calendar() {
 
   const saveWorkout = async () => {
     if (!selectedDate) return;
+    const noDistance = NO_DISTANCE_WORKOUT_TYPES.has(form.workout_type);
+    const noRoute = !ROUTE_CAPABLE_WORKOUT_TYPES.has(form.workout_type);
     const body = {
       workout_type: form.workout_type,
       description: form.description || null,
-      distance_km: form.distance_km ? parseFloat(form.distance_km) : null,
-      elevation_m: form.elevation_m ? parseFloat(form.elevation_m) : null,
+      distance_km: !noDistance && form.distance_km ? parseFloat(form.distance_km) : null,
+      elevation_m: !noDistance && form.elevation_m ? parseFloat(form.elevation_m) : null,
       duration_min: form.duration_min ? parseInt(form.duration_min) : null,
       intensity: form.intensity,
-      route_url: form.route_url || null,
+      route_url: !noRoute && form.route_url ? form.route_url : null,
     };
     const res = await fetch(`/api/calendar/plan/${selectedDate}`, {
       method: "PUT",
@@ -387,7 +402,7 @@ export default function Calendar() {
     setSavingRouteUrl(true);
     try {
       const url = routeUrlDraft.trim();
-      const preview = url && isRideWithGpsRouteUrl(url) ? await fetchRoutePreview(url) : null;
+      const preview = url && isRouteUrl(url) ? await fetchRoutePreview(url) : null;
       const body = {
         workout_type: selectedWorkout.workout_type,
         description: selectedWorkout.description ?? null,
@@ -572,9 +587,13 @@ export default function Calendar() {
         <div>
           <button
             onClick={openGenerateModal}
-            className="w-full text-sm bg-green-700 hover:bg-green-600 text-white rounded px-3 py-2 font-medium"
+            className="w-full text-left bg-gradient-to-br from-green-700/90 to-green-800/90 hover:from-green-600/90 hover:to-green-700/90 text-white rounded-lg px-3 py-2.5 flex items-center gap-2.5 transition-colors border border-green-600/40"
           >
-            + Generate Training Block
+            <span className="text-lg leading-none">✨</span>
+            <span className="min-w-0">
+              <div className="text-sm font-semibold leading-tight">Generate Training Block</div>
+              <div className="text-[11px] text-green-100/75 leading-tight">AI-suggested plan for a date range</div>
+            </span>
           </button>
         </div>
 
@@ -627,11 +646,18 @@ export default function Calendar() {
 
         <div>
           <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">Legend</h3>
-          <div className="space-y-1 mb-3">
-            {Object.entries(WORKOUT_COLORS).map(([type, cls]) => (
-              <div key={type} className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${cls.split(" ")[0]}`} />
-                <span className="text-xs text-zinc-400">{type}</span>
+          <div className="space-y-2 mb-3">
+            {WORKOUT_TYPE_GROUPS.map(group => (
+              <div key={group.label}>
+                <div className="text-[10px] text-zinc-600 uppercase tracking-wider mb-0.5">{group.label}</div>
+                <div className="space-y-1">
+                  {group.types.map(type => (
+                    <div key={type} className="flex items-center gap-2">
+                      <span className={`w-2 h-2 rounded-full ${WORKOUT_COLORS[type].split(" ")[0]}`} />
+                      <span className="text-xs text-zinc-400">{type}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             ))}
           </div>
@@ -826,12 +852,13 @@ export default function Calendar() {
                     {selectedWorkout.description && (
                       <p className="text-xs text-zinc-400 leading-relaxed">{selectedWorkout.description}</p>
                     )}
-                    {showRouteForm ? (
+                    {ROUTE_CAPABLE_WORKOUT_TYPES.has(selectedWorkout.workout_type) && (
+                      showRouteForm ? (
                       <div className="flex items-center gap-1.5">
                         <input
                           type="url"
                           autoFocus
-                          placeholder="https://ridewithgps.com/routes/..."
+                          placeholder="RideWithGPS or Strava route URL"
                           value={routeUrlDraft}
                           onChange={e => setRouteUrlDraft(e.target.value)}
                           onKeyDown={e => { if (e.key === "Enter") saveRouteUrl(); if (e.key === "Escape") setShowRouteForm(false); }}
@@ -856,7 +883,7 @@ export default function Calendar() {
                               target="_blank"
                               rel="noreferrer"
                               className="text-xs text-cyan-400 hover:text-cyan-300 underline"
-                            >View route on RideWithGPS ↗</a>
+                            >View route ↗</a>
                             <button
                               onClick={() => { setRouteUrlDraft(selectedWorkout.route_url || ""); setShowRouteForm(true); }}
                               className="text-xs text-zinc-500 hover:text-zinc-300"
@@ -892,7 +919,8 @@ export default function Calendar() {
                       <button
                         onClick={() => { setRouteUrlDraft(""); setShowRouteForm(true); }}
                         className="text-xs text-zinc-500 hover:text-zinc-300"
-                      >+ Add RideWithGPS route</button>
+                      >+ Add route</button>
+                      )
                     )}
                     <div className="flex items-center gap-2">
                       <button onClick={startEdit} className="text-sm bg-zinc-700 hover:bg-zinc-600 text-zinc-200 rounded px-4 py-2">Edit</button>
@@ -918,10 +946,15 @@ export default function Calendar() {
                         onChange={e => setForm(f => ({ ...f, workout_type: e.target.value }))}
                         className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
                       >
-                        {WORKOUT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                        {WORKOUT_TYPE_GROUPS.map(group => (
+                          <optgroup key={group.label} label={group.label}>
+                            {group.types.map(t => <option key={t} value={t}>{t}</option>)}
+                          </optgroup>
+                        ))}
                       </select>
                     </div>
                     <div className="grid grid-cols-2 gap-2">
+                      {!NO_DISTANCE_WORKOUT_TYPES.has(form.workout_type) && (
                       <div>
                         <label className="text-xs text-zinc-500 mb-1 block">Distance (km)</label>
                         <input
@@ -931,6 +964,8 @@ export default function Calendar() {
                           className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
                         />
                       </div>
+                      )}
+                      {!NO_DISTANCE_WORKOUT_TYPES.has(form.workout_type) && (
                       <div>
                         <label className="text-xs text-zinc-500 mb-1 block">Elevation (m)</label>
                         <input
@@ -940,6 +975,7 @@ export default function Calendar() {
                           className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
                         />
                       </div>
+                      )}
                       <div>
                         <label className="text-xs text-zinc-500 mb-1 block">Duration (min)</label>
                         <input
@@ -972,11 +1008,12 @@ export default function Calendar() {
                         className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200 resize-none"
                       />
                     </div>
+                    {ROUTE_CAPABLE_WORKOUT_TYPES.has(form.workout_type) && (
                     <div>
-                      <label className="text-xs text-zinc-500 mb-1 block">RideWithGPS route URL (optional)</label>
+                      <label className="text-xs text-zinc-500 mb-1 block">Route URL (optional)</label>
                       <input
                         type="url"
-                        placeholder="https://ridewithgps.com/routes/..."
+                        placeholder="https://ridewithgps.com/routes/... or https://strava.com/routes/..."
                         value={form.route_url}
                         onChange={e => setForm(f => ({ ...f, route_url: e.target.value }))}
                         className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
@@ -988,6 +1025,7 @@ export default function Calendar() {
                         <p className="text-xs text-zinc-500 mt-1">{routePreviewNotice}</p>
                       )}
                     </div>
+                    )}
                     <div className="flex gap-2">
                       <button
                         onClick={saveWorkout}

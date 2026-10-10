@@ -1,4 +1,4 @@
-"""Route-fit analysis: does a RideWithGPS route suit a planned workout's goal?"""
+"""Route-fit analysis: does a route (Strava or RideWithGPS) suit a planned workout's goal?"""
 
 import json
 import re
@@ -46,6 +46,20 @@ def build_route_analysis_prompt(
 ) -> str:
     dist = f"{workout['distance_km']} km" if workout.get("distance_km") else "not specified"
     dur = f"{workout['duration_min']} min" if workout.get("duration_min") else "not specified"
+    route_lines = [
+        f"Name: {route_summary.get('name') or 'Unnamed route'}",
+        f"Distance: {round((route_summary.get('distance_m') or 0) / 1000, 1)} km",
+        f"Elevation gain: {round(route_summary.get('elevation_gain_m') or 0)} m",
+        f"Elevation loss: {round(route_summary.get('elevation_loss_m') or 0)} m",
+        f"Terrain: {route_summary.get('terrain') or 'unknown'}",
+        f"Difficulty: {route_summary.get('difficulty') or 'unknown'}",
+        f"Surface: {route_summary.get('surface') or 'unknown'} "
+        f"({route_summary.get('unpaved_pct') or 0}% unpaved)",
+    ]
+    if route_summary.get("activity_type"):
+        route_lines.append(f"Activity type (per route source): {route_summary['activity_type']}")
+    if route_summary.get("duration_estimate_min"):
+        route_lines.append(f"Estimated duration: {route_summary['duration_estimate_min']} min")
     sections = [
         "## Planned Workout (the goal to evaluate the route against)\n"
         f"Type: {workout.get('workout_type', 'Unknown')}\n"
@@ -53,15 +67,7 @@ def build_route_analysis_prompt(
         f"Planned distance: {dist}\n"
         f"Planned duration: {dur}\n"
         f"Notes: {workout.get('description') or 'none'}",
-        "## Route\n"
-        f"Name: {route_summary.get('name') or 'Unnamed route'}\n"
-        f"Distance: {round((route_summary.get('distance_m') or 0) / 1000, 1)} km\n"
-        f"Elevation gain: {round(route_summary.get('elevation_gain_m') or 0)} m\n"
-        f"Elevation loss: {round(route_summary.get('elevation_loss_m') or 0)} m\n"
-        f"Terrain: {route_summary.get('terrain') or 'unknown'}\n"
-        f"Difficulty (per RideWithGPS): {route_summary.get('difficulty') or 'unknown'}\n"
-        f"Surface: {route_summary.get('surface') or 'unknown'} "
-        f"({route_summary.get('unpaved_pct') or 0}% unpaved)",
+        "## Route\n" + "\n".join(route_lines),
     ]
     if elevation_profile:
         sections.append(
