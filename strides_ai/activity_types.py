@@ -34,6 +34,11 @@ class SportType(str, Enum):
             return cls.UNKNOWN
 
 
+RUN_TYPES = frozenset({SportType.RUN, SportType.TRAIL_RUN, SportType.VIRTUAL_RUN})
+CYCLE_TYPES = frozenset({SportType.RIDE, SportType.VIRTUAL_RIDE, SportType.GRAVEL_RIDE})
+LIFT_TYPES = frozenset({SportType.WEIGHT_TRAINING})
+
+
 @dataclass
 class CardioActivity:
     """Canonical model for running and cycling activities (Strava et al.)."""

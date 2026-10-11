@@ -5,12 +5,8 @@ from typing import Optional
 import sqlalchemy as sa
 from sqlmodel import Column, Field, SQLModel
 
-from ..activity_types import SportType
-
-# Activity type sets — used by sync.py and query filters
-RUN_TYPES = {SportType.RUN, SportType.TRAIL_RUN, SportType.VIRTUAL_RUN}
-CYCLE_TYPES = {SportType.RIDE, SportType.VIRTUAL_RIDE, SportType.GRAVEL_RIDE}
-LIFT_TYPES = {SportType.WEIGHT_TRAINING}
+# Re-export groupings for existing callers; the canonical taxonomy is source-independent.
+from ..activity_types import CYCLE_TYPES, LIFT_TYPES, RUN_TYPES, SportType
 
 
 class Activity(SQLModel, table=True):

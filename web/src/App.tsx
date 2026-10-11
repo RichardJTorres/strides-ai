@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import Chat from "./pages/Chat";
 import Activities from "./pages/Activities";
-import Charts from "./pages/Charts";
 import Calendar from "./pages/Calendar";
 import Profile from "./pages/Profile";
 import Settings from "./pages/Settings";
 import Memories from "./pages/Memories";
+
+const Charts = lazy(() => import("./pages/Charts"));
 
 type Tab = "chat" | "activities" | "charts" | "calendar" | "profile" | "memories" | "settings";
 export type Mode = "running" | "cycling" | "hybrid" | "lifting";
@@ -233,7 +234,11 @@ export default function App() {
       <main className="flex-1 overflow-hidden pb-14 md:pb-0">
         {tab === "chat" && <Chat mode={mode} theme={theme} supportsAttachments={supportsAttachments} />}
         {tab === "activities" && <Activities mode={mode} theme={theme} />}
-        {tab === "charts" && <Charts mode={mode} theme={theme} />}
+        {tab === "charts" && (
+          <Suspense fallback={<div role="status" className="p-6 text-gray-400">Loading charts…</div>}>
+            <Charts mode={mode} theme={theme} />
+          </Suspense>
+        )}
         {tab === "calendar" && <Calendar />}
         {tab === "profile" && <Profile mode={mode} theme={theme} />}
         {tab === "memories" && <Memories theme={theme} />}
