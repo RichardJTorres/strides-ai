@@ -26,6 +26,7 @@ export default function FilterBar({
         <button
           key={id}
           onClick={() => onPreset(id)}
+          aria-pressed={preset === id}
           className={`px-3 py-1 text-xs rounded-md border transition-colors ${
             preset === id
               ? `${theme.accentBg} ${theme.accentClass} ${theme.accentBorder} font-medium`
@@ -39,6 +40,8 @@ export default function FilterBar({
         <div className="flex items-center gap-2 ml-1">
           <input
             type="date"
+            aria-label="Start date"
+            max={customUntil || undefined}
             value={customSince}
             onChange={(e) => onCustomSince(e.target.value)}
             className="bg-gray-800 text-gray-200 border border-gray-600 rounded px-2 py-0.5 text-xs focus:outline-none focus:border-gray-500"
@@ -47,6 +50,8 @@ export default function FilterBar({
           <span className="text-gray-500 text-xs">→</span>
           <input
             type="date"
+            aria-label="End date"
+            min={customSince || undefined}
             value={customUntil}
             onChange={(e) => onCustomUntil(e.target.value)}
             className="bg-gray-800 text-gray-200 border border-gray-600 rounded px-2 py-0.5 text-xs focus:outline-none focus:border-gray-500"

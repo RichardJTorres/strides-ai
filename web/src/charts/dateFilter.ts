@@ -1,5 +1,7 @@
 // Date-range filter primitives shared by every charts page.
 
+import type { ChartDataset } from "./api";
+
 export type FilterPreset =
   | "this-month"
   | "last-month"
@@ -31,7 +33,7 @@ export function getPresetRange(preset: FilterPreset): DateRange {
   const today = new Date();
   const y = today.getFullYear();
   const m = today.getMonth();
-  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   switch (preset) {
     case "this-month":
       return { since: iso(new Date(y, m, 1)), until: null };
@@ -70,4 +72,48 @@ export function filterByDate<T>(
     if (until && d > until) return false;
     return true;
   });
+}
+
+/**
+ * Apply a date-range filter to any ChartDataset variant, trimming only what's DISPLAYED.
+ * Rolling averages must already be computed server-side over full history — this never
+ * re-derives them, it only slices which points are shown.
+ */
+// Include a week when any day overlaps the selected range. Weekly totals remain whole-week totals.
+function filterWeeks<T extends { week: string }>(items: T[], since: string | null, until: string | null): T[] {
+  return items.filter((item) => {
+    const end = new Date(`${item.week}T12:00:00`);
+    end.setDate(end.getDate() + 6);
+    const endIso = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, "0")}-${String(end.getDate()).padStart(2, "0")}`;
+    return (!since || endIso >= since) && (!until || item.week <= until);
+  });
+}
+
+export function filterDatasetByRange(
+  dataset: ChartDataset,
+  since: string | null,
+  until: string | null,
+): ChartDataset {
+  switch (dataset.chart_type) {
+    case "weekly_bar":
+      return { ...dataset, data: filterWeeks(dataset.data, since, until) };
+    case "stacked_bar":
+      return { ...dataset, data: filterWeeks(dataset.data, since, until) };
+    case "atl_ctl":
+      return { ...dataset, data: filterByDate(dataset.data, "date", since, until) };
+    case "time_series":
+      return { ...dataset, data: filterByDate(dataset.data, "date", since, until) };
+    case "scatter":
+      return {
+        ...dataset,
+        scatter: filterByDate(dataset.scatter, "date", since, until),
+        rolling_avg: filterByDate(dataset.rolling_avg, "date", since, until),
+      };
+  }
+}
+
+/** Number of points currently visible after a range filter, for the "available but empty in
+ * this range" distinction — independent of dataset.available (lifetime availability). */
+export function visiblePointCount(dataset: ChartDataset): number {
+  return dataset.chart_type === "scatter" ? dataset.scatter.length : dataset.data.length;
 }

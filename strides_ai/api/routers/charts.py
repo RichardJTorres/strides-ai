@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session
 
-from ...charts_data import get_chart_data as get_cardio_chart_data
+from ...analytics.composition import get_chart_datasets
 from ...charts_lifting import get_chart_data as get_lifting_chart_data
 from ...config import VALID_MODES
 from ...db import activities as crud
@@ -25,6 +25,7 @@ def charts(
         mode = "running"
     rows = [r.model_dump() for r in crud.get_for_mode(session, mode)]
     if mode == "lifting":
+        # Unchanged — the typed analytics envelope below is cardio-only.
         muscle_map = tmpl_crud.get_muscle_map(session)
         return get_lifting_chart_data(rows, template_muscle_map=muscle_map)
-    return get_cardio_chart_data(rows, unit)
+    return {"mode": mode, "unit": unit, "charts": get_chart_datasets(rows, mode, unit)}
