@@ -3,6 +3,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 const DAYS_OF_WEEK = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
+// Mirrored in strides_ai/compliance.py (RUN_WORKOUT_TYPES/RIDE_WORKOUT_TYPES/
+// UNSCORED_WORKOUT_TYPES) for plan-vs-actual compliance scoring — keep both in sync. If they
+// drift, the backend falls back to treating an unrecognized type as sport-ambiguous rather
+// than crashing or misclassifying, so drift degrades gracefully but should still be fixed.
 const WORKOUT_TYPE_GROUPS: { label: string; types: string[] }[] = [
   { label: "Running", types: ["Easy Run", "Long Run", "Tempo Run", "Running Race"] },
   { label: "Cycling", types: ["Easy Ride", "Long Ride", "Tempo Ride", "Indoor Ride", "Cycling Race"] },
@@ -16,8 +20,25 @@ const ROUTE_CAPABLE_WORKOUT_TYPES = new Set([
   ...WORKOUT_TYPE_GROUPS[0].types,
   ...WORKOUT_TYPE_GROUPS[1].types,
 ]);
-// Distance/elevation don't apply to these.
+// Distance/elevation don't apply to these. Mirrored as UNSCORED_WORKOUT_TYPES in
+// strides_ai/compliance.py — these are excluded from compliance scoring entirely.
 const NO_DISTANCE_WORKOUT_TYPES = new Set(["Yoga", "Rest"]);
+
+const COMPLIANCE_DOT_COLORS: Record<string, string> = {
+  completed: "bg-green-400",
+  modified: "bg-amber-400",
+  missed: "bg-red-400",
+  // upcoming/unscored intentionally render nothing — never imply pass/fail on a day that
+  // can't be judged yet (upcoming) or at all (rest/yoga).
+};
+
+const COMPLIANCE_STATUS_LABELS: Record<string, string> = {
+  completed: "Completed",
+  modified: "Modified",
+  missed: "Missed",
+  upcoming: "Upcoming",
+  unscored: "Not scored",
+};
 
 const INTENSITIES = ["easy", "moderate", "hard", "rest"];
 
@@ -56,6 +77,16 @@ interface RouteAnalysis {
   verdict: string;
   explanation: string;
   suggestion?: string | null;
+}
+
+interface ComplianceDay {
+  date: string;
+  workout_type: string;
+  status: "completed" | "modified" | "missed" | "upcoming" | "unscored";
+  planned_distance_km: number | null;
+  actual_distance_km: number | null;
+  matched_activity_id: number | null;
+  note: string;
 }
 
 interface Activity {
@@ -119,6 +150,17 @@ interface GridCell {
   inCurrentMonth: boolean;
 }
 
+interface WeekSummary {
+  cells: GridCell[];
+  plannedKm: number;
+  actualKm: number;
+  completed: number;
+  modified: number;
+  missed: number;
+  consistencyPct: number | null;
+  onTargetPct: number | null;
+}
+
 const EMPTY_FORM = {
   workout_type: "Easy Run",
   description: "",
@@ -176,6 +218,8 @@ export default function Calendar() {
   const [prefs, setPrefs] = useState<Prefs>({ blocked_days: [], races: [] });
   const [plan, setPlan] = useState<Record<string, Workout>>({});
   const [activities, setActivities] = useState<Record<string, Activity[]>>({});
+  const [compliance, setCompliance] = useState<Record<string, ComplianceDay>>({});
+  const [selectedWeek, setSelectedWeek] = useState<WeekSummary | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [nutritionLoading, setNutritionLoading] = useState(false);
@@ -234,6 +278,33 @@ export default function Calendar() {
       })
       .catch(() => {});
   }, []);
+
+  // Compliance (plan-vs-actual) is fetched per-visible-grid-range rather than once for all
+  // time, matching how the grid itself is paginated by month.
+  useEffect(() => {
+    const daysInMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).getDate();
+    const firstDow = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1).getDay();
+    const totalCells = Math.ceil((firstDow + daysInMonth) / 7) * 7;
+    const gridStart = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1 - firstDow);
+    const gridEnd = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + totalCells - 1);
+    const fmt = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+    fetch(`/api/calendar/compliance?start_date=${fmt(gridStart)}&end_date=${fmt(gridEnd)}`)
+      .then(r => r.json())
+      .then((res: { days: ComplianceDay[] }) => {
+        const byDate: Record<string, ComplianceDay> = {};
+        for (const d of res.days) byDate[d.date] = d;
+        setCompliance(byDate);
+      })
+      .catch(() => {});
+  }, [currentMonth]);
+
+  // The modal snapshots a week's cells at click time; closing it on month navigation avoids
+  // showing a stale week (whose GridCell objects belonged to a now-discarded `weeks` array).
+  useEffect(() => {
+    setSelectedWeek(null);
+  }, [currentMonth]);
 
   const savePrefs = useCallback((updated: Prefs) => {
     fetch("/api/calendar/prefs", {
@@ -665,6 +736,22 @@ export default function Calendar() {
             <span className="w-2 h-2 rounded-full bg-zinc-500" />
             <span className="text-xs text-zinc-400">Strava activity</span>
           </div>
+          <div className="mt-3 pt-3 border-t border-zinc-800 space-y-1">
+            <div className="text-[10px] text-zinc-600 uppercase tracking-wider mb-0.5">Plan compliance</div>
+            <div className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+              <span className="text-xs text-zinc-400">Completed as planned</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+              <span className="text-xs text-zinc-400">Modified (fell short of target)</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+              <span className="text-xs text-zinc-400">Missed</span>
+            </div>
+            <div className="text-[10px] text-zinc-600">No dot = upcoming or not scorable (rest/yoga)</div>
+          </div>
         </div>
       </aside>
 
@@ -713,6 +800,26 @@ export default function Calendar() {
                   (s, a) => s + (a.distance_m ?? 0) / 1000, 0
                 );
               }, 0);
+              // Weekly consistency/on-target %: counts the already-backend-computed per-day
+              // statuses and reapplies the same two formulas strides_ai/compliance.py uses —
+              // duplicates two arithmetic lines only, never the matching/tolerance logic.
+              const weekCompliance = weekCells.reduce(
+                (acc, cell) => {
+                  const status = compliance[cell.dateStr]?.status;
+                  if (status === "completed") acc.completed++;
+                  else if (status === "modified") acc.modified++;
+                  else if (status === "missed") acc.missed++;
+                  return acc;
+                },
+                { completed: 0, modified: 0, missed: 0 }
+              );
+              const weekScored = weekCompliance.completed + weekCompliance.modified + weekCompliance.missed;
+              const consistencyPct = weekScored > 0
+                ? Math.round((100 * (weekCompliance.completed + weekCompliance.modified)) / weekScored)
+                : null;
+              const onTargetPct = weekScored > 0
+                ? Math.round((100 * weekCompliance.completed) / weekScored)
+                : null;
 
               return (
                 <div key={wi} className="flex gap-1 mb-3">
@@ -725,6 +832,8 @@ export default function Calendar() {
                     const isBlocked = prefs.blocked_days.includes(dateStr);
                     const race = raceOnDate(dateStr);
                     const showMonthLabel = cell.dayNum === 1 && !cell.inCurrentMonth;
+                    const complianceStatus = compliance[dateStr]?.status;
+                    const dotColor = complianceStatus ? COMPLIANCE_DOT_COLORS[complianceStatus] : undefined;
 
                     return (
                       <div
@@ -733,6 +842,7 @@ export default function Calendar() {
                         className={[
                           "flex-1 min-h-16 p-1.5 rounded cursor-pointer border transition-colors",
                           isSelected ? "border-zinc-400 bg-zinc-700/60" : "border-zinc-800 hover:border-zinc-600",
+                          isToday ? "ring-2 ring-inset ring-green-400/80 border-green-400/60" : "",
                           isBlocked ? "opacity-40" : "",
                           !cell.inCurrentMonth ? "opacity-55" : "",
                           "bg-zinc-800/20",
@@ -743,6 +853,12 @@ export default function Calendar() {
                             ? `${cell.date.toLocaleString("default", { month: "short" })} ${cell.dayNum}`
                             : cell.dayNum}
                           {isToday && <span className="w-1.5 h-1.5 bg-green-400 rounded-full" />}
+                          {dotColor && (
+                            <span
+                              title={compliance[dateStr]?.note}
+                              className={`w-1.5 h-1.5 rounded-full ml-auto ${dotColor}`}
+                            />
+                          )}
                         </div>
                         {race && (
                           <div className="text-xs px-1 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 truncate mb-0.5">
@@ -766,8 +882,22 @@ export default function Calendar() {
                     );
                   })}
 
-                  {/* Weekly totals */}
-                  <div className="w-20 flex-shrink-0 flex flex-col justify-center gap-3 px-3 ml-1 rounded bg-zinc-800/40 border border-zinc-700/50">
+                  {/* Weekly totals — clickable, opens a larger per-day breakdown pane */}
+                  <button
+                    onClick={() =>
+                      setSelectedWeek({
+                        cells: weekCells,
+                        plannedKm,
+                        actualKm,
+                        completed: weekCompliance.completed,
+                        modified: weekCompliance.modified,
+                        missed: weekCompliance.missed,
+                        consistencyPct,
+                        onTargetPct,
+                      })
+                    }
+                    className="w-20 flex-shrink-0 flex flex-col justify-center gap-3 px-3 ml-1 rounded bg-zinc-800/40 border border-zinc-700/50 hover:border-zinc-500 hover:bg-zinc-800/70 transition-colors text-left cursor-pointer"
+                  >
                     <div>
                       <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Planned</div>
                       <div className="text-sm text-zinc-300 font-semibold">
@@ -782,7 +912,14 @@ export default function Calendar() {
                       </div>
                       {actualKm > 0 && <div className="text-[10px] text-zinc-500">km</div>}
                     </div>
-                  </div>
+                    {weekScored > 0 && (
+                      <div>
+                        <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">On-Target</div>
+                        <div className="text-sm font-semibold text-zinc-300">{onTargetPct}%</div>
+                        <div className="text-[10px] text-zinc-500">{consistencyPct}% did something</div>
+                      </div>
+                    )}
+                  </button>
                 </div>
               );
             })}
@@ -1253,6 +1390,115 @@ export default function Calendar() {
                     </div>
                   </>
                 )}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── Weekly summary pane (click a week's Planned/Actual box) ── */}
+      {selectedWeek && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-black/60"
+            onClick={() => setSelectedWeek(null)}
+          />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
+            <div className="pointer-events-auto bg-zinc-900 border border-zinc-700 rounded-lg w-full max-w-lg max-h-[85vh] overflow-y-auto shadow-2xl">
+              <div className="px-5 py-4 border-b border-zinc-800 flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-zinc-200">
+                  Week of{" "}
+                  {new Date(selectedWeek.cells[0].dateStr + "T12:00:00").toLocaleDateString("default", {
+                    month: "short",
+                    day: "numeric",
+                  })}
+                  {" – "}
+                  {new Date(selectedWeek.cells[6].dateStr + "T12:00:00").toLocaleDateString("default", {
+                    month: "short",
+                    day: "numeric",
+                  })}
+                </h3>
+                <button
+                  onClick={() => setSelectedWeek(null)}
+                  className="text-zinc-500 hover:text-zinc-300 text-xl leading-none"
+                >×</button>
+              </div>
+
+              <div className="p-5 space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-zinc-800/40 rounded p-3">
+                    <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Distance</div>
+                    <div className="text-sm text-zinc-200">
+                      {selectedWeek.plannedKm.toFixed(1)}km planned · {selectedWeek.actualKm.toFixed(1)}km actual
+                    </div>
+                  </div>
+                  <div className="bg-zinc-800/40 rounded p-3">
+                    <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Compliance</div>
+                    {selectedWeek.onTargetPct !== null ? (
+                      <div className="text-sm text-zinc-200">
+                        {selectedWeek.onTargetPct}% on-target · {selectedWeek.consistencyPct}% did something
+                      </div>
+                    ) : (
+                      <div className="text-sm text-zinc-500">No scorable planned days this week</div>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-2">Day by day</div>
+                  <div className="space-y-2">
+                    {selectedWeek.cells.map(cell => {
+                      const dateStr = cell.dateStr;
+                      const workout = plan[dateStr];
+                      const dayActivities = activities[dateStr] ?? [];
+                      const complianceDay = compliance[dateStr];
+                      return (
+                        <div
+                          key={dateStr}
+                          className="flex gap-3 items-start border border-zinc-800 rounded px-3 py-2"
+                        >
+                          <div className="w-16 flex-shrink-0 text-xs text-zinc-500">
+                            {new Date(dateStr + "T12:00:00").toLocaleDateString("default", {
+                              weekday: "short",
+                              month: "short",
+                              day: "numeric",
+                            })}
+                          </div>
+                          <div className="flex-1 min-w-0 space-y-1">
+                            {workout ? (
+                              <div
+                                className={`inline-block text-xs px-1.5 py-0.5 rounded border ${WORKOUT_COLORS[workout.workout_type] ?? "bg-zinc-700/50 text-zinc-400 border-zinc-600/30"}`}
+                              >
+                                {workout.workout_type}
+                                {workout.distance_km ? ` · ${workout.distance_km}km` : ""}
+                              </div>
+                            ) : (
+                              <div className="text-xs text-zinc-600 italic">No planned workout</div>
+                            )}
+                            {dayActivities.map(a => (
+                              <div key={a.id} className="text-xs text-zinc-400">
+                                ✓ {((a.distance_m ?? 0) / 1000).toFixed(1)}km {a.sport_type}
+                              </div>
+                            ))}
+                            {complianceDay && (
+                              <div className="flex items-center gap-1.5 text-xs">
+                                {COMPLIANCE_DOT_COLORS[complianceDay.status] && (
+                                  <span
+                                    className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${COMPLIANCE_DOT_COLORS[complianceDay.status]}`}
+                                  />
+                                )}
+                                <span className="text-zinc-300 font-medium">
+                                  {COMPLIANCE_STATUS_LABELS[complianceDay.status]}
+                                </span>
+                                <span className="text-zinc-500 truncate">— {complianceDay.note}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
             </div>
           </div>

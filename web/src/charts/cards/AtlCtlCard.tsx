@@ -12,6 +12,12 @@ interface Props {
   unit: "miles" | "km";
 }
 
+function ratioZone(ratio: number): { label: string; color: string } {
+  if (ratio > 1.3) return { label: "⚠ Injury risk", color: "#ef4444" };
+  if (ratio < 0.8) return { label: "↓ Detraining", color: "#9ca3af" };
+  return { label: "✓ Optimal", color: "#22c55e" };
+}
+
 function ATLTooltip({
   active,
   payload,
@@ -30,10 +36,7 @@ function ATLTooltip({
   const ratio = get("ratio");
   const ul = unit === "miles" ? "mi" : "km";
 
-  let zone = "";
-  if (ratio != null) {
-    zone = ratio > 1.3 ? "⚠ Injury risk" : ratio < 0.8 ? "↓ Detraining" : "✓ Optimal";
-  }
+  const zone = ratio != null ? ratioZone(ratio).label : "";
 
   return (
     <div className="bg-gray-800 border border-gray-700 rounded-md p-2.5 text-xs shadow-lg leading-5">
@@ -80,9 +83,43 @@ export default function AtlCtlCard({ dataset, since, until, isAllTime, unit }: P
   const ratioMax = Math.max(2.5, ...data.map((d) => d.ratio ?? 0));
   const ratioMaxRounded = Math.ceil(ratioMax * 10) / 10;
 
+  // Most recent point in the currently-displayed (filtered) series — shown as a persistent
+  // stats row so the current load is visible without hovering the chart.
+  const latest = data[data.length - 1];
+  const latestZone = latest.ratio != null ? ratioZone(latest.ratio) : null;
+
+  const statsRow = (
+    <div className="flex flex-wrap gap-5">
+      <div>
+        <div className="text-[10px] text-gray-500 uppercase tracking-wider">ATL (7d)</div>
+        <div className="text-lg font-semibold" style={{ color: "#ef4444" }}>
+          {latest.atl.toFixed(1)} <span className="text-xs text-gray-500">{ul}/d</span>
+        </div>
+      </div>
+      <div>
+        <div className="text-[10px] text-gray-500 uppercase tracking-wider">CTL (42d)</div>
+        <div className="text-lg font-semibold" style={{ color: "#60a5fa" }}>
+          {latest.ctl.toFixed(1)} <span className="text-xs text-gray-500">{ul}/d</span>
+        </div>
+      </div>
+      {latestZone && (
+        <div>
+          <div className="text-[10px] text-gray-500 uppercase tracking-wider">ATL/CTL Ratio</div>
+          <div className="text-lg font-semibold" style={{ color: "#a78bfa" }}>
+            {latest.ratio!.toFixed(2)}
+          </div>
+          <div className="text-xs" style={{ color: latestZone.color }}>
+            {latestZone.label}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <TimeSeriesLineCard
       title={dataset.title}
+      statsRow={statsRow}
       subtitle={
         <>
           ATL = 7-day EWA · CTL = 42-day EWA · Ratio zones:{" "}

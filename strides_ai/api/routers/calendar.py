@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlmodel import Session
 
+from ... import compliance
 from ...config import get_settings
 from ...coach import RECENT_ACTIVITIES_IN_SYSTEM
 from ...db import activities as act_crud
@@ -95,6 +96,57 @@ def put_calendar_prefs(body: CalendarPrefsBody, session: Session = Depends(get_s
 @router.get("/calendar/plan")
 def get_calendar_plan(session: Session = Depends(get_session)):
     return [r.model_dump() for r in crud.get_plan(session)]
+
+
+@router.get("/calendar/compliance")
+def get_compliance(start_date: str, end_date: str, session: Session = Depends(get_session)):
+    """Compute plan-vs-actual compliance for a date range, mirroring the same computation the
+    coach's system prompt uses (strides_ai/coach.py:_compliance_section) so the Calendar UI and
+    the coach can never disagree about what counts as completed/modified/missed."""
+    try:
+        start = date_cls.fromisoformat(start_date)
+        end = date_cls.fromisoformat(end_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="start_date/end_date must be YYYY-MM-DD")
+    if start > end:
+        raise HTTPException(status_code=400, detail="start_date must be on or before end_date")
+
+    plan_rows = [r.model_dump() for r in crud.get_plan(session, start_date, end_date)]
+    activity_rows = [
+        r.model_dump()
+        for r in act_crud.get_all(session)
+        if start_date <= (r.date or "") <= end_date
+    ]
+
+    planned = compliance.planned_workouts_from_rows(plan_rows)
+    acts = compliance.compliance_activities_from_rows(activity_rows)
+    days = compliance.compute_range_compliance(planned, acts, date_cls.today())
+    summary = compliance.summarize_compliance(days)
+
+    return {
+        "days": [
+            {
+                "date": d.date.isoformat(),
+                "workout_type": d.workout_type,
+                "status": d.status.value,
+                "planned_distance_km": d.planned_distance_km,
+                "actual_distance_km": d.actual_distance_km,
+                "matched_activity_id": d.matched_activity_id,
+                "note": d.note,
+            }
+            for d in days
+        ],
+        "summary": {
+            "total_scored": summary.total_scored,
+            "completed": summary.completed,
+            "modified": summary.modified,
+            "missed": summary.missed,
+            "unscored": summary.unscored,
+            "upcoming": summary.upcoming,
+            "consistency_pct": summary.consistency_pct,
+            "on_target_pct": summary.on_target_pct,
+        },
+    }
 
 
 @router.put("/calendar/plan/{date}")
