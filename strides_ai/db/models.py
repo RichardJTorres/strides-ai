@@ -77,6 +77,10 @@ class Memory(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     category: str
     content: str = Field(sa_column=Column(sa.Text, unique=True, nullable=False))
+    status: str = "current"
+    topic: Optional[str] = None
+    effective_from: Optional[str] = None
+    effective_until: Optional[str] = None
     created_at: Optional[str] = Field(
         default=None,
         sa_column=Column(sa.Text, server_default=sa.text("datetime('now')")),

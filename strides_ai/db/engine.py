@@ -63,6 +63,9 @@ def init_db() -> None:
         )
 
     if "activities" in tables and "alembic_version" not in tables:
-        alembic_command.stamp(cfg, "head")
+        # Unversioned installs predate dated memories. Preserve their existing
+        # schema baseline, then run subsequent migrations rather than skipping them.
+        alembic_command.stamp(cfg, "009")
+        alembic_command.upgrade(cfg, "head")
     else:
         alembic_command.upgrade(cfg, "head")

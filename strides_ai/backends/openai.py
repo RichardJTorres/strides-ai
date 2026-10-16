@@ -7,6 +7,7 @@ import openai as _openai
 
 from .base import (
     SAVE_MEMORY_CATEGORIES,
+    SAVE_MEMORY_TIMING_PROPERTIES,
     SAVE_MEMORY_DESCRIPTION,
     UPDATE_TRAINING_PLAN_DESCRIPTION,
     BaseBackend,
@@ -23,6 +24,7 @@ SAVE_MEMORY_TOOL = {
         "parameters": {
             "type": "object",
             "properties": {
+                **SAVE_MEMORY_TIMING_PROPERTIES,
                 "category": {
                     "type": "string",
                     "enum": SAVE_MEMORY_CATEGORIES,

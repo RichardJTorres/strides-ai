@@ -217,7 +217,16 @@ def test_get_all_memories_empty(tmp_db):
 def test_get_all_memories_has_expected_keys(tmp_db):
     db.save_memory("injury", "knee")
     mem = db.get_all_memories()[0]
-    assert {"id", "category", "content", "created_at"} == set(mem.keys())
+    assert {
+        "id",
+        "category",
+        "content",
+        "created_at",
+        "status",
+        "topic",
+        "effective_from",
+        "effective_until",
+    } == set(mem.keys())
 
 
 # ── get_activities_for_mode ───────────────────────────────────────────────────

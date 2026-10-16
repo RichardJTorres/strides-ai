@@ -1,5 +1,7 @@
 """Training block generation for the Calendar page's explicit "Generate" flow."""
 
+from .memory_context import memory_timeline_section
+
 import json
 import re
 from datetime import date as date_cls
@@ -93,9 +95,11 @@ def build_plan_generation_prompt(
     if profile_text:
         sections.append(profile_text)
 
-    if memories:
-        lines = "\n".join(f"  [{m['category']}] {m['content']}" for m in memories)
-        sections.append(f"## Coaching Notes (goals, races, injuries, preferences)\n{lines}")
+    context = memory_timeline_section(
+        memories, date_cls.fromisoformat(start_date), date_cls.fromisoformat(end_date)
+    )
+    if context:
+        sections.append(context)
 
     races = sorted(prefs.get("races", []), key=lambda r: r["date"])
     blocked = sorted(prefs.get("blocked_days", []))
