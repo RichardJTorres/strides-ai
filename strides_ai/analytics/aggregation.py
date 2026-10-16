@@ -41,6 +41,23 @@ def trailing_weekly_rolling_avg(
     return result
 
 
+def trailing_weekly_ratio_rolling_avg(
+    weeks: list[date], numerator: dict[date, float], denominator: dict[date, float], window: int
+) -> dict[date, float]:
+    """Trailing N-week ratio: sum(numerator)/sum(denominator) over the window, not an average of
+    per-week ratios — correct for metrics like climbing ratio where weighting by the week's own
+    denominator (distance) matters."""
+    if window < 1:
+        raise ValueError("window must be positive")
+    result: dict[date, float] = {}
+    for i, w in enumerate(weeks):
+        window_weeks = weeks[max(0, i - window + 1) : i + 1]
+        num_sum = sum(numerator.get(ww, 0.0) for ww in window_weeks)
+        den_sum = sum(denominator.get(ww, 0.0) for ww in window_weeks)
+        result[w] = num_sum / den_sum if den_sum > 0 else 0.0
+    return result
+
+
 def trailing_date_rolling_avg(points: list[tuple[date, float]], window_days: int) -> list[float]:
     """For each point (must be pre-sorted ascending by date), the average of all points whose
     date falls within the trailing window_days-day span ending at that point's date, inclusive."""

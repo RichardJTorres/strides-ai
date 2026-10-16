@@ -35,6 +35,11 @@ export const METRIC_COPY: Record<string, MetricCopy> = {
     description:
       "Total climbing per week, with a 4-week rolling average — useful for tracking whether you're building the climbing volume your goals call for.",
   },
+  climbing_ratio: {
+    icon: "🧗",
+    description:
+      "Weekly elevation gain per unit distance, with a 4-week rolling average — a measure of how hilly your training has been, independent of how much you ran or rode.",
+  },
   training_time_allocation: {
     icon: "⚖️",
     description:

@@ -218,17 +218,22 @@ def _effort_efficiency_raw(avg_pace_s_per_km: float | None, avg_hr: float | None
         return None
 
 
-def _elevation_metrics(altitude: list, distance_m: float) -> tuple[float | None, int | None]:
+def _elevation_metrics(
+    elevation_gain_m: float | None, distance_m: float
+) -> tuple[float | None, int | None]:
     """
-    Compute elevation gain per mile (ft/mile) and high-elevation flag.
-    Elevation gain = sum of positive altitude deltas.
+    Compute elevation gain per mile (ft/mile) and high-elevation flag from the activity's
+    summary elevation_gain_m (set at sync time from Strava's total_elevation_gain) — not the
+    altitude stream. The stream is fetched fresh at analysis time and is often empty right after
+    upload (Strava's elevation correction hasn't finished yet), which left this metric
+    permanently null for activities analyzed immediately after sync. elevation_gain_m and
+    distance_m are both already known at sync time, so no stream dependency is needed here.
     """
     try:
-        if not altitude or distance_m <= 0:
+        if elevation_gain_m is None or distance_m <= 0:
             return None, None
 
-        gain_m = sum(max(0, altitude[i] - altitude[i - 1]) for i in range(1, len(altitude)))
-        gain_ft = gain_m * 3.28084
+        gain_ft = elevation_gain_m * 3.28084
         distance_miles = distance_m / 1609.34
         per_mile = round(gain_ft / distance_miles, 2)
         flag = 1 if per_mile > 100 else 0
@@ -268,7 +273,6 @@ def compute_metrics(streams: dict[str, list], activity: dict, max_hr: int = 190)
     hr = streams.get("heartrate")
     velocity = streams.get("velocity_smooth")
     cadence = streams.get("cadence")
-    altitude = streams.get("altitude")
 
     sport_type = activity.get("sport_type", "")
     is_run = sport_type in db.RUN_TYPES
@@ -302,10 +306,8 @@ def compute_metrics(streams: dict[str, list], activity: dict, max_hr: int = 190)
         activity.get("avg_pace_s_per_km"), activity.get("avg_hr")
     )
 
-    # Elevation
-    elev_per_mile, elev_flag = (
-        _elevation_metrics(altitude, distance_m) if altitude and distance_m else (None, None)
-    )
+    # Elevation (from the activity summary field — see _elevation_metrics docstring)
+    elev_per_mile, elev_flag = _elevation_metrics(activity.get("elevation_gain_m"), distance_m)
     metrics["elevation_per_mile"] = elev_per_mile
     metrics["high_elevation_flag"] = elev_flag
 
@@ -626,7 +628,6 @@ def build_precomputed_brief(streams: dict[str, list], activity: dict) -> str:
     hr = streams.get("heartrate", [])
     velocity = streams.get("velocity_smooth", [])
     cadence = streams.get("cadence", [])
-    altitude = streams.get("altitude", [])
 
     sport_type = activity.get("sport_type", "")
     is_run = sport_type in db.RUN_TYPES
@@ -714,9 +715,7 @@ def build_precomputed_brief(streams: dict[str, list], activity: dict) -> str:
 
     # Elevation
     elev_gain_m = activity.get("elevation_gain_m") or 0
-    elev_per_mile, _ = (
-        _elevation_metrics(altitude, distance_m) if altitude and distance_m else (None, None)
-    )
+    elev_per_mile, _ = _elevation_metrics(activity.get("elevation_gain_m"), distance_m)
     elev_str = f"{elev_gain_m:.0f}m total gain"
     if elev_per_mile:
         elev_str += f" ({elev_per_mile:.0f} ft/mi)"

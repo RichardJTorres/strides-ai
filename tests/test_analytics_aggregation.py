@@ -12,6 +12,7 @@ from strides_ai.analytics.aggregation import (
     to_hours,
     to_pace_unit,
     trailing_date_rolling_avg,
+    trailing_weekly_ratio_rolling_avg,
     trailing_weekly_rolling_avg,
     week_range,
 )
@@ -57,6 +58,50 @@ def test_trailing_weekly_rolling_avg_window_caps_at_available_weeks():
     values = {w: 10.0 for w in weeks}
     result = trailing_weekly_rolling_avg(weeks, values, window=4)
     # only 3 weeks exist even though window=4 — average over what's available
+    assert result[date(2026, 1, 19)] == pytest.approx(10.0)
+
+
+# ── trailing_weekly_ratio_rolling_avg ───────────────────────────────────────────
+
+
+def test_trailing_weekly_ratio_rolling_avg_single_week():
+    weeks = [date(2026, 1, 5)]
+    result = trailing_weekly_ratio_rolling_avg(
+        weeks, {date(2026, 1, 5): 100.0}, {date(2026, 1, 5): 10.0}, window=4
+    )
+    assert result[date(2026, 1, 5)] == pytest.approx(10.0)
+
+
+def test_trailing_weekly_ratio_rolling_avg_zero_denominator_is_zero():
+    weeks = [date(2026, 1, 5)]
+    result = trailing_weekly_ratio_rolling_avg(weeks, {date(2026, 1, 5): 100.0}, {}, window=4)
+    assert result[date(2026, 1, 5)] == 0.0
+
+
+def test_trailing_weekly_ratio_rolling_avg_is_weighted_not_average_of_ratios():
+    """A near-zero-distance week with a huge ratio must not pull the trailing average toward
+    it as much as a naive mean of weekly ratios would — the window must weight by each week's
+    own denominator (sum/sum), not average the per-week ratios."""
+    weeks = [date(2026, 1, 5), date(2026, 1, 12)]
+    # week 1: 10 ft over 0.01 mi -> ratio 1000 (noise from a near-zero-distance week)
+    # week 2: 100 ft over 10 mi -> ratio 10
+    numerator = {date(2026, 1, 5): 10.0, date(2026, 1, 12): 100.0}
+    denominator = {date(2026, 1, 5): 0.01, date(2026, 1, 12): 10.0}
+    result = trailing_weekly_ratio_rolling_avg(weeks, numerator, denominator, window=4)
+
+    naive_avg_of_ratios = (1000.0 + 10.0) / 2  # what the wrong approach would give: 505.0
+    weighted = (10.0 + 100.0) / (0.01 + 10.0)  # sum/sum: ~10.99
+
+    assert result[date(2026, 1, 12)] == pytest.approx(weighted, rel=1e-3)
+    assert result[date(2026, 1, 12)] < naive_avg_of_ratios / 10  # far from the naive value
+
+
+def test_trailing_weekly_ratio_rolling_avg_window_caps_at_available_weeks():
+    weeks = [date(2026, 1, 5), date(2026, 1, 12), date(2026, 1, 19)]
+    numerator = {w: 10.0 for w in weeks}
+    denominator = {w: 1.0 for w in weeks}
+    result = trailing_weekly_ratio_rolling_avg(weeks, numerator, denominator, window=4)
+    # only 3 weeks exist even though window=4 — ratio over what's available
     assert result[date(2026, 1, 19)] == pytest.approx(10.0)
 
 
@@ -160,3 +205,5 @@ def test_rolling_windows_must_be_positive(window):
         trailing_date_rolling_avg([], window)
     with pytest.raises(ValueError):
         trailing_weekly_rolling_avg([], {}, window)
+    with pytest.raises(ValueError):
+        trailing_weekly_ratio_rolling_avg([], {}, {}, window)
