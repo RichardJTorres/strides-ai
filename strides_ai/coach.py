@@ -1,9 +1,9 @@
 """Coaching system prompt assembly and history utilities."""
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from . import db
+from . import compliance, db
 from .modes import MODES
 
 RECALL_MESSAGES = 40
@@ -13,6 +13,8 @@ RECENT_ACTIVITIES_IN_SYSTEM = 30
 # How far ahead planned workouts are surfaced, wide enough to cover a multi-week
 # training block the coach is asked to generate or regenerate.
 PLANNED_WORKOUTS_WINDOW_DAYS = 60
+# How far back to look when summarizing plan-vs-actual compliance for the coach (today inclusive).
+COMPLIANCE_WINDOW_DAYS = 14
 
 VOICE_INSTRUCTIONS: dict[str, str] = {
     "supportive": (
@@ -83,6 +85,41 @@ def _memories_section(memories: list[dict]) -> str:
         return ""
     lines = [f"  [{m['category']}] {m['content']}" for m in memories]
     return "## Coaching Notes (remembered from previous sessions)\n" + "\n".join(lines)
+
+
+def _compliance_section(activities: list[dict]) -> str:
+    today = datetime.now().date()
+    start = today - timedelta(days=COMPLIANCE_WINDOW_DAYS)
+    planned = compliance.planned_workouts_from_rows(
+        db.get_training_plan(start.isoformat(), today.isoformat())
+    )
+    acts = compliance.compliance_activities_from_rows(activities)
+    days = compliance.compute_range_compliance(planned, acts, today)
+    summary = compliance.summarize_compliance(days)
+    if summary.total_scored == 0:
+        return ""
+    lines = [
+        f"Last {COMPLIANCE_WINDOW_DAYS} days: {summary.completed} completed, "
+        f"{summary.modified} modified, {summary.missed} missed "
+        f"({summary.unscored} unscored, {summary.upcoming} upcoming)."
+    ]
+    if summary.consistency_pct is not None:
+        lines.append(
+            f"Consistency (did something on plan days): {summary.consistency_pct}% · "
+            f"On-target (hit the planned distance): {summary.on_target_pct}%"
+        )
+    flagged = [
+        d
+        for d in days
+        if d.status in (compliance.ComplianceStatus.MISSED, compliance.ComplianceStatus.MODIFIED)
+    ]
+    if flagged:
+        lines.append("Flagged days:")
+        lines.extend(
+            f"  - {d.date.isoformat()} ({d.workout_type}): {d.status.value} — {d.note}"
+            for d in flagged
+        )
+    return "## Plan-vs-Actual Compliance\n" + "\n".join(lines)
 
 
 def _upcoming_workouts_section() -> str:
@@ -172,6 +209,7 @@ def build_system(
         profile,  # already carries its own ## header from profile.py; empty string is filtered out
         _memories_section(memories),
         _calendar_prefs_section(),
+        _compliance_section(activities or []),
         _upcoming_workouts_section(),
         _analysis_guide_section(cfg, recent),
         _recent_activities_section(recent, mode),

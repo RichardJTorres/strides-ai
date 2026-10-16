@@ -163,6 +163,37 @@ def test_build_system_embeds_recent_activities(tmp_db):
     assert "Morning Run" in result  # name from _make_row
 
 
+def test_build_system_no_compliance_section_when_window_empty(tmp_db):
+    result = build_system("", [])
+    assert "Plan-vs-Actual Compliance" not in result
+
+
+def test_build_system_injects_compliance_section(tmp_db):
+    missed_date = (date.today() - timedelta(days=3)).isoformat()
+    db.save_planned_workout(missed_date, "Easy Run", None, 5.0, None, 30, "easy")
+    result = build_system("", [])
+    assert "Plan-vs-Actual Compliance" in result
+    assert "missed" in result
+    assert missed_date in result
+
+
+def test_build_system_compliance_uses_full_activity_list_not_recent_slice(tmp_db):
+    """The compliance section must receive the full `activities` param, not the
+    RECENT_ACTIVITIES_IN_SYSTEM-sliced `recent` list — regression test for that wiring."""
+    completed_date = (date.today() - timedelta(days=5)).isoformat()
+    db.save_planned_workout(completed_date, "Easy Run", None, 5.0, None, 30, "easy")
+
+    # 30 filler rows (fill the RECENT_ACTIVITIES_IN_SYSTEM=30 slice) on an unrelated date,
+    # followed by the one row that actually matches the planned workout's date — placed at
+    # index 30, outside activities[:30].
+    filler = [_make_row(id=i, date="2020-01-01") for i in range(30)]
+    relevant = _make_row(id=999, date=completed_date, distance_m=6000)
+    rows = filler + [relevant]
+
+    result = build_system("", [], activities=rows)
+    assert "1 completed, 0 modified, 0 missed" in result
+
+
 # ── build_training_log ────────────────────────────────────────────────────────
 
 
@@ -179,9 +210,14 @@ def _make_row(
     suffer_score=42,
     perceived_exertion=5.0,
     sport_type="Run",
+    id=1,
 ):
-    """Return a dict that behaves like sqlite3.Row for build_training_log."""
+    """Return a dict that behaves like sqlite3.Row for build_training_log. `id` defaults to 1
+    since real Activity rows always carry one (the DB primary key) — needed by
+    compliance.compliance_activities_from_rows, which build_system's _compliance_section calls
+    on the full activities list."""
     return {
+        "id": id,
         "date": date,
         "name": name,
         "distance_m": distance_m,

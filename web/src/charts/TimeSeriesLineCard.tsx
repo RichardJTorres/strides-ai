@@ -51,6 +51,9 @@ interface Props {
   title: string;
   subtitle?: ReactNode;
   badge?: ReactNode;
+  /** Optional current-value summary (e.g. "ATL 8.2mi/d · CTL 6.1mi/d") rendered between the
+   * subtitle and the chart, so the latest numbers are visible without hovering the chart. */
+  statsRow?: ReactNode;
   data: Record<string, unknown>[];
   xKey: string;
   series: SeriesSpec[];
@@ -65,6 +68,7 @@ export default function TimeSeriesLineCard({
   title,
   subtitle,
   badge,
+  statsRow,
   data,
   xKey,
   series,
@@ -80,6 +84,7 @@ export default function TimeSeriesLineCard({
 
   return (
     <ChartCard title={title} subtitle={subtitle} badge={badge}>
+      {statsRow && <div className="mb-4">{statsRow}</div>}
       <ResponsiveContainer width="100%" height={height}>
         <ComposedChart data={data} margin={{ top: 4, right: rightMargin, left: 0, bottom: 4 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={GRID_COLOR} vertical={false} />
