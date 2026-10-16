@@ -349,3 +349,18 @@ web/
 | Config | `python-dotenv` |
 | Frontend | React 18, TypeScript, Tailwind CSS, Vite |
 | Charts | Recharts |
+
+## Chat conversations
+
+Each coaching mode has one persistent conversation shared across browser tabs.
+Only one chat turn per mode can run at a time; a busy mode returns HTTP 409 and
+keeps the draft and attachments ready for retry. Other modes can run concurrently.
+Each turn captures its provider/model and reconstructs private history from stored
+messages. Settings, profile edits, and activity sync apply to subsequent turns.
+Interrupted or failed turns leave an explicit history marker. Cancellation is
+cooperative: a mode stays busy until provider execution and cleanup finish.
+
+Run the API as a **single process**. Multiple API workers require shared turn
+coordination, which is outside this implementation.
+
+Frontend admission tests: `npm --prefix web test`.

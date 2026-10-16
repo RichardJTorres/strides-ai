@@ -93,31 +93,35 @@ def init_backend(app: FastAPI, mode: str | None = None, provider: str | None = N
     if provider is not None:
         app.state.provider = provider
     current_mode = getattr(app.state, "mode", "running")
+    if not hasattr(app.state, "conversations"):
+        from .conversations import ConversationCoordinator
+
+        app.state.conversations = ConversationCoordinator(lambda mode: build_backend(app, mode))
+    app.state.backend = build_backend(app, current_mode)
+
+
+def build_backend(app: FastAPI, mode: str):
+    """Create a private history and capture configuration before any provider discovery."""
     settings = get_settings()
     current_provider = (getattr(app.state, "provider", None) or settings.provider).lower()
-
+    model = _stored_model(current_provider)
     activities = db.get_all_activities()
-    prior_messages = db.get_recent_messages(RECALL_MESSAGES, mode=current_mode)
-    initial_history = build_initial_history(activities, prior_messages, mode=current_mode)
+    prior_messages = db.get_recent_messages(RECALL_MESSAGES, mode=mode)
+    initial_history = build_initial_history(activities, prior_messages, mode=mode)
 
     if current_provider == "ollama":
-        available = get_provider_models("ollama")
-        auto_default = available[0]["id"] if available else ""
-        model = _stored_model("ollama", auto_default)
-        app.state.backend = OllamaBackend(model, initial_history, settings.ollama_host)
-    elif current_provider == "gemini":
-        available = get_provider_models("gemini")
-        auto_default = available[0]["id"] if available else ""
-        model = _stored_model("gemini", auto_default)
-        app.state.backend = GeminiBackend(settings.gemini_api_key, initial_history, model)
-    elif current_provider == "openai":
-        available = get_provider_models("openai")
-        auto_default = available[0]["id"] if available else "gpt-4o"
-        model = _stored_model("openai", auto_default)
-        app.state.backend = OpenAIBackend(settings.openai_api_key, initial_history, model)
-    else:
-        model = _stored_model("claude")
-        app.state.backend = ClaudeBackend(settings.anthropic_api_key, initial_history, model)
+        if not model:
+            available = get_provider_models("ollama")
+            model = available[0]["id"] if available else ""
+        return OllamaBackend(model, initial_history, settings.ollama_host)
+    if current_provider == "gemini":
+        if not model:
+            available = get_provider_models("gemini")
+            model = available[0]["id"] if available else ""
+        return GeminiBackend(settings.gemini_api_key, initial_history, model)
+    if current_provider == "openai":
+        return OpenAIBackend(settings.openai_api_key, initial_history, model or "gpt-4o")
+    return ClaudeBackend(settings.anthropic_api_key, initial_history, model)
 
 
 def get_backend(request: Request):

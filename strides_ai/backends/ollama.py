@@ -144,6 +144,7 @@ class OllamaBackend(BaseBackend):
         plan_changes: list[dict] = []
 
         while True:
+            self._check_cancelled()
             # Prepend system message each call (Ollama has no separate system param)
             messages = [{"role": "system", "content": system}, *self._history]
 
@@ -164,6 +165,7 @@ class OllamaBackend(BaseBackend):
                     else:
                         resp.raise_for_status()
                         for line in resp.iter_lines():
+                            self._check_cancelled()
                             if not line:
                                 continue
                             chunk = json.loads(line)

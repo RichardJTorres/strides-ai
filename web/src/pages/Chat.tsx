@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Mode, ThemeConfig } from "../App";
+import { handleChatAdmission } from "./chatAdmission";
 
 interface Message {
   id?: number;
@@ -233,6 +234,7 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [input, setInput] = useState("");
+  const [sendError, setSendError] = useState("");
   const [streamingIndex, setStreamingIndex] = useState<number | null>(null);
   const [savedMemories, setSavedMemories] = useState<Memory[]>([]);
   const [planChanges, setPlanChanges] = useState<PlanChange[]>([]);
@@ -481,13 +483,7 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
     // Track blob URLs embedded in the message; revoke on unmount
     snapshotUrls.forEach((u) => { if (u) blobUrlsInMessagesRef.current.push(u); });
 
-    setInput("");
-    setAttachedFiles([]);
-    setPreviewUrls([]);
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "52px";
-      textareaRef.current.style.overflowY = "hidden";
-    }
+    setSendError("");
     setSavedMemories([]);
     setPlanChanges([]);
 
@@ -520,7 +516,19 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
         signal: controller.signal,
       });
 
-      if (!res.ok || !res.body) throw new Error("Request failed");
+      if (!handleChatAdmission(res, () => {
+        setInput("");
+        setAttachedFiles([]);
+        setPreviewUrls([]);
+        if (textareaRef.current) {
+          textareaRef.current.style.height = "52px";
+          textareaRef.current.style.overflowY = "hidden";
+        }
+      }, (error) => {
+        setMessages((prev) => prev.slice(0, assistantIndex - 1));
+        setSendError(error);
+      })) return;
+      if (!res.body) throw new Error("Request failed");
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -715,6 +723,7 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
       {/* Input */}
       <div className="px-3 sm:px-4 pb-3 sm:pb-6 pt-3 sm:pt-5 border-t border-gray-800/60">
         <div className="max-w-3xl mx-auto">
+          {sendError && <p role="alert" className="text-sm text-amber-300 mb-2">{sendError}</p>}
           {/* File preview strip */}
           {attachedFiles.length > 0 && (
             <div className="flex flex-wrap gap-2 mb-2">

@@ -145,6 +145,7 @@ class OpenAIBackend(BaseBackend):
         plan_changes: list[dict] = []
 
         while True:
+            self._check_cancelled()
             messages = [{"role": "system", "content": system}, *self._history]
 
             full_content = ""
@@ -159,6 +160,7 @@ class OpenAIBackend(BaseBackend):
                 stream=True,
             ) as stream:
                 for chunk in stream:
+                    self._check_cancelled()
                     delta = chunk.choices[0].delta if chunk.choices else None
                     if delta is None:
                         continue

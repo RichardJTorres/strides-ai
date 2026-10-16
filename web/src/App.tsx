@@ -232,7 +232,7 @@ export default function App() {
 
       {/* Main content — shrinks on mobile to leave room for bottom nav */}
       <main className="flex-1 overflow-hidden pb-14 md:pb-0">
-        {tab === "chat" && <Chat mode={mode} theme={theme} supportsAttachments={supportsAttachments} />}
+        {tab === "chat" && <Chat key={mode} mode={mode} theme={theme} supportsAttachments={supportsAttachments} />}
         {tab === "activities" && <Activities mode={mode} theme={theme} />}
         {tab === "charts" && (
           <Suspense fallback={<div role="status" className="p-6 text-gray-400">Loading charts…</div>}>
