@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     ollama_model: str = ""
     ollama_host: str = "http://localhost:11434"
 
+    # JSON overrides keyed by default, provider, or provider/model label.
+    chat_limits: dict[str, dict[str, int]] = {}
+
     # Strava
     strava_client_id: str = ""
     strava_client_secret: str = ""

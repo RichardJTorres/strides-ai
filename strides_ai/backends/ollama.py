@@ -144,20 +144,36 @@ class OllamaBackend(BaseBackend):
         plan_changes: list[dict] = []
 
         while True:
-            self._check_cancelled()
+            self._before_request(system)
             # Prepend system message each call (Ollama has no separate system param)
             messages = [{"role": "system", "content": system}, *self._history]
 
             full_content = ""
             tool_calls: list[dict] = []
 
-            body: dict = {"model": self._model, "messages": messages, "stream": True}
+            body: dict = {
+                "model": self._model,
+                "messages": messages,
+                "stream": True,
+                "options": {
+                    "num_predict": self._budget.output_remaining,
+                    "num_ctx": self.limits.context_window,
+                },
+            }
             if self._supports_tools is not False:
                 body["tools"] = [SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL]
 
+            provider_output = None
             retry_without_tools = False
             with httpx.Client(timeout=120) as client:
-                with client.stream("POST", f"{self._host}/api/chat", json=body) as resp:
+                with self._transport_stream(
+                    lambda: client.stream("POST", f"{self._host}/api/chat", json=body),
+                    validate=lambda response: (
+                        response.raise_for_status()
+                        if response.status_code == 429 or response.status_code >= 500
+                        else None
+                    ),
+                ) as resp:
                     if resp.status_code == 400 and "tools" in body:
                         # Model doesn't support tool calling (e.g. Gemma) — retry without
                         self._supports_tools = False
@@ -182,17 +198,24 @@ class OllamaBackend(BaseBackend):
                                 tool_calls = msg["tool_calls"]
 
                             if chunk.get("done"):
+                                provider_output = chunk.get("eval_count")
                                 break
 
             if retry_without_tools:
                 continue
 
-            self._history.append({"role": "assistant", "content": full_content})
+            self._history.append(
+                {"role": "assistant", "content": full_content, "tool_calls": tool_calls}
+            )
 
             if not tool_calls:
+                self._budget.usage(provider_output)
                 break
 
             # Execute tool calls and add results to history
+            for tc in tool_calls:
+                self._budget.output(tc.get("function", {}))
+            self._budget.usage(provider_output)
             for tc in tool_calls:
                 fn = tc.get("function", {})
                 if fn.get("name") == "save_memory":

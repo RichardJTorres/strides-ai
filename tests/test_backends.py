@@ -8,7 +8,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
 # ── Shared helpers ─────────────────────────────────────────────────────────────
 
 
@@ -252,7 +251,7 @@ def test_gemini_supports_attachments(mock_genai):
 def test_gemini_stream_turn_rejects_attachments(mock_genai):
     from strides_ai.backends.gemini import GeminiBackend
 
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(ValueError):
         GeminiBackend("key", []).stream_turn(
             "sys", "hi", lambda _: None, attachments=[{"type": "image"}]
         )
@@ -395,7 +394,7 @@ def test_openai_supports_attachments(mock_openai):
 def test_openai_stream_turn_rejects_attachments(mock_openai):
     from strides_ai.backends.openai import OpenAIBackend
 
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(ValueError):
         OpenAIBackend("key", []).stream_turn(
             "sys", "hi", lambda _: None, attachments=[{"type": "image"}]
         )
@@ -600,7 +599,7 @@ def test_ollama_stream_turn_rejects_attachments(mocker):
     _ollama_http_client(mocker)
     from strides_ai.backends.ollama import OllamaBackend
 
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(ValueError):
         OllamaBackend("llama3.1", []).stream_turn(
             "sys", "hi", lambda _: None, attachments=[{"type": "image"}]
         )

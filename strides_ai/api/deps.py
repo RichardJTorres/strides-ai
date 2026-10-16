@@ -105,7 +105,7 @@ def build_backend(app: FastAPI, mode: str):
     settings = get_settings()
     current_provider = (getattr(app.state, "provider", None) or settings.provider).lower()
     model = _stored_model(current_provider)
-    activities = db.get_all_activities()
+    activities = []
     prior_messages = db.get_recent_messages(RECALL_MESSAGES, mode=mode)
     initial_history = build_initial_history(activities, prior_messages, mode=mode)
 

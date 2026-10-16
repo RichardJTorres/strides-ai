@@ -54,7 +54,32 @@ class ConversationCoordinator:
             if self._active.get(turn.mode) is turn:
                 del self._active[turn.mode]
 
-    def start(self, turn: Turn, system: str, message: str, saved_message: str, attachments):
+    def start(
+        self,
+        turn: Turn,
+        system: str,
+        message: str,
+        saved_message: str,
+        attachments,
+        on_admitted=None,
+    ):
+        if turn.backend is not None:
+            turn.backend.cancel_event = turn.cancel
+        if hasattr(turn.backend, "prepare_turn"):
+            try:
+                system = turn.backend.prepare_turn(system, message, attachments)
+            except ValueError as exc:
+                import logging
+                from ..budget import estimate
+
+                logging.getLogger(__name__).info(
+                    "chat_budget provider_model=%s input_estimate=%s rounds=0 tools=0 stop_reason=admission_rejected",
+                    turn.backend.label,
+                    estimate([system, message, attachments]),
+                )
+                raise HTTPException(413, str(exc)) from exc
+        if on_admitted is not None:
+            on_admitted()
         with Session(get_engine()) as session:
             conversations.save(session, "user", saved_message, mode=turn.mode)
         turn.worker = threading.Thread(

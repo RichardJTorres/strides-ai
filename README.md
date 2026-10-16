@@ -364,3 +364,40 @@ Run the API as a **single process**. Multiple API workers require shared turn
 coordination, which is outside this implementation.
 
 Frontend admission tests: `npm --prefix web test`.
+
+### Bounded coaching turns
+
+Each chat provider call is limited to 24,000 input tokens and 4,000 output tokens,
+with 12,000 generated tokens (including tool arguments), six generation rounds,
+16 executed tool calls, and at most two transport retries per round. Completed
+memory and calendar writes are retained if a turn stops at a limit; partial text
+and change notifications are returned without another generation call. A stream
+that has already emitted content is not retried.
+
+The coach recalls at most 40 messages as complete exchanges and individually
+represents at most 30 recent activities. Older records become deterministic sport
+aggregates: weekly for the preceding 12 weeks, monthly for up to 24 older months,
+and a coarsened earlier bucket. Source conversations and activities are preserved.
+Context is selected in order: mandatory instructions and current submission,
+profile, memories, calendar, recent exchanges, recent activities, older summaries.
+Excluded context is labeled. Oversized submissions receive HTTP 413 before chat
+records or uploads are saved; messages and attachments are never shortened.
+
+Set `CHAT_LIMITS` to a JSON object with overrides keyed by `default`, provider
+(`claude`, `gemini`, `openai`, `ollama`), or the exact backend label shown in chat.
+Keys are `input_tokens`, `output_tokens`, `total_output_tokens`, `context_window`,
+`rounds`, `tools`, `retries`, `history_messages`, and `recent_activities`. Overrides
+may lower defaults; input plus reserved output must fit the configured model
+window. For example:
+
+```dotenv
+CHAT_LIMITS={"ollama":{"input_tokens":6000,"output_tokens":2000,"context_window":8192}}
+```
+
+Claude and Gemini use their provider token-count endpoints. Other providers use
+an intentionally conservative UTF-8 byte count plus 10% and framing overhead;
+encoded image payloads are included. Generated output is conservatively charged
+as UTF-8 bytes plus 10%, reconciled upward with reported usage including reasoning
+when available. Structured `chat_budget` logs identify measured versus estimated
+input size, provider/model, retained context counts, rounds, tool executions, and
+stop reason; they do not include prompt or attachment contents.
