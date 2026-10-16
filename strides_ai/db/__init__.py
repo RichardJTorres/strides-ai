@@ -240,9 +240,9 @@ def search_messages(query: str, limit: int = 20, mode: str | None = None) -> lis
 # ── Memories ──────────────────────────────────────────────────────────────────
 
 
-def save_memory(category: str, content: str) -> str:
+def save_memory(category: str, content: str, **metadata) -> str:
     with _session() as s:
-        return _mem.save(s, category, content)
+        return _mem.save(s, category, content, **metadata)
 
 
 def get_all_memories() -> list[dict]:

@@ -11,6 +11,7 @@ from sqlmodel import Session
 from ...analysis import RateLimitError
 from ...db import activities as crud
 from ...db import get_all_memories, get_profile_fields
+from ...memory_context import memories_section
 from ...db.engine import get_session
 from ...profile import profile_to_text
 from ...sources import get_source_for_activity
@@ -95,10 +96,9 @@ async def deep_dive(
     if profile_text:
         system_prompt += f"\n\n{profile_text}"
 
-    memories = get_all_memories()
-    if memories:
-        mem_lines = "\n".join(f"  [{m['category']}] {m['content']}" for m in memories)
-        system_prompt += f"\n\n## Coaching Notes (remembered from previous sessions)\n{mem_lines}"
+    context = memories_section(get_all_memories())
+    if context:
+        system_prompt += f"\n\n{context}"
 
     def _run_llm():
         return backend.stateless_turn(system_prompt, user_content, on_token=lambda _: None)

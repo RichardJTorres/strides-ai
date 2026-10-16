@@ -6,6 +6,11 @@ interface Memory {
   category: string;
   content: string;
   created_at: string;
+  status: "current" | "temporary" | "superseded";
+  topic: string | null;
+  effective_from: string | null;
+  effective_until: string | null;
+  applicable: boolean;
 }
 
 interface FlaggedMemory extends Memory {
@@ -42,6 +47,12 @@ export default function Memories({ theme }: Props) {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editCategory, setEditCategory] = useState("");
   const [editContent, setEditContent] = useState("");
+  const [editStatus, setEditStatus] = useState<Memory["status"]>("current");
+  const [editTopic, setEditTopic] = useState("");
+  const [editFrom, setEditFrom] = useState("");
+  const [editUntil, setEditUntil] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
@@ -64,6 +75,11 @@ export default function Memories({ theme }: Props) {
     setEditingId(memory.id);
     setEditCategory(memory.category);
     setEditContent(memory.content);
+    setEditStatus(memory.status);
+    setEditTopic(memory.topic ?? "");
+    setEditFrom(memory.effective_from ?? "");
+    setEditUntil(memory.effective_until ?? "");
+    setError(null);
   }
 
   function cancelEdit() {
@@ -74,19 +90,24 @@ export default function Memories({ theme }: Props) {
 
   async function saveEdit(id: number) {
     if (!editContent.trim()) return;
+    setError(null);
     setSaving(true);
     try {
       const res = await fetch(`/api/memories/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ category: editCategory, content: editContent.trim() }),
+        body: JSON.stringify({ category: editCategory, content: editContent.trim(),
+          status: editStatus, topic: editTopic.trim() || null,
+          effective_from: editFrom || null, effective_until: editUntil || null }),
       });
       if (!res.ok) throw new Error();
-      const updated: Memory = await res.json();
-      setMemories((prev) => prev.map((m) => (m.id === id ? updated : m)));
+      await res.json();
+      const refreshed = await fetch("/api/memories");
+      if (!refreshed.ok) throw new Error();
+      setMemories(await refreshed.json());
       setEditingId(null);
     } catch {
-      // leave edit open on error
+      setError("Could not save. Check the date range and ensure the content is unique.");
     } finally {
       setSaving(false);
     }
@@ -133,26 +154,35 @@ export default function Memories({ theme }: Props) {
     });
   }
 
-  async function deleteSelected() {
+  async function archiveSelected() {
     if (selected.size === 0) return;
     setDeleting(true);
     try {
-      await Promise.all(
-        [...selected].map((id) => fetch(`/api/memories/${id}`, { method: "DELETE" }))
+      const results = await Promise.all(
+        [...selected].map(async (id) => {
+          const memory = memories.find((m) => m.id === id)!;
+          const res = await fetch(`/api/memories/${id}`, {
+            method: "PUT", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ category: memory.category, content: memory.content, status: "superseded" }),
+          });
+          return res.ok;
+        })
       );
-      const removed = selected;
-      setMemories((prev) => prev.filter((m) => !removed.has(m.id)));
+      const refreshed = await fetch("/api/memories");
+      if (!refreshed.ok) throw new Error();
+      setMemories(await refreshed.json());
+      if (results.some((ok) => !ok)) throw new Error();
       setFlagged(null);
       setSelected(new Set());
     } catch {
-      // no-op
+      setReviewError("Some memories could not be archived. Please review and try again.");
     } finally {
       setDeleting(false);
     }
   }
 
   const grouped = CATEGORIES.reduce<Record<string, Memory[]>>((acc, cat) => {
-    acc[cat] = memories.filter((m) => m.category === cat);
+    acc[cat] = memories.filter((m) => m.category === cat && (showHistory || m.status !== "superseded"));
     return acc;
   }, {} as Record<string, Memory[]>);
 
@@ -189,8 +219,13 @@ export default function Memories({ theme }: Props) {
         </div>
         <p className="text-sm text-gray-500 mb-8">
           Facts your coach has remembered from previous conversations. You can edit or delete any
-          memory.
+          memory. Temporary facts override standing facts with the same topic during their date range.
         </p>
+        <label className="flex gap-2 text-sm text-gray-400 mb-4">
+          <input type="checkbox" checked={showHistory} onChange={(e) => setShowHistory(e.target.checked)} />
+          Show superseded memories
+        </label>
+        {error && <p role="alert" className="text-red-400 text-sm mb-4">{error}</p>}
 
         {/* Review results panel */}
         {reviewError && (
@@ -210,7 +245,7 @@ export default function Memories({ theme }: Props) {
                 </p>
                 {flagged.length > 0 && (
                   <p className="text-xs text-gray-500 mt-0.5">
-                    Uncheck any you'd like to keep, then delete the rest.
+                    Uncheck any you'd like to keep, then archive the rest as superseded.
                   </p>
                 )}
               </div>
@@ -249,11 +284,11 @@ export default function Memories({ theme }: Props) {
                 </ul>
                 <div className="px-4 py-3 border-t border-gray-800 flex items-center gap-3">
                   <button
-                    onClick={deleteSelected}
+                    onClick={archiveSelected}
                     disabled={selected.size === 0 || deleting}
                     className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-600 hover:bg-red-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {deleting ? "Deleting…" : `Delete ${selected.size} selected`}
+                    {deleting ? "Archiving…" : `Archive ${selected.size} selected`}
                   </button>
                   <button
                     onClick={() => { setFlagged(null); setSelected(new Set()); }}
@@ -313,6 +348,23 @@ export default function Memories({ theme }: Props) {
                             </option>
                           ))}
                         </select>
+                        <div className="grid grid-cols-2 gap-2 mb-2 text-xs text-gray-400">
+                          <label>State
+                            <select aria-label="Memory state" value={editStatus} disabled={saving} onChange={(e) => setEditStatus(e.target.value as Memory["status"])} className="block w-full bg-gray-800 rounded p-2 mt-1">
+                              <option value="current">Current</option><option value="temporary">Temporary</option><option value="superseded">Superseded</option>
+                            </select>
+                          </label>
+                          <label>Topic
+                            <input value={editTopic} disabled={saving} onChange={(e) => setEditTopic(e.target.value)} maxLength={100} placeholder="e.g. running_intensity" className="block w-full bg-gray-800 rounded p-2 mt-1" />
+                          </label>
+                          <label>Effective from
+                            <input type="date" value={editFrom} disabled={saving} onChange={(e) => setEditFrom(e.target.value)} className="block w-full bg-gray-800 rounded p-2 mt-1" />
+                          </label>
+                          <label>Effective through (optional)
+                            <input type="date" value={editUntil} min={editFrom || undefined} disabled={saving} onChange={(e) => setEditUntil(e.target.value)} className="block w-full bg-gray-800 rounded p-2 mt-1" />
+                          </label>
+                        </div>
+                        <p className="text-xs text-gray-500 mb-2">Only replacement facts should share a topic. Leave the end date blank if unknown.</p>
                         <textarea
                           value={editContent}
                           onChange={(e) => setEditContent(e.target.value)}
@@ -351,10 +403,18 @@ export default function Memories({ theme }: Props) {
                         >
                           {CATEGORY_LABELS[memory.category]}
                         </span>
-                        <p className="flex-1 text-sm text-gray-300 leading-relaxed">
-                          {memory.content}
-                        </p>
-                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs text-gray-400 mb-1">
+                            {memory.status} · {memory.applicable ? "In use" : "Not currently in use"}
+                            {memory.topic && ` · ${memory.topic}`}
+                          </p>
+                          <p className="text-xs text-gray-500 mb-1">
+                            {memory.effective_from ? `From ${memory.effective_from}` : "Start date unspecified"}
+                            {memory.effective_until ? ` through ${memory.effective_until}` : " · No end date"}
+                          </p>
+                          <p className="text-sm text-gray-300 leading-relaxed">{memory.content}</p>
+                        </div>
+                        <div className="flex gap-1 md:opacity-0 md:group-hover:opacity-100 focus-within:opacity-100 transition-opacity shrink-0">
                           <button
                             onClick={() => startEdit(memory)}
                             title="Edit"

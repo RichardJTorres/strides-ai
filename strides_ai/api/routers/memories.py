@@ -4,10 +4,13 @@ import json
 import re
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import Field, ValidationError
 from sqlmodel import Session
 
 from ...db import memories as crud
+from ...memory_context import MemoryTiming, resolve_memories
+from datetime import date
+from sqlalchemy.exc import IntegrityError
 from ...db.engine import get_session
 from ..deps import get_backend
 
@@ -32,8 +35,15 @@ Be conservative — when in doubt, leave a memory in."""
 
 
 def _build_review_prompt(memories: list[dict]) -> str:
-    lines = [f'  id={m["id"]}  [{m["category"]}]  {m["content"]}' for m in memories]
-    return "Here are the athlete's current memories:\n\n" + "\n".join(lines)
+    lines = [
+        f'  id={m["id"]}  [{m["category"]}; {m.get("status", "current")}; from={m.get("effective_from")}; until={m.get("effective_until")}]  {m["content"]}'
+        for m in memories
+    ]
+    return (
+        f"Today is {date.today().isoformat()}. Profile and memory facts may conflict. "
+        + "Review dates and states; recommend archiving stale facts rather than deleting history.\n"
+        + "\n".join(lines)
+    )
 
 
 def _parse_review_json(text: str) -> list[dict]:
@@ -43,14 +53,16 @@ def _parse_review_json(text: str) -> list[dict]:
     return json.loads(text)
 
 
-class MemoryUpdate(BaseModel):
+class MemoryUpdate(MemoryTiming):
     category: str
-    content: str
+    content: str = Field(min_length=1)
 
 
 @router.get("/memories")
 def get_memories(session: Session = Depends(get_session)):
-    return [r.model_dump() for r in crud.get_all(session)]
+    memories = [r.model_dump() for r in crud.get_all(session)]
+    active_ids = {m["id"] for m in resolve_memories(memories)}
+    return [{**m, "applicable": m["id"] in active_ids} for m in memories]
 
 
 @router.post("/memories/review")
@@ -59,7 +71,7 @@ def review_memories(session: Session = Depends(get_session), backend=Depends(get
     if not memories:
         return []
 
-    memory_dicts = [m.model_dump() for m in memories]
+    memory_dicts = [m.model_dump() for m in memories if m.status != "superseded"]
     prompt = _build_review_prompt(memory_dicts)
 
     try:
@@ -83,10 +95,21 @@ def review_memories(session: Session = Depends(get_session), backend=Depends(get
 def update_memory(memory_id: int, body: MemoryUpdate, session: Session = Depends(get_session)):
     if body.category not in VALID_CATEGORIES:
         raise HTTPException(status_code=422, detail=f"Invalid category: {body.category}")
-    memory = crud.update(session, memory_id, body.category, body.content.strip())
+    if not body.content.strip():
+        raise HTTPException(status_code=422, detail="Memory content cannot be empty")
+    metadata = body.model_dump(mode="json", exclude={"category", "content"}, exclude_unset=True)
+    try:
+        memory = crud.update(session, memory_id, body.category, body.content.strip(), **metadata)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="A memory with this content already exists")
     if memory is None:
         raise HTTPException(status_code=404, detail="Memory not found")
-    return memory.model_dump()
+    memories = [m.model_dump() for m in crud.get_all(session)]
+    active_ids = {m["id"] for m in resolve_memories(memories)}
+    return {**memory.model_dump(), "applicable": memory.id in active_ids}
 
 
 @router.delete("/memories/{memory_id}", status_code=204)

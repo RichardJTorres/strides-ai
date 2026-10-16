@@ -401,3 +401,24 @@ as UTF-8 bytes plus 10%, reconciled upward with reported usage including reasoni
 when available. Structured `chat_budget` logs identify measured versus estimated
 input size, provider/model, retained context counts, rounds, tool executions, and
 stop reason; they do not include prompt or attachment contents.
+
+## Dated goals and preferences
+
+In **Memories**, edit a fact's state (**Current**, **Temporary**, or **Superseded**),
+its effective start date, and optional inclusive end date. New facts saved by the
+coach default to today's start date; existing memories keep their unspecified dates.
+
+Use the same **topic** for facts that replace one another, such as `running_intensity`.
+Within a topic, the most recent effective start wins; a temporary fact wins a tie.
+After a temporary fact expires, the applicable standing fact resumes. Leave the end
+date blank when the duration is unknown. Unrelated facts should have different topics
+or no topic. Superseded facts stay available under **Show superseded memories** and
+are excluded from coaching context.
+
+Chat and fresh activity analyses use currently applicable facts. Training plan
+generation resolves facts across the requested block, respecting future starts and
+mid-block expirations. Applicable dated context takes precedence over conflicting
+older profile goals and recalled conversations. Existing free-text facts are not
+automatically classified or dated; use **Review for staleness** to find candidates
+and archive selected facts, or edit their dates and topics directly. Previously
+cached activity analyses require regeneration to reflect changed context.

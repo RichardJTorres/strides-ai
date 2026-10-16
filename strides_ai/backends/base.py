@@ -13,6 +13,34 @@ SAVE_MEMORY_DESCRIPTION = (
     "or any coaching context that should be remembered in future sessions."
 )
 
+SAVE_MEMORY_TIMING_PROPERTIES = {
+    "status": {"type": "string", "enum": ["current", "temporary", "superseded"]},
+    "topic": {
+        "type": "string",
+        "description": "Stable specific topic, e.g. primary_goal or running_intensity. Reuse an existing topic only for replacement facts.",
+    },
+    "effective_from": {
+        "type": "string",
+        "description": "Inclusive start date YYYY-MM-DD. Use today's date for a new current preference, unless athlete specifies otherwise.",
+    },
+    "effective_until": {
+        "type": "string",
+        "description": "Inclusive end date YYYY-MM-DD; omit if unknown. Never invent an expiry.",
+    },
+    "memory_id": {
+        "type": "integer",
+        "description": "Existing memory ID to revise or mark superseded; omit to create a new fact.",
+    },
+}
+SAVE_MEMORY_DESCRIPTION += (
+    " Use status=current for standing facts, temporary for temporary changes, superseded for "
+    "explicitly replaced facts. Set effective dates from the athlete's statements. Omit unknown "
+    "end dates. Use specific shared topics to connect replacements: active temporary facts "
+    "override standing facts on that topic, and the standing fact resumes after expiry. "
+    "When a legacy fact has no topic, revise it using memory_id to assign the same topic before "
+    "saving its replacement. Never group unrelated races or goals into a single topic. "
+    "Never infer a past fact's effective date from its save timestamp."
+)
 
 SAVE_MEMORY_CATEGORIES: list[str] = ["goal", "race", "injury", "preference", "training", "other"]
 
@@ -323,7 +351,8 @@ class BaseBackend(ABC):
         self._budget.tool(args)
         category = args.get("category", "other")
         content = args.get("content", "")
-        result = db.save_memory(category, content)
+        metadata = {k: args[k] for k in SAVE_MEMORY_TIMING_PROPERTIES if k in args}
+        result = db.save_memory(category, content, **metadata)
         if not result.startswith("Error:"):
             self._budget.memories.append((category, content))
         return result, category, content

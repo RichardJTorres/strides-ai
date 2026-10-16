@@ -10,6 +10,7 @@ from ..budget import BudgetExceeded
 
 from .base import (
     SAVE_MEMORY_CATEGORIES,
+    SAVE_MEMORY_TIMING_PROPERTIES,
     SAVE_MEMORY_DESCRIPTION,
     UPDATE_TRAINING_PLAN_DESCRIPTION,
     BaseBackend,
@@ -28,6 +29,18 @@ SAVE_MEMORY_TOOL = types.Tool(
             parameters=types.Schema(
                 type=types.Type.OBJECT,
                 properties={
+                    **{
+                        key: types.Schema(
+                            type=(
+                                types.Type.INTEGER
+                                if value["type"] == "integer"
+                                else types.Type.STRING
+                            ),
+                            description=value.get("description"),
+                            enum=value.get("enum"),
+                        )
+                        for key, value in SAVE_MEMORY_TIMING_PROPERTIES.items()
+                    },
                     "category": types.Schema(
                         type=types.Type.STRING,
                         enum=SAVE_MEMORY_CATEGORIES,

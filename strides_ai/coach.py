@@ -4,6 +4,7 @@ import sqlite3
 from datetime import datetime, timedelta
 
 from . import compliance, db
+from .memory_context import memories_section
 from .modes import MODES
 
 RECALL_MESSAGES = 40
@@ -81,10 +82,7 @@ def _datetime_section() -> str:
 
 
 def _memories_section(memories: list[dict]) -> str:
-    if not memories:
-        return ""
-    lines = [f"  [{m['category']}] {m['content']}" for m in memories]
-    return "## Coaching Notes (remembered from previous sessions)\n" + "\n".join(lines)
+    return memories_section(memories)
 
 
 def _compliance_section(activities: list[dict]) -> str:
