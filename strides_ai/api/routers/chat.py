@@ -2,7 +2,6 @@
 
 import asyncio
 import base64
-import json
 import queue
 import threading
 from pathlib import Path
@@ -16,12 +15,11 @@ from sqlmodel import Session
 from ...coach import build_system
 from ...config import MAX_FILE_BYTES, SUPPORTED_IMAGE_TYPES, UPLOADS_DIR
 from ...db import activities as act_crud
-from ...db import conversations as conv_crud
 from ...db import memories as mem_crud
 from ...db import profiles as prof_crud
-from ...db.engine import get_engine, get_session
+from ...db.engine import get_session
 from ...profile import profile_to_text
-from ..deps import get_backend
+from ..conversations import ConversationCoordinator
 
 router = APIRouter()
 
@@ -79,57 +77,6 @@ def _build_chat_system(session: Session, mode: str) -> str:
     )
 
 
-def _run_turn(
-    backend,
-    system: str,
-    message: str,
-    llm_blocks: list[dict] | None,
-    mode: str,
-    token_queue: "queue.Queue[str | None]",
-    cancel_event: threading.Event,
-) -> None:
-    """Background thread: run the LLM turn and put results into token_queue."""
-    # Needs its own session — the request-scoped session is not safe to share across threads.
-    with Session(get_engine()) as thread_session:
-        try:
-            response_text, memories_saved, plan_changes = backend.stream_turn(
-                system,
-                message,
-                lambda chunk: _on_token(chunk, token_queue, cancel_event),
-                attachments=llm_blocks,
-            )
-            token_queue.put(f"[MODEL]{backend.label}")
-            if memories_saved:
-                token_queue.put(
-                    "[MEMORIES]"
-                    + json.dumps([{"category": c, "content": t} for c, t in memories_saved])
-                )
-            if plan_changes:
-                token_queue.put("[PLAN_UPDATED]" + json.dumps(plan_changes))
-            conv_crud.save(
-                thread_session, "assistant", response_text, mode=mode, model=backend.label
-            )
-        except InterruptedError:
-            conv_crud.save(
-                thread_session,
-                "assistant",
-                "_Chat interrupted — resend your message to generate a full response._",
-                mode=mode,
-            )
-        except Exception as exc:
-            token_queue.put(f"[ERROR]{exc}")
-        finally:
-            token_queue.put(None)  # sentinel
-
-
-def _on_token(
-    chunk: str, token_queue: "queue.Queue[str | None]", cancel_event: threading.Event
-) -> None:
-    if cancel_event.is_set():
-        raise InterruptedError("client disconnected")
-    token_queue.put(chunk)
-
-
 async def _sse_event_stream(
     token_queue: "queue.Queue[str | None]",
     cancel_event: threading.Event,
@@ -160,33 +107,28 @@ async def chat(
     mode: str = Form("running"),
     files: list[UploadFile] = File(default=[]),
     session: Session = Depends(get_session),
-    backend=Depends(get_backend),
 ) -> StreamingResponse:
-    llm_blocks, db_parts = [], []
-    for file in files:
-        if not file.filename:
-            continue
-        block, display = await _process_attachment(file)
-        llm_blocks.append(block)
-        db_parts.append(display)
+    coordinator: ConversationCoordinator = request.app.state.conversations
+    turn = coordinator.acquire(mode)
+    try:
+        llm_blocks, db_parts = [], []
+        for file in files:
+            if not file.filename:
+                continue
+            block, display = await _process_attachment(file)
+            llm_blocks.append(block)
+            db_parts.append(display)
 
-    saved_message = message
-    if db_parts:
-        saved_message += "\n\n" + "\n".join(db_parts)
-
-    system = _build_chat_system(session, mode)
-    conv_crud.save(session, "user", saved_message, mode=mode)
-
-    token_queue: queue.Queue[str | None] = queue.Queue()
-    cancel_event = threading.Event()
-
-    threading.Thread(
-        target=_run_turn,
-        args=(backend, system, message, llm_blocks or None, mode, token_queue, cancel_event),
-        daemon=True,
-    ).start()
+        saved_message = message
+        if db_parts:
+            saved_message += "\n\n" + "\n".join(db_parts)
+        system = _build_chat_system(session, mode)
+        coordinator.start(turn, system, message, saved_message, llm_blocks or None)
+    except BaseException:
+        coordinator.release(turn)
+        raise
 
     return StreamingResponse(
-        _sse_event_stream(token_queue, cancel_event, request),
+        _sse_event_stream(turn.tokens, turn.cancel, request),
         media_type="text/event-stream",
     )

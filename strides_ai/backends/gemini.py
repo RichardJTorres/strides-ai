@@ -167,6 +167,7 @@ class GeminiBackend(BaseBackend):
         first_turn = True
 
         while True:
+            self._check_cancelled()
             collected_text = ""
             fc_parts: list[types.Part] = []
 
@@ -179,6 +180,7 @@ class GeminiBackend(BaseBackend):
                             contents=self._history,
                             config=config,
                         ):
+                            self._check_cancelled()
                             if chunk.text:
                                 on_token(chunk.text)
                                 collected_text += chunk.text

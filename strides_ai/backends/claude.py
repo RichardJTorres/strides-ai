@@ -132,6 +132,7 @@ class ClaudeBackend(BaseBackend):
         plan_changes: list[dict] = []
 
         while True:
+            self._check_cancelled()
             with self._client.messages.stream(
                 model=self._model,
                 max_tokens=8192,
@@ -140,6 +141,7 @@ class ClaudeBackend(BaseBackend):
                 tools=[SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL],
             ) as stream:
                 for chunk in stream.text_stream:
+                    self._check_cancelled()
                     on_token(chunk)
                     response_text += chunk
                 final = stream.get_final_message()

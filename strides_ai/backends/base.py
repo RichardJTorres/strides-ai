@@ -31,8 +31,8 @@ class BaseBackend(ABC):
     """
     A backend wraps one LLM provider and manages its own conversation history.
 
-    Constructed once per session with the initial history (training-log seed +
-    prior messages from DB).  Each call to stream_turn adds one user/assistant
+    Constructed per accepted chat turn with private initial history (training-log seed +
+    prior messages from DB). Each call to stream_turn adds one user/assistant
     exchange and returns the text the model emitted plus any memories it saved.
     """
 
@@ -75,6 +75,11 @@ class BaseBackend(ABC):
           to prepend before the user's text in the message.
         """
 
+    def _check_cancelled(self):
+        event = getattr(self, "cancel_event", None)
+        if event is not None and event.is_set():
+            raise InterruptedError("client disconnected")
+
     def _execute_save_memory(self, args: dict) -> tuple[str, str, str]:
         """
         Persist a save_memory tool call to the DB.
@@ -83,6 +88,7 @@ class BaseBackend(ABC):
         and returns (db_result, category, content) so the caller can append to history
         and record the memory in the turn's memories_saved list.
         """
+        self._check_cancelled()
         category = args.get("category", "other")
         content = args.get("content", "")
         result = db.save_memory(category, content)
@@ -96,6 +102,7 @@ class BaseBackend(ABC):
         tool args, and returns (summary_string, changes) so the caller can append
         summary_string as the tool_result and record changes in plan_changes.
         """
+        self._check_cancelled()
         changes: list[dict] = []
         set_summaries: list[str] = []
         for workout in args.get("set", []) or []:
