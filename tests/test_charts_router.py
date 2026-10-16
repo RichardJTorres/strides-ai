@@ -40,8 +40,8 @@ def test_cardio_response_envelope_shape(tmp_db):
 def test_cardio_response_charts_are_ordered_and_typed(tmp_db):
     result = _call(mode="running")
     ids = [c.id for c in result["charts"]]
-    assert ids[0] == "weekly_distance"
-    assert ids[1] == "atl_ctl"
+    assert ids[0] == "atl_ctl"
+    assert ids[1] == "weekly_distance"
     assert all(hasattr(c, "chart_type") for c in result["charts"])
 
 
@@ -51,6 +51,13 @@ def test_hybrid_response_includes_sport_specific_charts(tmp_db):
     assert "run_aerobic_efficiency" in ids
     assert "ride_aerobic_efficiency" in ids
     assert "training_time_allocation" in ids
+    assert "run_climbing_ratio" in ids
+    assert "ride_climbing_ratio" in ids
+
+
+def test_running_and_cycling_responses_include_climbing_ratio(tmp_db):
+    assert "climbing_ratio" in [c.id for c in _call(mode="running")["charts"]]
+    assert "climbing_ratio" in [c.id for c in _call(mode="cycling")["charts"]]
 
 
 def test_lifting_response_shape_is_unchanged(tmp_db):

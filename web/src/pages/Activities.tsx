@@ -49,7 +49,7 @@ interface Props {
 
 type SortKey =
   | "date" | "name" | "distance_m" | "moving_time_s" | "avg_pace_s_per_km" | "avg_hr" | "elevation_gain_m"
-  | "total_volume_kg" | "total_sets";
+  | "elevation_per_mile" | "total_volume_kg" | "total_sets";
 type SortDir = "asc" | "desc";
 
 function formatPace(s: number | null): string {
@@ -553,6 +553,7 @@ export default function Activities({ mode, theme }: Props) {
                     <Th label="Pace/Speed" col="avg_pace_s_per_km" right />
                     <Th label="Avg HR"     col="avg_hr"            right />
                     <Th label="Elev (m)"   col="elevation_gain_m"  right />
+                    <Th label="Climb (ft/mi)" col="elevation_per_mile" right />
                     <th className="px-4 py-2 font-medium whitespace-nowrap text-right"></th>
                   </>
                 ) : isLiftingView ? (
@@ -574,6 +575,7 @@ export default function Activities({ mode, theme }: Props) {
                     <Th label={paceLabel} col="avg_pace_s_per_km" right />
                     <Th label="Avg HR"    col="avg_hr"            right />
                     <Th label="Elev (m)"  col="elevation_gain_m"  right />
+                    <Th label="Climb (ft/mi)" col="elevation_per_mile" right />
                     <th className="px-4 py-2 font-medium whitespace-nowrap text-right"></th>
                   </>
                 )}
@@ -582,7 +584,7 @@ export default function Activities({ mode, theme }: Props) {
             <tbody className="divide-y divide-gray-800">
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={showAllView ? 9 : isLiftingView ? 7 : 8} className="px-4 py-8 text-center text-gray-500">
+                  <td colSpan={showAllView ? 10 : isLiftingView ? 7 : 9} className="px-4 py-8 text-center text-gray-500">
                     No {isLifting ? "sessions" : "activities"} match your filters.
                   </td>
                 </tr>
@@ -642,6 +644,9 @@ export default function Activities({ mode, theme }: Props) {
                         </td>
                         <td className="px-4 py-2 text-right text-gray-400">
                           {a.elevation_gain_m != null ? Math.round(a.elevation_gain_m) : "—"}
+                        </td>
+                        <td className="px-4 py-2 text-right text-gray-400">
+                          {a.elevation_per_mile != null ? Math.round(a.elevation_per_mile) : "—"}
                         </td>
                       </>
                     )}
@@ -799,7 +804,7 @@ export default function Activities({ mode, theme }: Props) {
                     )}
                     {selectedActivity.elevation_per_mile !== null && (
                       <MetricTile
-                        label="Elevation / Mile"
+                        label="Climbing Ratio"
                         value={`${selectedActivity.elevation_per_mile.toFixed(0)} ft/mi`}
                         sub={selectedActivity.high_elevation_flag ? "Hilly course" : "Flat to moderate"}
                         color={selectedActivity.high_elevation_flag ? "yellow" : "default"}

@@ -35,9 +35,10 @@ def is_ride(activity: CardioAnalyticsActivity) -> bool:
 
 
 RUNNING_CHARTS: list[ChartSpec] = [
-    ChartSpec("weekly_distance", cardio.compute_weekly_distance),
     ChartSpec("atl_ctl", cardio.compute_atl_ctl),
+    ChartSpec("weekly_distance", cardio.compute_weekly_distance),
     ChartSpec("aerobic_efficiency", cardio.compute_aerobic_efficiency),
+    ChartSpec("climbing_ratio", cardio.compute_weekly_climbing_ratio),
     ChartSpec("cadence_trend", cardio.compute_cadence_trend),
     ChartSpec("pace_fade_trend", cardio.compute_pace_fade_trend),
     ChartSpec("hr_zone_trend", cardio.compute_hr_zone_trend),
@@ -45,10 +46,11 @@ RUNNING_CHARTS: list[ChartSpec] = [
 ]
 
 CYCLING_CHARTS: list[ChartSpec] = [
-    ChartSpec("weekly_distance", cardio.compute_weekly_distance),
     ChartSpec("atl_ctl", cardio.compute_atl_ctl),
+    ChartSpec("weekly_distance", cardio.compute_weekly_distance),
     ChartSpec("aerobic_efficiency", cardio.compute_aerobic_efficiency),
     ChartSpec("weekly_elevation", cardio.compute_weekly_elevation),
+    ChartSpec("climbing_ratio", cardio.compute_weekly_climbing_ratio),
     ChartSpec("hr_zone_trend", cardio.compute_hr_zone_trend),
     ChartSpec("cardiac_decoupling_trend", cardio.compute_cardiac_decoupling_trend),
 ]
@@ -58,8 +60,8 @@ RUN_SPECIFIC = RUNNING_CHARTS[2:]
 RIDE_SPECIFIC = CYCLING_CHARTS[2:]
 
 HYBRID_CHARTS: list[ChartSpec] = [
-    ChartSpec("weekly_distance", cardio.compute_weekly_distance),  # combined, unfiltered
     ChartSpec("atl_ctl", cardio.compute_atl_ctl),  # combined, unfiltered
+    ChartSpec("weekly_distance", cardio.compute_weekly_distance),  # combined, unfiltered
     *[
         dataclasses.replace(spec, key=f"run_{spec.key}", sport_filter=is_run, sport="run")
         for spec in RUN_SPECIFIC

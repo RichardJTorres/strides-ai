@@ -13,6 +13,7 @@ from strides_ai.analytics.cardio import (
     compute_hr_zone_trend,
     compute_pace_fade_trend,
     compute_training_time_allocation,
+    compute_weekly_climbing_ratio,
     compute_weekly_distance,
     compute_weekly_elevation,
 )
@@ -296,6 +297,82 @@ def test_weekly_elevation_unit_is_meters_for_km():
 def test_weekly_elevation_null_contributes_zero():
     ds = compute_weekly_elevation([make_activity(PAST_MONDAY, elevation_gain_m=None)], "km", TODAY)
     assert ds.data[0].value == 0.0
+
+
+# ── climbing_ratio ───────────────────────────────────────────────────────────────
+
+
+def test_climbing_ratio_empty_is_unavailable():
+    ds = compute_weekly_climbing_ratio([], "km", TODAY)
+    assert ds.available is False
+    assert ds.unavailable_reason == UnavailableReason.NO_ACTIVITIES
+    assert ds.chart_type == "weekly_bar"
+
+
+def test_climbing_ratio_basic_math_km():
+    ds = compute_weekly_climbing_ratio(
+        [make_activity(PAST_MONDAY, elevation_gain_m=100.0, distance_m=10_000)], "km", TODAY
+    )
+    week = next(p for p in ds.data if p.week == PAST_MONDAY.isoformat())
+    assert ds.unit == "m/km"
+    assert week.value == pytest.approx(10.0)  # 100m gain / 10km
+
+
+def test_climbing_ratio_basic_math_miles():
+    ds = compute_weekly_climbing_ratio(
+        [make_activity(PAST_MONDAY, elevation_gain_m=100.0, distance_m=10_000)], "miles", TODAY
+    )
+    week = next(p for p in ds.data if p.week == PAST_MONDAY.isoformat())
+    assert ds.unit == "ft/mi"
+    # 100m -> 328.084 ft; 10_000m -> 6.21371 mi
+    assert week.value == pytest.approx(328.084 / 6.21371, rel=1e-3)
+
+
+def test_climbing_ratio_sums_across_week_before_dividing():
+    """Weekly ratio must be sum(elevation)/sum(distance), not a mean of per-activity ratios —
+    a short hilly activity must not dominate a week also containing a long, flatter one."""
+    acts = [
+        make_activity(PAST_MONDAY, elevation_gain_m=100.0, distance_m=100),  # tiny, huge ratio
+        make_activity(PAST_TUESDAY, elevation_gain_m=100.0, distance_m=10_000),
+    ]
+    ds = compute_weekly_climbing_ratio(acts, "km", TODAY)
+    week = next(p for p in ds.data if p.week == PAST_MONDAY.isoformat())
+    expected = (100.0 + 100.0) / (0.1 + 10.0)  # sum elevation (m) / sum distance (km)
+    assert week.value == pytest.approx(expected, rel=1e-3)
+
+
+def test_climbing_ratio_zero_distance_week_is_zero_not_error():
+    ds = compute_weekly_climbing_ratio(
+        [make_activity(PAST_MONDAY, elevation_gain_m=100.0, distance_m=0)], "km", TODAY
+    )
+    week = next(p for p in ds.data if p.week == PAST_MONDAY.isoformat())
+    assert week.value == 0.0
+
+
+def test_climbing_ratio_null_elevation_or_distance_contributes_zero():
+    ds = compute_weekly_climbing_ratio(
+        [make_activity(PAST_MONDAY, elevation_gain_m=None, distance_m=10_000)], "km", TODAY
+    )
+    week = next(p for p in ds.data if p.week == PAST_MONDAY.isoformat())
+    assert week.value == 0.0
+
+
+def test_climbing_ratio_rolling_avg_is_weighted_by_distance():
+    """Same correctness property as the aggregation-level helper, verified end-to-end: a
+    near-zero-distance week's inflated per-week ratio must not dominate the rolling average
+    as much as a naive mean of weekly ratios would."""
+    acts = [
+        # week 1: 100m gain over 0.01km (distance_m=10) -> weekly ratio 100/0.01 = 10,000
+        make_activity(PAST_MONDAY, elevation_gain_m=100.0, distance_m=10),
+        # week 2: 100m gain over 10km (distance_m=10_000) -> weekly ratio 100/10 = 10
+        make_activity(PAST_NEXT_MONDAY, elevation_gain_m=100.0, distance_m=10_000),
+    ]
+    ds = compute_weekly_climbing_ratio(acts, "km", TODAY)
+    last_week = next(p for p in ds.data if p.week == PAST_NEXT_MONDAY.isoformat())
+    naive_mean_of_ratios = (10_000.0 + 10.0) / 2  # what the wrong approach would give: 5,005
+    weighted = (100.0 + 100.0) / (0.01 + 10.0)  # sum(elevation)/sum(distance): ~19.98
+    assert last_week.rolling_avg == pytest.approx(round(weighted, 1), abs=0.05)
+    assert abs(last_week.rolling_avg - naive_mean_of_ratios) > 100.0
 
 
 # ── training_time_allocation ─────────────────────────────────────────────────────

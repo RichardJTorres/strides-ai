@@ -19,6 +19,7 @@ from .aggregation import (
     to_hours,
     to_pace_unit,
     trailing_date_rolling_avg,
+    trailing_weekly_ratio_rolling_avg,
     trailing_weekly_rolling_avg,
     week_range,
 )
@@ -435,6 +436,62 @@ def compute_weekly_elevation(
         WeeklyBarPoint(
             week=w.isoformat(),
             value=round(weekly.get(w, 0.0), 1),
+            rolling_avg=round(rolling[w], 1),
+            is_current=(w == current_week),
+        )
+        for w in weeks
+    ]
+    return WeeklyBarDataset(
+        **base,
+        available=True,
+        qualifying_count=len(activities),
+        total_count=len(activities),
+        data=data,
+    )
+
+
+# ── Weekly climbing ratio (new): elevation gain per unit distance ──────────────
+
+
+def compute_weekly_climbing_ratio(
+    activities: list[CardioAnalyticsActivity], unit: str, today: date
+) -> WeeklyBarDataset:
+    weekly_elev: dict[date, float] = defaultdict(float)
+    weekly_dist: dict[date, float] = defaultdict(float)
+    for a in activities:
+        week = monday_of(a.date)
+        weekly_elev[week] += to_elevation_unit(a.elevation_gain_m, unit)
+        weekly_dist[week] += to_distance_unit(a.distance_m, unit)
+
+    base = dict(
+        id="climbing_ratio",
+        metric_key="climbing_ratio",
+        title="Climbing Ratio",
+        unit=f"{_elevation_unit_label(unit)}/{_unit_label(unit)}",
+    )
+    if not weekly_dist:
+        return WeeklyBarDataset(
+            **base,
+            available=False,
+            unavailable_reason=UnavailableReason.NO_ACTIVITIES,
+            qualifying_count=0,
+            total_count=0,
+            data=[],
+        )
+
+    current_week = monday_of(today)
+    weeks = week_range(min(weekly_dist), current_week)
+    weekly_ratio = {
+        w: (weekly_elev.get(w, 0.0) / weekly_dist[w]) if weekly_dist.get(w, 0.0) > 0 else 0.0
+        for w in weeks
+    }
+    rolling = trailing_weekly_ratio_rolling_avg(
+        weeks, weekly_elev, weekly_dist, WEEKLY_ROLLING_WINDOW
+    )
+    data = [
+        WeeklyBarPoint(
+            week=w.isoformat(),
+            value=round(weekly_ratio[w], 1),
             rolling_avg=round(rolling[w], 1),
             is_current=(w == current_week),
         )

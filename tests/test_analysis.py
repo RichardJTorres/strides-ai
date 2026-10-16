@@ -232,43 +232,46 @@ def test_effort_efficiency_raw_negative_hr():
 
 
 def test_elevation_metrics_flat():
-    altitude = [100.0] * 100
-    per_mile, flag = _elevation_metrics(altitude, distance_m=10000)
+    # genuinely flat (elevation_gain_m=0) must be distinguished from "no data" (None)
+    per_mile, flag = _elevation_metrics(elevation_gain_m=0.0, distance_m=10000)
     assert per_mile == pytest.approx(0.0)
     assert flag == 0
 
 
 def test_elevation_metrics_hilly():
-    # 200m gain over 10km ≈ 6.2 miles → ~200*3.28/6.2 ≈ 105 ft/mile
-    altitude = [float(i) for i in range(100)] + [100.0] * 100  # 99m gain
-    altitude_hilly = [0.0, 200.0, 200.0, 0.0, 200.0, 200.0]  # 400m gain
-    per_mile, flag = _elevation_metrics(altitude_hilly, distance_m=3218)  # 2 miles
-    assert per_mile is not None
-    assert flag in (0, 1)
+    # 400m gain over exactly 2 miles (3218.68m) -> 400*3.28084/2 = 656.17 ft/mile
+    per_mile, flag = _elevation_metrics(elevation_gain_m=400.0, distance_m=3218.68)
+    assert per_mile == pytest.approx(656.17, abs=0.1)
+    assert flag == 1
 
 
 def test_elevation_metrics_high_elevation_flag():
-    # 200m (656 ft) gain over 1 mile (1609m) = 656 ft/mile → flag
-    altitude = [0.0, 200.0]
-    per_mile, flag = _elevation_metrics(altitude, distance_m=1609.34)
+    # 200m (656 ft) gain over 1 mile (1609.34m) = 656 ft/mile -> flag
+    per_mile, flag = _elevation_metrics(elevation_gain_m=200.0, distance_m=1609.34)
     assert per_mile is not None
     assert per_mile > 100
     assert flag == 1
 
 
 def test_elevation_metrics_low_elevation_no_flag():
-    # 30m (98 ft) gain over 1 mile → no flag
-    altitude = [0.0, 30.0]
-    per_mile, flag = _elevation_metrics(altitude, distance_m=1609.34)
+    # 30m (98 ft) gain over 1 mile -> no flag
+    per_mile, flag = _elevation_metrics(elevation_gain_m=30.0, distance_m=1609.34)
     assert flag == 0
 
 
-def test_elevation_metrics_no_altitude_returns_none():
-    assert _elevation_metrics([], distance_m=10000) == (None, None)
+def test_elevation_metrics_no_gain_returns_none():
+    assert _elevation_metrics(None, distance_m=10000) == (None, None)
+
+
+def test_elevation_metrics_zero_gain_is_not_none():
+    """0.0 (genuinely flat) must not be conflated with None (missing data) via a falsy check."""
+    per_mile, flag = _elevation_metrics(0.0, distance_m=10000)
+    assert per_mile == 0.0
+    assert flag == 0
 
 
 def test_elevation_metrics_zero_distance_returns_none():
-    assert _elevation_metrics([100.0, 110.0], distance_m=0) == (None, None)
+    assert _elevation_metrics(100.0, distance_m=0) == (None, None)
 
 
 # ── _suffer_mismatch ──────────────────────────────────────────────────────────
@@ -430,7 +433,6 @@ def test_compute_metrics_full_streams():
         "heartrate": [150] * 300 + [165] * 300,
         "velocity_smooth": [3.0] * 600,
         "cadence": [90.0] * 600,
-        "altitude": [100.0] * 600,
     }
     activity = {
         "id": 1,
@@ -439,6 +441,7 @@ def test_compute_metrics_full_streams():
         "avg_pace_s_per_km": 360.0,
         "avg_hr": 157.0,
         "suffer_score": 40,
+        "elevation_gain_m": 50.0,
     }
     metrics = compute_metrics(streams, activity, max_hr=190)
     assert "cardiac_decoupling_pct" in metrics
@@ -447,8 +450,28 @@ def test_compute_metrics_full_streams():
     assert "avg_cadence" in metrics  # maps to existing DB column
     assert "cadence_std_dev" in metrics
     assert "effort_efficiency_raw" in metrics
-    assert "elevation_per_mile" in metrics
+    # computed from the activity summary field, not a stream -- no altitude stream needed
+    assert metrics["elevation_per_mile"] is not None
     assert "high_elevation_flag" in metrics
+
+
+def test_compute_metrics_elevation_does_not_need_altitude_stream():
+    """The elevation ratio must come from activity['elevation_gain_m'], not a stream — this is
+    the whole point of the fix: it must not depend on Strava's altitude stream being ready yet."""
+    streams = {
+        "time": list(range(0, 300)),
+        "heartrate": [150] * 300,
+        "velocity_smooth": [3.0] * 300,
+    }
+    activity = {
+        "id": 2,
+        "sport_type": "Ride",
+        "distance_m": 1609.34,  # 1 mile
+        "elevation_gain_m": 200.0,  # 656 ft -> 656 ft/mile
+    }
+    metrics = compute_metrics(streams, activity, max_hr=190)
+    assert metrics["elevation_per_mile"] == pytest.approx(656.17, abs=0.1)
+    assert metrics["high_elevation_flag"] == 1
 
 
 def test_compute_metrics_missing_hr():

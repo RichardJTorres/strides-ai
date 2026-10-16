@@ -37,6 +37,7 @@ def test_running_excludes_elevation_and_allocation():
     assert "weekly_elevation" not in keys
     assert "training_time_allocation" not in keys
     assert "cadence_trend" in keys
+    assert "climbing_ratio" in keys
 
 
 def test_cycling_excludes_cadence_and_pace_fade():
@@ -44,17 +45,20 @@ def test_cycling_excludes_cadence_and_pace_fade():
     assert "cadence_trend" not in keys
     assert "pace_fade_trend" not in keys
     assert "weekly_elevation" in keys
+    assert "climbing_ratio" in keys
 
 
 def test_hybrid_includes_sport_prefixed_variants_in_order():
     keys = [spec.key for spec in HYBRID_CHARTS]
-    assert keys[0] == "weekly_distance"
-    assert keys[1] == "atl_ctl"
+    assert keys[0] == "atl_ctl"
+    assert keys[1] == "weekly_distance"
     assert keys[-1] == "training_time_allocation"
     assert "run_aerobic_efficiency" in keys
     assert "ride_aerobic_efficiency" in keys
     assert "run_cadence_trend" in keys
     assert "ride_weekly_elevation" in keys
+    assert "run_climbing_ratio" in keys
+    assert "ride_climbing_ratio" in keys
     # cycling-only/running-only metrics must not leak into the wrong sport's hybrid half
     assert "ride_cadence_trend" not in keys
     assert "run_weekly_elevation" not in keys

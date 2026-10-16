@@ -54,6 +54,18 @@ export function renderChartDataset({ dataset, since, until, isAllTime, unit }: R
           barColor="#a78bfa"
         />
       );
+    case "climbing_ratio":
+      if (dataset.chart_type !== "weekly_bar") return null;
+      return (
+        <WeeklyBarMetricCard
+          dataset={dataset}
+          since={since}
+          until={until}
+          isAllTime={isAllTime}
+          valueLabel="Climbing Ratio"
+          barColor="#fb923c"
+        />
+      );
     case "atl_ctl":
       if (dataset.chart_type !== "atl_ctl") return null;
       return <AtlCtlCard dataset={dataset} since={since} until={until} isAllTime={isAllTime} unit={unit} />;

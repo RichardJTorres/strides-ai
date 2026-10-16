@@ -5,6 +5,7 @@ const LOAD_METRIC_KEYS = new Set([
   "weekly_distance",
   "atl_ctl",
   "weekly_elevation",
+  "climbing_ratio",
   "training_time_allocation",
 ]);
 
