@@ -37,7 +37,6 @@ async def _process_attachment(file: UploadFile) -> tuple[dict, str]:
     if content_type in SUPPORTED_IMAGE_TYPES:
         suffix = Path(file.filename or "upload").suffix or ".jpg"
         filename = f"{uuid4()}{suffix}"
-        (UPLOADS_DIR / filename).write_bytes(data)
         llm_block = {
             "type": "image",
             "source": {
@@ -123,7 +122,24 @@ async def chat(
         if db_parts:
             saved_message += "\n\n" + "\n".join(db_parts)
         system = _build_chat_system(session, mode)
-        coordinator.start(turn, system, message, saved_message, llm_blocks or None)
+
+        def persist_attachments():
+            # Called only after context admission, before the turn is saved or started.
+            for block, display in zip(llm_blocks, db_parts):
+                if block.get("type") == "image":
+                    filename = display.rsplit("/uploads/", 1)[1][:-1]
+                    (UPLOADS_DIR / filename).write_bytes(
+                        base64.standard_b64decode(block["source"]["data"])
+                    )
+
+        coordinator.start(
+            turn,
+            system,
+            message,
+            saved_message,
+            llm_blocks or None,
+            on_admitted=persist_attachments,
+        )
     except BaseException:
         coordinator.release(turn)
         raise

@@ -8,7 +8,7 @@ from .modes import MODES
 
 RECALL_MESSAGES = 40
 # Number of most-recent activities always pinned in the system prompt each turn.
-# The full training log is seeded once in conversation history via build_initial_history.
+# Older activities are represented by deterministic aggregates only.
 RECENT_ACTIVITIES_IN_SYSTEM = 30
 # How far ahead planned workouts are surfaced, wide enough to cover a multi-week
 # training block the coach is asked to generate or regenerate.
@@ -199,22 +199,46 @@ def build_system(
 ) -> str:
     cfg = MODES.get(mode, MODES["running"])
     # Pin only the most recent activities every turn (cheap, always survives truncation).
-    # The full training log is seeded once in conversation history via build_initial_history.
+    # Older activities are represented by deterministic aggregates only.
     recent = (activities or [])[:RECENT_ACTIVITIES_IN_SYSTEM]
 
-    sections = [
-        cfg.system_prompt,
-        _voice_section(coach_voice),
-        _datetime_section(),
-        profile,  # already carries its own ## header from profile.py; empty string is filtered out
-        _memories_section(memories),
-        _calendar_prefs_section(),
-        _compliance_section(activities or []),
-        _upcoming_workouts_section(),
-        _analysis_guide_section(cfg, recent),
-        _recent_activities_section(recent, mode),
-    ]
-    return "\n\n".join(s for s in sections if s)
+    from .budget import ContextPrompt
+
+    mandatory = "\n\n".join(
+        [
+            cfg.system_prompt,
+            _datetime_section(),
+            "Older activity details are excluded. Use only included details and labeled aggregates. "
+            "Context sections and periods absent from this request are omitted, not evidence of no training.",
+        ]
+    )
+    sections = [f"## Recent Activities\nACTIVITY {build_training_log([a], mode)}" for a in recent]
+    periods = [(str(a.get("date") or "unknown")[:10],) for a in recent]
+    if not recent:
+        sections.append("## Recent Activities\nNo activities found.")
+        periods.append(())
+    older = (activities or [])[RECENT_ACTIVITIES_IN_SYSTEM:]
+    summary = older_activity_summary(older)
+    if summary:
+        sections.append(summary)
+        dates = [str(a.get("date") or "unknown")[:10] for a in older]
+        periods.append((min(dates), max(dates)))
+    for extra in (_compliance_section(activities or []), _analysis_guide_section(cfg, recent)):
+        if extra:
+            sections.append(extra)
+            periods.append(())
+    return ContextPrompt(
+        mandatory,
+        [
+            profile,
+            _memories_section(memories),
+            _calendar_prefs_section(),
+            _upcoming_workouts_section(),
+            _voice_section(coach_voice),
+        ],
+        sections,
+        periods,
+    )
 
 
 def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
@@ -241,25 +265,65 @@ def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
 def build_initial_history(
     activities: list, prior_messages: list[dict], mode: str = "running"
 ) -> list[dict]:
-    """
-    Seed the backend's conversation history with the full training log (once)
-    followed by any recalled prior messages.
+    """Recall persisted messages without seeding or duplicating activity data."""
+    return [{"role": m["role"], "content": m["content"]} for m in prior_messages[-RECALL_MESSAGES:]]
 
-    The system prompt carries only the most recent RECENT_ACTIVITIES_IN_SYSTEM
-    activities on every turn, so this full-log seed is the only place older
-    history lives. It may be gracefully truncated by small-context models, but
-    only the oldest runs are dropped — recent ones are protected by the system prompt.
-    """
-    training_log = build_training_log(activities, mode)
-    log_message = f"Here is the athlete's complete training log:\n\n```\n{training_log}\n```"
-    return [
-        {"role": "user", "content": log_message},
-        {
-            "role": "assistant",
-            "content": (
-                f"Got it — I have your full training log loaded ({len(activities)} activities). "
-                "What would you like to discuss?"
-            ),
-        },
-        *[{"role": m["role"], "content": m["content"]} for m in prior_messages],
+
+def older_activity_summary(activities: list[dict], today=None) -> str:
+    """Exact disjoint aggregates, bounded to 12 weeks, 24 months and one older bucket per sport."""
+    from collections import defaultdict
+    from datetime import date
+
+    today = today or date.today()
+    week_start = today - timedelta(days=today.weekday())
+    cutoff = week_start - timedelta(weeks=12)
+    month_cutoff = today.year * 12 + today.month - 24
+    buckets = defaultdict(list)
+    unknown = 0
+    for a in activities:
+        try:
+            day = date.fromisoformat(str(a.get("date", ""))[:10])
+        except ValueError:
+            unknown += 1
+            continue
+        sport = (a.get("sport_type") or "").lower()
+        kind = (
+            "strength"
+            if any(x in sport for x in ("weight", "strength", "workout"))
+            else (
+                "cycling"
+                if any(x in sport for x in ("ride", "cycl"))
+                else "running" if "run" in sport else "other"
+            )
+        )
+        if day > today:
+            period = "future (coarsened)"
+        elif day >= cutoff:
+            period = "week " + (day - timedelta(days=day.weekday())).isoformat()
+        elif day.year * 12 + day.month >= month_cutoff:
+            period = "month " + day.strftime("%Y-%m")
+        else:
+            period = "earlier (coarsened)"
+        buckets[(period, kind)].append((day, a))
+    if not buckets and not unknown:
+        return ""
+    lines = [
+        "## Older Activities (summarized; individual details excluded)",
+        "Totals cover summarized records only; recent records may share these periods. "
+        "Weekly totals cover preceding 12 weeks; older months and coarsened earlier periods follow.",
     ]
+    for (period, kind), rows in sorted(buckets.items()):
+        dates = [d for d, _ in rows]
+
+        def total(field):
+            return sum(a.get(field) or 0 for _, a in rows)
+
+        lines.append(
+            f"{period} | {kind} | {min(dates)}..{max(dates)} | count={len(rows)} | "
+            f'km={total("distance_m")/1000:.2f} | minutes={total("moving_time_s")/60:.1f} | '
+            f'elevation_m={total("elevation_gain_m"):.1f} | '
+            f'sets={total("total_sets")} | volume_kg={total("total_volume_kg"):.1f}'
+        )
+    if unknown:
+        lines.append(f"Omitted: {unknown} activities with missing or invalid dates.")
+    return "\n".join(lines)

@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from typing import Callable
 
 from .. import db
+from ..budget import Limits, TurnBudget, bounded_turn, BudgetExceeded, estimate
 
 SAVE_MEMORY_DESCRIPTION = (
     "Save an important fact about the athlete to persistent memory. "
@@ -11,6 +12,7 @@ SAVE_MEMORY_DESCRIPTION = (
     "injuries or niggles, training preferences, weekly mileage targets, "
     "or any coaching context that should be remembered in future sessions."
 )
+
 
 SAVE_MEMORY_CATEGORIES: list[str] = ["goal", "race", "injury", "preference", "training", "other"]
 
@@ -31,10 +33,239 @@ class BaseBackend(ABC):
     """
     A backend wraps one LLM provider and manages its own conversation history.
 
-    Constructed per accepted chat turn with private initial history (training-log seed +
-    prior messages from DB). Each call to stream_turn adds one user/assistant
+    Constructed per accepted chat turn with private bounded history from DB. Each call to stream_turn adds one user/assistant
     exchange and returns the text the model emitted plus any memories it saved.
     """
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if "stream_turn" in cls.__dict__:
+            cls.stream_turn = bounded_turn(cls.stream_turn)
+
+    @property
+    def limits(self):
+        from ..config import get_settings
+
+        if hasattr(self, "_limits"):
+            return self._limits
+        overrides = get_settings().chat_limits
+        provider = self.__class__.__name__.replace("Backend", "").lower()
+        values = {
+            **overrides.get("default", {}),
+            **overrides.get(provider, {}),
+            **overrides.get(self.label, {}),
+        }
+        self._limits = Limits(**values)
+        return self._limits
+
+    def prepare_turn(self, system, message, attachments=None):
+        """Select atomic context by priority; admission never changes the submission."""
+        from ..budget import ContextPrompt
+
+        self._check_cancelled()
+        if attachments and not self.supports_attachments:
+            raise BudgetExceeded(
+                "This provider does not support attachments. Choose Claude or paste text."
+            )
+        history = self._history
+        groups = []
+
+        def role(m):
+            return m.get("role") if isinstance(m, dict) else m.role
+
+        def plain(m):
+            if isinstance(m, dict):
+                return isinstance(m.get("content"), str) and not m.get("tool_calls")
+            return all(getattr(p, "text", None) is not None for p in m.parts or [])
+
+        i = 0
+        while i + 1 < len(history):
+            if (
+                role(history[i]) == "user"
+                and role(history[i + 1]) in ("assistant", "model")
+                and plain(history[i])
+                and plain(history[i + 1])
+            ):
+                groups.append(history[i : i + 2])
+                i += 2
+            else:
+                i += 1
+        self._history = []
+        b = TurnBudget(self.limits)
+        submission = self._submission_history(message, attachments)
+        optional, activities, periods = [], [], []
+        if isinstance(system, ContextPrompt):
+            optional, activities = system.priority, system.activities
+            periods = system.activity_periods
+            system = system.mandatory
+        mandatory = system
+        selected_optional, selected_activities = [], []
+        # Leave room for an explicit omission notice with date coverage.
+        reserve = 300 if activities else 0
+
+        def fits(prompt, messages, margin=reserve):
+            if (
+                estimate([prompt, messages, self._tool_definitions()]) + margin
+                <= self.limits.input_tokens
+            ):
+                return True
+            # Prefer measured counts when a conservative estimate would reject context.
+            measured = self._count_request(prompt, messages, self._tool_definitions())
+            return type(measured) is int and measured + margin <= self.limits.input_tokens
+
+        if not fits(system, submission, margin=0):
+            # No optional context is left to remove.
+            raise BudgetExceeded(
+                "Your message and attachments exceed the input context limit. Shorten them or send smaller files."
+            )
+        for section in optional:
+            candidate = system + "\n\n" + section
+            if not fits(candidate, submission):
+                break
+            selected_optional.append(section)
+            system = candidate
+        for group in reversed(groups):
+            candidate = group + self._history
+            if len(candidate) > self.limits.history_messages or not fits(
+                system, [*candidate, *submission]
+            ):
+                break
+            self._history = candidate
+        retained_activities = 0
+        for index, section in enumerate(activities):
+            count = section.count("\nACTIVITY ")
+            if retained_activities + count > self.limits.recent_activities:
+                continue
+            candidate = system + "\n\n" + section
+            if not fits(candidate, [*self._history, *submission]):
+                continue
+            selected_activities.append((index, section))
+            retained_activities += count
+            system = candidate
+        b.counter = self._count_request
+        while True:
+            included = {index for index, _ in selected_activities}
+            omitted = [periods[i] for i in range(len(periods)) if i not in included and periods[i]]
+            notice = ""
+            if omitted:
+                dates = [day for period in omitted for day in period]
+                notice = f"Context omitted: activity sections covering {min(dates)}..{max(dates)}. Individual details or aggregates for those omitted sections are unavailable."
+            system = "\n\n".join(
+                filter(
+                    None,
+                    [
+                        mandatory,
+                        *selected_optional,
+                        *[section for _, section in selected_activities],
+                        notice,
+                    ],
+                )
+            )
+            try:
+                b.check_request(
+                    system, self._submission_history(message, attachments), self._tool_definitions()
+                )
+                break
+            except BudgetExceeded:
+                if selected_activities:
+                    selected_activities.pop()
+                elif self._history:
+                    self._history = self._history[2:]
+                elif selected_optional:
+                    selected_optional.pop()
+                else:
+                    raise
+        self._retained_messages = len(self._history)
+        self._retained_activities = sum(
+            section.count("\nACTIVITY ") for _, section in selected_activities
+        )
+        return system
+
+    def _submission_history(self, message, attachments):
+        return [
+            *self._history,
+            {"role": "user", "content": [*(attachments or []), {"type": "text", "text": message}]},
+        ]
+
+    def _count_request(self, system, history, tools):
+        return None
+
+    def _transport_call(self, call):
+        """Retry transport setup only; tool execution is always outside this boundary."""
+        import time
+
+        for attempt in range(self.limits.retries + 1):
+            self._check_cancelled()
+            try:
+                return call()
+            except Exception as exc:
+                status = getattr(exc, "status_code", getattr(exc, "code", None))
+                if status is None:
+                    status = getattr(getattr(exc, "response", None), "status_code", None)
+                retryable = (
+                    status in (429, 500, 502, 503, 504)
+                    or isinstance(exc, (TimeoutError, ConnectionError))
+                    or type(exc).__name__
+                    in ("APIConnectionError", "APITimeoutError", "ConnectError", "ReadTimeout")
+                )
+                if not retryable:
+                    raise
+                if attempt == self.limits.retries:
+                    raise BudgetExceeded("Transport retry limit reached.") from exc
+                event = getattr(self, "cancel_event", None)
+                if event is not None:
+                    event.wait(min(2**attempt, 4))
+                else:
+                    time.sleep(min(2**attempt, 4))
+
+    def _transport_stream(self, call, validate=None):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def stream():
+            manager = None
+
+            def enter():
+                nonlocal manager
+                manager = call()
+                value = manager.__enter__()
+                if validate is not None:
+                    try:
+                        validate(value)
+                    except BaseException:
+                        import sys
+
+                        manager.__exit__(*sys.exc_info())
+                        raise
+                return value
+
+            value = self._transport_call(enter)
+            try:
+                yield value
+            except BaseException:
+                import sys
+
+                if not manager.__exit__(*sys.exc_info()):
+                    raise
+            else:
+                manager.__exit__(None, None, None)
+
+        return stream()
+
+    def _tool_definitions(self):
+        import sys
+
+        module = sys.modules[self.__class__.__module__]
+        return [
+            getattr(module, n)
+            for n in ("SAVE_MEMORY_TOOL", "UPDATE_TRAINING_PLAN_TOOL")
+            if hasattr(module, n)
+        ]
+
+    def _before_request(self, system):
+        self._check_cancelled()
+        self._budget.request(system, self._history, self._tool_definitions())
+        self._reported_output = None
 
     @property
     @abstractmethod
@@ -89,9 +320,12 @@ class BaseBackend(ABC):
         and record the memory in the turn's memories_saved list.
         """
         self._check_cancelled()
+        self._budget.tool(args)
         category = args.get("category", "other")
         content = args.get("content", "")
         result = db.save_memory(category, content)
+        if not result.startswith("Error:"):
+            self._budget.memories.append((category, content))
         return result, category, content
 
     def _execute_update_training_plan(self, args: dict) -> tuple[str, list[dict]]:
@@ -103,7 +337,8 @@ class BaseBackend(ABC):
         summary_string as the tool_result and record changes in plan_changes.
         """
         self._check_cancelled()
-        changes: list[dict] = []
+        self._budget.tool(args)
+        change_start = len(self._budget.changes)
         set_summaries: list[str] = []
         for workout in args.get("set", []) or []:
             date = workout.get("date")
@@ -119,13 +354,15 @@ class BaseBackend(ABC):
                 workout.get("duration_min"),
                 workout.get("intensity"),
             )
-            changes.append({"action": "set", "date": date, "workout_type": workout_type})
+            self._budget.changes.append(
+                {"action": "set", "date": date, "workout_type": workout_type}
+            )
             set_summaries.append(f"{date} ({workout_type})")
 
         delete_summaries: list[str] = []
         for date in args.get("delete", []) or []:
             db.delete_planned_workout(date)
-            changes.append({"action": "delete", "date": date})
+            self._budget.changes.append({"action": "delete", "date": date})
             delete_summaries.append(date)
 
         parts = []
@@ -136,7 +373,7 @@ class BaseBackend(ABC):
                 f"Removed {len(delete_summaries)} workout(s): {', '.join(delete_summaries)}"
             )
         summary = ". ".join(parts) if parts else "No changes made."
-        return summary, changes
+        return summary, self._budget.changes[change_start:]
 
     @abstractmethod
     def stateless_turn(

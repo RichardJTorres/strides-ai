@@ -6,6 +6,8 @@ from google import genai
 from google.genai import types
 from google.genai.errors import ClientError
 
+from ..budget import BudgetExceeded
+
 from .base import (
     SAVE_MEMORY_CATEGORIES,
     SAVE_MEMORY_DESCRIPTION,
@@ -107,7 +109,10 @@ class GeminiBackend(BaseBackend):
         ):
             return cls._model_cache["models"]
         try:
-            client = genai.Client(api_key=api_key)
+            client = genai.Client(
+                api_key=api_key,
+                http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1)),
+            )
             models = []
             for m in client.models.list():
                 if "generateContent" not in (m.supported_actions or []):
@@ -128,7 +133,10 @@ class GeminiBackend(BaseBackend):
         initial_history: list[dict],
         model: str = DEFAULT_MODEL,
     ) -> None:
-        self._client = genai.Client(api_key=api_key)
+        self._client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1)),
+        )
         self._model = model
         # Convert neutral history (role: user/assistant, content: str) to Gemini Content objects
         self._history: list[types.Content] = []
@@ -147,6 +155,33 @@ class GeminiBackend(BaseBackend):
     @property
     def supports_attachments(self) -> bool:
         return False
+
+    def _submission_history(self, message, attachments):
+        return [
+            *self._history,
+            types.Content(role="user", parts=[types.Part.from_text(text=message)]),
+        ]
+
+    def _count_request(self, system, history, tools):
+        try:
+            return self._client.models.count_tokens(
+                model=self._model,
+                contents=history,
+                config=types.CountTokensConfig(system_instruction=system, tools=tools),
+            ).total_tokens
+        except (AttributeError, NotImplementedError):
+            return None
+        except ClientError as exc:
+            if exc.code in (400, 404, 405, 413, 422):
+                return None
+            raise
+
+    def _record_usage(self, response):
+        metadata = getattr(response, "usage_metadata", None)
+        visible = getattr(metadata, "candidates_token_count", None)
+        thoughts = getattr(metadata, "thoughts_token_count", None)
+        if type(visible) is int:
+            self._reported_output = visible + (thoughts if type(thoughts) is int else 0)
 
     def stream_turn(self, system, user_input, on_token, attachments=None):
         if attachments:
@@ -167,20 +202,24 @@ class GeminiBackend(BaseBackend):
         first_turn = True
 
         while True:
-            self._check_cancelled()
+            self._before_request(system)
+            config.max_output_tokens = self._budget.output_remaining
             collected_text = ""
             fc_parts: list[types.Part] = []
 
             if first_turn:
                 # Stream the first response to the user (with retry on rate limit)
-                for attempt in range(_MAX_RETRIES):
+                for attempt in range(self.limits.retries + 1):
                     try:
+                        self._check_cancelled()
+                        self._budget.check_request(system, self._history, self._tool_definitions())
                         for chunk in self._client.models.generate_content_stream(
                             model=self._model,
                             contents=self._history,
                             config=config,
                         ):
                             self._check_cancelled()
+                            self._record_usage(chunk)
                             if chunk.text:
                                 on_token(chunk.text)
                                 collected_text += chunk.text
@@ -192,17 +231,25 @@ class GeminiBackend(BaseBackend):
                                         fc_parts.append(part)
                         break  # success
                     except ClientError as exc:
-                        if exc.code != 429 or attempt == _MAX_RETRIES - 1:
+                        if exc.code != 429 or collected_text or fc_parts:
                             raise
+                        if attempt == self.limits.retries:
+                            raise BudgetExceeded("Transport retry limit reached.") from exc
                         on_token(f"\n\n*(Rate limit hit — retrying in {_RETRY_DELAY_S}s…)*\n\n")
                         collected_text = ""
                         fc_parts = []
-                        time.sleep(_RETRY_DELAY_S)
+                        event = getattr(self, "cancel_event", None)
+                        if event is not None:
+                            event.wait(_RETRY_DELAY_S)
+                        else:
+                            time.sleep(_RETRY_DELAY_S)
                 first_turn = False
             else:
                 # Non-streaming for follow-up turns after tool responses
-                for attempt in range(_MAX_RETRIES):
+                for attempt in range(self.limits.retries + 1):
                     try:
+                        self._check_cancelled()
+                        self._budget.check_request(system, self._history, self._tool_definitions())
                         resp = self._client.models.generate_content(
                             model=self._model,
                             contents=self._history,
@@ -210,9 +257,16 @@ class GeminiBackend(BaseBackend):
                         )
                         break  # success
                     except ClientError as exc:
-                        if exc.code != 429 or attempt == _MAX_RETRIES - 1:
+                        if exc.code != 429 or collected_text or fc_parts:
                             raise
-                        time.sleep(_RETRY_DELAY_S)
+                        if attempt == self.limits.retries:
+                            raise BudgetExceeded("Transport retry limit reached.") from exc
+                        event = getattr(self, "cancel_event", None)
+                        if event is not None:
+                            event.wait(_RETRY_DELAY_S)
+                        else:
+                            time.sleep(_RETRY_DELAY_S)
+                self._record_usage(resp)
                 if resp.candidates:
                     for part in resp.candidates[0].content.parts:
                         if part.text:
@@ -222,6 +276,13 @@ class GeminiBackend(BaseBackend):
                             fc = getattr(part, "function_call", None)
                             if fc and getattr(fc, "name", None):
                                 fc_parts.append(part)
+
+            for part in fc_parts:
+                self._budget.output(
+                    {"name": part.function_call.name, "args": dict(part.function_call.args)}
+                )
+
+            self._budget.usage(self._reported_output)
 
             # Append the model's response to history
             model_parts: list[types.Part] = []

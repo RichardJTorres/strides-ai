@@ -285,49 +285,13 @@ def test_build_training_log_none_fields_show_dash():
 # ── build_initial_history ─────────────────────────────────────────────────────
 
 
-def test_build_initial_history_structure():
-    rows = [_make_row()]
-    history = build_initial_history(rows, [])
-    # First two messages are the log injection exchange
-    assert history[0]["role"] == "user"
-    assert history[1]["role"] == "assistant"
-    assert "training log" in history[0]["content"].lower()
-
-
-def test_build_initial_history_empty_activities():
-    history = build_initial_history([], [])
-    assert "No activities found" in history[0]["content"]
-
-
-def test_build_initial_history_activity_count_in_reply():
+def test_build_initial_history_excludes_activity_seed():
     rows = [_make_row(), _make_row()]
-    history = build_initial_history(rows, [])
-    assert "2 activities" in history[1]["content"]
-
-
-def test_build_initial_history_includes_prior_messages():
-    prior = [
-        {"role": "user", "content": "How was my last run?"},
-        {"role": "assistant", "content": "Great effort!"},
-    ]
-    history = build_initial_history([], prior)
-    assert len(history) == 4  # 2 seed + 2 prior
-    assert history[2]["content"] == "How was my last run?"
-    assert history[3]["content"] == "Great effort!"
-
-
-def test_build_initial_history_cycling_label():
-    history = build_initial_history([_make_row(sport_type="Ride")], [], mode="cycling")
-    assert "activities" in history[1]["content"]
-
-
-def test_build_initial_history_hybrid_label():
-    rows = [_make_row(sport_type="Run"), _make_row(sport_type="Ride")]
-    history = build_initial_history(rows, [], mode="hybrid")
-    assert "activities" in history[1]["content"]
-
-
-# ── _format_speed ─────────────────────────────────────────────────────────────
+    assert build_initial_history(rows, []) == []
+    assert build_initial_history([], []) == []
+    prior = [{"role": "user", "content": "question"}, {"role": "assistant", "content": "reply"}]
+    for mode in ("running", "cycling", "hybrid", "lifting"):
+        assert build_initial_history(rows, prior, mode=mode) == prior
 
 
 def test_format_speed_none():

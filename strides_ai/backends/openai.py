@@ -100,7 +100,7 @@ class OpenAIBackend(BaseBackend):
         ):
             return cls._model_cache["models"]
         try:
-            client = _openai.OpenAI(api_key=api_key)
+            client = _openai.OpenAI(api_key=api_key, max_retries=0)
             models = sorted(
                 [
                     {"id": m.id, "display_name": m.id}
@@ -122,7 +122,7 @@ class OpenAIBackend(BaseBackend):
         initial_history: list[dict],
         model: str = DEFAULT_MODEL,
     ) -> None:
-        self._client = _openai.OpenAI(api_key=api_key)
+        self._client = _openai.OpenAI(api_key=api_key, max_retries=0)
         self._model = model
         # OpenAI uses the same role/content format as our neutral history format.
         self._history: list[dict] = list(initial_history)
@@ -145,22 +145,29 @@ class OpenAIBackend(BaseBackend):
         plan_changes: list[dict] = []
 
         while True:
-            self._check_cancelled()
+            self._before_request(system)
             messages = [{"role": "system", "content": system}, *self._history]
 
             full_content = ""
             # tool_calls_by_index accumulates streaming tool-call deltas
             tool_calls_by_index: dict[int, dict] = {}
 
-            with self._client.chat.completions.create(
-                model=self._model,
-                messages=messages,
-                tools=[SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL],
-                tool_choice="auto",
-                stream=True,
+            with self._transport_stream(
+                lambda: self._client.chat.completions.create(
+                    model=self._model,
+                    messages=messages,
+                    tools=[SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL],
+                    tool_choice="auto",
+                    stream=True,
+                    max_completion_tokens=self._budget.output_remaining,
+                    stream_options={"include_usage": True},
+                )
             ) as stream:
                 for chunk in stream:
                     self._check_cancelled()
+                    self._budget.usage(
+                        getattr(getattr(chunk, "usage", None), "completion_tokens", None)
+                    )
                     delta = chunk.choices[0].delta if chunk.choices else None
                     if delta is None:
                         continue
@@ -182,8 +189,10 @@ class OpenAIBackend(BaseBackend):
                                 tool_calls_by_index[idx]["id"] = tc_delta.id
                             if tc_delta.function:
                                 if tc_delta.function.name:
+                                    self._budget.output(tc_delta.function.name)
                                     tool_calls_by_index[idx]["name"] += tc_delta.function.name
                                 if tc_delta.function.arguments:
+                                    self._budget.output(tc_delta.function.arguments)
                                     tool_calls_by_index[idx][
                                         "arguments"
                                     ] += tc_delta.function.arguments

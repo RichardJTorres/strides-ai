@@ -91,7 +91,7 @@ class ClaudeBackend(BaseBackend):
         ):
             return cls._model_cache["models"]
         try:
-            client = anthropic.Anthropic(api_key=api_key)
+            client = anthropic.Anthropic(api_key=api_key, max_retries=0)
             models = [
                 {"id": m.id, "display_name": m.display_name} for m in client.models.list(limit=100)
             ]
@@ -107,7 +107,7 @@ class ClaudeBackend(BaseBackend):
         initial_history: list[dict],
         model: str = DEFAULT_MODEL,
     ) -> None:
-        self._client = anthropic.Anthropic(api_key=api_key)
+        self._client = anthropic.Anthropic(api_key=api_key, max_retries=0)
         self._model = model
         # History stays in Anthropic format; initial messages have str content
         # which the API accepts directly.
@@ -121,6 +121,18 @@ class ClaudeBackend(BaseBackend):
     def supports_attachments(self) -> bool:
         return True
 
+    def _count_request(self, system, history, tools):
+        try:
+            return self._client.messages.count_tokens(
+                model=self._model, system=system, messages=history, tools=tools
+            ).input_tokens
+        except (AttributeError, NotImplementedError):
+            return None
+        except anthropic.APIStatusError as exc:
+            if exc.status_code in (400, 404, 405, 413, 422):
+                return None
+            raise
+
     def stream_turn(self, system, user_input, on_token, attachments=None):
         if attachments:
             content = [*attachments, {"type": "text", "text": user_input}]
@@ -132,13 +144,15 @@ class ClaudeBackend(BaseBackend):
         plan_changes: list[dict] = []
 
         while True:
-            self._check_cancelled()
-            with self._client.messages.stream(
-                model=self._model,
-                max_tokens=8192,
-                system=system,
-                messages=self._history,
-                tools=[SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL],
+            self._before_request(system)
+            with self._transport_stream(
+                lambda: self._client.messages.stream(
+                    model=self._model,
+                    max_tokens=self._budget.output_remaining,
+                    system=system,
+                    messages=self._history,
+                    tools=[SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL],
+                )
             ) as stream:
                 for chunk in stream.text_stream:
                     self._check_cancelled()
@@ -146,6 +160,10 @@ class ClaudeBackend(BaseBackend):
                     response_text += chunk
                 final = stream.get_final_message()
 
+            for block in final.content:
+                if getattr(block, "type", "") == "tool_use":
+                    self._budget.output({"name": block.name, "input": block.input})
+            self._budget.usage(getattr(getattr(final, "usage", None), "output_tokens", None))
             self._history.append({"role": "assistant", "content": final.content})
 
             if final.stop_reason == "max_tokens":
