@@ -947,7 +947,7 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
               onKeyDown={onKeyDown}
               placeholder="Message your coach…"
               disabled={streamingIndex !== null}
-              className={`w-full resize-none rounded-2xl bg-gray-800 border border-gray-700/60 py-3.5 pr-14 text-[15px] text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 ${theme.accentFocus} disabled:opacity-50 transition-colors leading-relaxed ${supportsAttachments ? "pl-[5.5rem]" : "px-4"}`}
+              className={`block w-full resize-none rounded-2xl bg-gray-800 border border-gray-700/60 py-3.5 pr-12 sm:pr-14 text-[15px] text-gray-100 placeholder-gray-500 max-sm:placeholder:text-sm placeholder:whitespace-nowrap focus:outline-none focus:ring-1 ${theme.accentFocus} disabled:opacity-50 transition-colors leading-relaxed ${supportsAttachments ? "pl-20 sm:pl-[5.5rem]" : "px-4"}`}
               style={{ minHeight: "52px", height: "52px", overflowY: "hidden" }}
             />
 
