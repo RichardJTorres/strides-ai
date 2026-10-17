@@ -4,6 +4,8 @@ import json
 import logging
 from collections import defaultdict
 
+from .units import DEFAULT_UNIT_SYSTEM, Quantity, UnitSystem, format_value
+
 log = logging.getLogger(__name__)
 
 # Epley 1RM formula: weight * (1 + reps / 30)
@@ -18,7 +20,9 @@ def estimate_1rm(weight_kg: float, reps: int) -> float | None:
     return round(weight_kg * (1 + reps / 30), 1)
 
 
-def compute_hevy_metrics(exercises_json: str | None) -> dict:
+def compute_hevy_metrics(
+    exercises_json: str | None, units: UnitSystem = DEFAULT_UNIT_SYSTEM
+) -> dict:
     """
     Derive lifting metrics from the HEVY exercises JSON blob.
 
@@ -28,7 +32,7 @@ def compute_hevy_metrics(exercises_json: str | None) -> dict:
       - avg_rpe
       - estimated_1rms: {exercise_title: best_1rm_kg}
       - muscle_volume: {muscle_group: volume_kg}
-      - analysis_summary: human-readable NL string
+      - analysis_summary: human-readable NL string, with weights in ``units``
     """
     if not exercises_json:
         return {}
@@ -81,7 +85,11 @@ def compute_hevy_metrics(exercises_json: str | None) -> dict:
             all_reps = [s.get("reps") or 0 for s in working_sets]
             rep_str = str(all_reps[0]) if all_reps else "?"
             weight_vals = [s.get("weight_kg") or 0 for s in working_sets if s.get("weight_kg")]
-            weight_str = f"{max(weight_vals):.1f} kg" if weight_vals else "BW"
+            weight_str = (
+                format_value(max(weight_vals), Quantity.MASS, units, decimals=1)
+                if weight_vals
+                else "BW"
+            )
             exercise_summaries.append(f"{title}: {ex_sets}×{rep_str} @ {weight_str}")
 
     avg_rpe = round(sum(rpe_values) / len(rpe_values), 1) if rpe_values else None
@@ -93,7 +101,7 @@ def compute_hevy_metrics(exercises_json: str | None) -> dict:
         if len(exercise_summaries) > 4:
             parts[-1] += f" (+{len(exercise_summaries) - 4} more)"
     parts.append(f"{total_sets} working sets")
-    parts.append(f"{total_volume:.0f} kg total volume")
+    parts.append(f"{format_value(total_volume, Quantity.MASS, units)} total volume")
     if avg_rpe is not None:
         parts.append(f"avg RPE {avg_rpe}")
 
@@ -146,10 +154,10 @@ def analyze_hevy_workout(row: dict) -> None:
     )
 
 
-LIFTING_DEEP_DIVE_SYSTEM_PROMPT = """\
+_LIFTING_DEEP_DIVE_SYSTEM_PROMPT_TEMPLATE = """\
 You are a strength and conditioning coach performing a detailed analysis of a single weight training session.
 
-The workout data below lists each exercise with its sets, showing: set type (normal/warmup/dropset/failure), weight (kg), reps, and RPE (rate of perceived exertion, 6–10 scale) where recorded.
+The workout data below lists each exercise with its sets, showing: set type (normal/warmup/dropset/failure), weight ({mass_unit}), reps, and RPE (rate of perceived exertion, 6–10 scale) where recorded.
 
 Do not ask follow-up questions. Analyse only the data provided and write your report now.
 
@@ -160,5 +168,15 @@ Cover each of these dimensions:
 4. **Estimated 1RM trends**: For main compound lifts (squat, bench, deadlift, press), note the estimated 1RM.
 5. **Fatigue signs**: Did performance drop across sets within an exercise, suggesting insufficient rest or high fatigue?
 
-End with 3–5 specific, actionable coaching notes the athlete can apply to their next session.\
+End with 3–5 specific, actionable coaching notes the athlete can apply to their next session.
+
+Write all weights in {mass_unit}.\
 """
+
+
+def lifting_deep_dive_system_prompt(units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
+    from .units import unit_label
+
+    return _LIFTING_DEEP_DIVE_SYSTEM_PROMPT_TEMPLATE.format(
+        mass_unit=unit_label(Quantity.MASS, units)
+    )

@@ -6,14 +6,16 @@ import json
 import re
 from datetime import date as date_cls
 
-from .coach import build_training_log
+from .coach import build_training_log, units_section
+from .db.models import TrainingPlan
 from .modes import MODES
+from .units import DEFAULT_UNIT_SYSTEM, Quantity, UnitSystem, to_si, unit_label
 
 # How far before/after the requested range to pull existing plan entries as
 # context (ramp-up / taper continuity), without letting the model touch them.
 SURROUNDING_WINDOW_DAYS = 14
 
-PLAN_GENERATION_SYSTEM_PROMPT = """\
+_PLAN_GENERATION_SYSTEM_PROMPT_TEMPLATE = """\
 You are an expert coach generating a structured training block for the athlete's calendar.
 
 Respond with ONLY a valid JSON object — no prose, no markdown fences, no explanation outside the JSON.
@@ -24,8 +26,8 @@ The object must have exactly these keys:
                         "Long Ride", "Tempo Ride", "Indoor Ride", "Intervals", "Cross-Training",
                         "Race", "Rest")
       "description"   (string, optional — the purpose/focus of the session)
-      "distance_km"   (number, optional)
-      "elevation_m"   (number, optional)
+      "distance"      (number, optional, in {distance_unit})
+      "elevation"     (number, optional, elevation gain in {elevation_unit})
       "duration_min"  (integer, optional)
       "intensity"     (one of "easy", "moderate", "hard", "rest", optional)
   "summary" — a short (2-4 sentence) explanation of the block's structure and why it fits the \
@@ -36,6 +38,17 @@ the range. Do not schedule on blocked-out days or on top of races. Use the surro
 context to keep load progression and taper sensible; do not propose changes outside the requested \
 date range — that context is read-only.\
 """
+
+
+def plan_generation_system_prompt(units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
+    return _PLAN_GENERATION_SYSTEM_PROMPT_TEMPLATE.format(
+        distance_unit=unit_label(Quantity.DISTANCE, units),
+        elevation_unit=unit_label(Quantity.ELEVATION, units),
+    )
+
+
+# Kept for callers that don't know the athlete's units; metric matches the stored columns.
+PLAN_GENERATION_SYSTEM_PROMPT = plan_generation_system_prompt(DEFAULT_UNIT_SYSTEM)
 
 
 def _strip_json_fences(text: str) -> str:
@@ -56,12 +69,13 @@ def _current_date_section() -> str:
     )
 
 
-def _plan_table(rows: list[dict]) -> str:
+def _plan_table(rows: list[dict], units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
     header = "Date       | Type             | Distance | Duration | Intensity"
     sep = "-" * 65
     lines = []
     for w in rows:
-        dist = f"{w['distance_km']} km" if w.get("distance_km") else "—"
+        m = TrainingPlan.measure_field(w, "distance_km", units) if w.get("distance_km") else None
+        dist = m.formatted if m else "—"
         dur = f"{w['duration_min']} min" if w.get("duration_min") else "—"
         lines.append(
             f"{w['date']:10s} | {(w['workout_type'] or '')[:16]:16s} | "
@@ -80,10 +94,12 @@ def build_plan_generation_prompt(
     start_date: str,
     end_date: str,
     freeform_text: str,
+    units: UnitSystem = DEFAULT_UNIT_SYSTEM,
 ) -> str:
     cfg = MODES.get(mode, MODES["running"])
     sections = [
         cfg.system_prompt,
+        units_section(units),
         _current_date_section(),
         f"## Requested Block\nGenerate a training block for {start_date} through "
         f"{end_date} (inclusive).",
@@ -121,22 +137,44 @@ def build_plan_generation_prompt(
             "before today may or may not have actually happened as planned; an entry dated "
             "today or later has definitely not happened yet. Never describe a planned entry "
             'in the past tense (e.g. not "Sunday\'s ride") unless it is confirmed by the '
-            "Recent Activities log below.\n" + _plan_table(surrounding_plan)
+            "Recent Activities log below.\n" + _plan_table(surrounding_plan, units)
         )
 
     if recent_activities:
-        log = build_training_log(recent_activities, mode)
+        log = build_training_log(recent_activities, mode, units)
         sections.append(f"## Recent Activities (last {len(recent_activities)})\n\n```\n{log}\n```")
 
     return "\n\n".join(sections)
 
 
-def parse_plan_generation_response(text: str, start_date: str, end_date: str) -> dict:
+def _normalize_workout_units(w: dict, units: UnitSystem) -> dict:
+    """The model writes distance/elevation in the athlete's units; storage is km and m.
+    Entries that already use the stored keys (distance_km/elevation_m) pass through."""
+    w = dict(w)
+    if "distance" in w:
+        meters = to_si(_as_float(w.pop("distance")), Quantity.DISTANCE, units)
+        w.setdefault("distance_km", None if meters is None else round(meters / 1000, 2))
+    if "elevation" in w:
+        meters = to_si(_as_float(w.pop("elevation")), Quantity.ELEVATION, units)
+        w.setdefault("elevation_m", None if meters is None else round(meters))
+    return w
+
+
+def _as_float(value) -> float | None:
+    try:
+        return None if value is None else float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_plan_generation_response(
+    text: str, start_date: str, end_date: str, units: UnitSystem = DEFAULT_UNIT_SYSTEM
+) -> dict:
     """Parse the LLM's JSON response, dropping malformed or out-of-range entries."""
     parsed = json.loads(_strip_json_fences(text))
     raw_workouts = parsed.get("workouts", [])
     workouts = [
-        w
+        _normalize_workout_units(w, units)
         for w in raw_workouts
         if w.get("date") and w.get("workout_type") and start_date <= w["date"] <= end_date
     ]

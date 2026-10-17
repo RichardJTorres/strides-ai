@@ -3,6 +3,17 @@
 import json
 import re
 
+from .db.models import TrainingPlan
+from .units import (
+    DEFAULT_UNIT_SYSTEM,
+    Quantity,
+    UnitSystem,
+    convert,
+    describe_for_prompt,
+    format_value,
+    unit_label,
+)
+
 ROUTE_ANALYSIS_SYSTEM_PROMPT = """\
 You are an expert coach evaluating whether a specific route is appropriate for a planned workout.
 
@@ -27,11 +38,14 @@ def _strip_json_fences(text: str) -> str:
     return text
 
 
-def _elevation_table(profile: list[dict]) -> str:
-    header = "Distance (km) | Elevation (m) | Grade (%)"
+def _elevation_table(profile: list[dict], units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
+    dist_unit = unit_label(Quantity.DISTANCE, units)
+    elev_unit = unit_label(Quantity.ELEVATION, units)
+    header = f"Distance ({dist_unit}) | Elevation ({elev_unit}) | Grade (%)"
     sep = "-" * len(header)
     rows = [
-        f"{p['distance_km']:13.1f} | {p['elevation_m']:13.1f} | "
+        f"{convert(p['distance_km'] * 1000, Quantity.DISTANCE, units):13.1f} | "
+        f"{convert(p['elevation_m'], Quantity.ELEVATION, units):13.1f} | "
         f"{p['grade_pct'] if p['grade_pct'] is not None else '—'}"
         for p in profile
     ]
@@ -43,14 +57,20 @@ def build_route_analysis_prompt(
     route_summary: dict,
     elevation_profile: list[dict],
     profile_text: str,
+    units: UnitSystem = DEFAULT_UNIT_SYSTEM,
 ) -> str:
-    dist = f"{workout['distance_km']} km" if workout.get("distance_km") else "not specified"
+    m = (
+        TrainingPlan.measure_field(workout, "distance_km", units)
+        if workout.get("distance_km")
+        else None
+    )
+    dist = m.formatted if m else "not specified"
     dur = f"{workout['duration_min']} min" if workout.get("duration_min") else "not specified"
     route_lines = [
         f"Name: {route_summary.get('name') or 'Unnamed route'}",
-        f"Distance: {round((route_summary.get('distance_m') or 0) / 1000, 1)} km",
-        f"Elevation gain: {round(route_summary.get('elevation_gain_m') or 0)} m",
-        f"Elevation loss: {round(route_summary.get('elevation_loss_m') or 0)} m",
+        f"Distance: {format_value(route_summary.get('distance_m') or 0, Quantity.DISTANCE, units, decimals=1)}",
+        f"Elevation gain: {format_value(route_summary.get('elevation_gain_m') or 0, Quantity.ELEVATION, units)}",
+        f"Elevation loss: {format_value(route_summary.get('elevation_loss_m') or 0, Quantity.ELEVATION, units)}",
         f"Terrain: {route_summary.get('terrain') or 'unknown'}",
         f"Difficulty: {route_summary.get('difficulty') or 'unknown'}",
         f"Surface: {route_summary.get('surface') or 'unknown'} "
@@ -71,10 +91,12 @@ def build_route_analysis_prompt(
     ]
     if elevation_profile:
         sections.append(
-            "## Elevation Profile (sampled along the route)\n" + _elevation_table(elevation_profile)
+            "## Elevation Profile (sampled along the route)\n"
+            + _elevation_table(elevation_profile, units)
         )
     if profile_text:
         sections.append(profile_text)
+    sections.append(f"## Units\nWrite all measurements in {describe_for_prompt(units)}.")
     return "\n\n".join(sections)
 
 

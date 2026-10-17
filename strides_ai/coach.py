@@ -4,8 +4,17 @@ import sqlite3
 from datetime import datetime, timedelta
 
 from . import compliance, db
+from .db.models import TrainingPlan
 from .memory_context import memories_section
 from .modes import MODES
+from .units import (
+    DEFAULT_UNIT_SYSTEM,
+    Quantity,
+    UnitSystem,
+    convert,
+    describe_for_prompt,
+    unit_label,
+)
 
 RECALL_MESSAGES = 40
 # Number of most-recent activities always pinned in the system prompt each turn.
@@ -81,18 +90,31 @@ def _datetime_section() -> str:
     )
 
 
+def units_section(units: UnitSystem) -> str:
+    units = UnitSystem.parse(units)
+    return (
+        f"## Units\n"
+        f"The athlete uses the {units.value.upper()} system. Use {describe_for_prompt(units)} "
+        "in every reply. All data in this prompt is already in these units. "
+        "Earlier messages in this conversation may use a different unit system; treat those "
+        "numbers as historical and do not let them change the units you reply in. "
+        "When calling update_training_plan, set distance_unit and elevation_unit to the units "
+        "you are using."
+    )
+
+
 def _memories_section(memories: list[dict]) -> str:
     return memories_section(memories)
 
 
-def _compliance_section(activities: list[dict]) -> str:
+def _compliance_section(activities: list[dict], units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
     today = datetime.now().date()
     start = today - timedelta(days=COMPLIANCE_WINDOW_DAYS)
     planned = compliance.planned_workouts_from_rows(
         db.get_training_plan(start.isoformat(), today.isoformat())
     )
     acts = compliance.compliance_activities_from_rows(activities)
-    days = compliance.compute_range_compliance(planned, acts, today)
+    days = compliance.compute_range_compliance(planned, acts, today, units)
     summary = compliance.summarize_compliance(days)
     if summary.total_scored == 0:
         return ""
@@ -120,18 +142,19 @@ def _compliance_section(activities: list[dict]) -> str:
     return "## Plan-vs-Actual Compliance\n" + "\n".join(lines)
 
 
-def _upcoming_workouts_section() -> str:
+def _upcoming_workouts_section(units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
     upcoming = db.get_upcoming_planned_workouts(days=PLANNED_WORKOUTS_WINDOW_DAYS)
     if not upcoming:
         return ""
-    header = "Date       | Type             | Distance | Duration | Intensity"
-    sep = "-" * 65
+    header = "Date       | Type             | Distance  | Duration | Intensity"
+    sep = "-" * 66
     rows = []
     for w in upcoming:
-        dist = f"{w['distance_km']} km" if w.get("distance_km") else "—"
+        m = TrainingPlan.measure_field(w, "distance_km", units) if w.get("distance_km") else None
+        dist = m.formatted if m else "—"
         dur = f"{w['duration_min']} min" if w.get("duration_min") else "—"
         rows.append(
-            f"{w['date']:10s} | {(w['workout_type'] or '')[:16]:16s} | {dist:8s} | {dur:8s} | {w.get('intensity') or '—'}"
+            f"{w['date']:10s} | {(w['workout_type'] or '')[:16]:16s} | {dist:9s} | {dur:8s} | {w.get('intensity') or '—'}"
         )
     return (
         f"## Upcoming Planned Workouts (next {PLANNED_WORKOUTS_WINDOW_DAYS} days)\n"
@@ -162,7 +185,7 @@ def _calendar_prefs_section() -> str:
     return "## Calendar Constraints\n" + "\n".join(lines)
 
 
-def _analysis_guide_section(cfg, recent: list) -> str:
+def _analysis_guide_section(cfg, recent: list, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
     if not cfg.has_analysis or not any(a.get("analysis_summary") for a in recent):
         return ""
     return (
@@ -173,15 +196,18 @@ def _analysis_guide_section(cfg, recent: list) -> str:
         "Z1/Z2 time builds aerobic base, high Z4/Z5 indicates intensity work\n"
         "- **Effort efficiency score**: 0–100, normalized vs athlete's full history; "
         "higher = more efficient pace for a given HR; tracks fitness trends over time\n"
-        "- **Pace fade**: sec/mile change in final third vs first third; "
+        f"- **Pace fade**: {unit_label(Quantity.PACE_DELTA, units)} change in final third vs "
+        "first third; "
         "positive = slowing (fatigue or poor pacing), negative = negative split (strong finish)\n"
         "- **Cardiac decoupling %**: HR drift relative to pace; <5% = well-coupled, "
         "5–10% = moderate drift, >10% = high drift; most meaningful for steady aerobic runs"
     )
 
 
-def _recent_activities_section(recent: list, mode: str) -> str:
-    log = build_training_log(recent, mode)
+def _recent_activities_section(
+    recent: list, mode: str, units: UnitSystem = DEFAULT_UNIT_SYSTEM
+) -> str:
+    log = build_training_log(recent, mode, units)
     return f"## Recent Activities (last {RECENT_ACTIVITIES_IN_SYSTEM})\n\n```\n{log}\n```"
 
 
@@ -194,6 +220,7 @@ def build_system(
     mode: str = "running",
     activities: list | None = None,
     coach_voice: str = "",
+    units: UnitSystem = DEFAULT_UNIT_SYSTEM,
 ) -> str:
     cfg = MODES.get(mode, MODES["running"])
     # Pin only the most recent activities every turn (cheap, always survives truncation).
@@ -205,23 +232,29 @@ def build_system(
     mandatory = "\n\n".join(
         [
             cfg.system_prompt,
+            units_section(units),
             _datetime_section(),
             "Older activity details are excluded. Use only included details and labeled aggregates. "
             "Context sections and periods absent from this request are omitted, not evidence of no training.",
         ]
     )
-    sections = [f"## Recent Activities\nACTIVITY {build_training_log([a], mode)}" for a in recent]
+    sections = [
+        f"## Recent Activities\nACTIVITY {build_training_log([a], mode, units)}" for a in recent
+    ]
     periods = [(str(a.get("date") or "unknown")[:10],) for a in recent]
     if not recent:
         sections.append("## Recent Activities\nNo activities found.")
         periods.append(())
     older = (activities or [])[RECENT_ACTIVITIES_IN_SYSTEM:]
-    summary = older_activity_summary(older)
+    summary = older_activity_summary(older, units=units)
     if summary:
         sections.append(summary)
         dates = [str(a.get("date") or "unknown")[:10] for a in older]
         periods.append((min(dates), max(dates)))
-    for extra in (_compliance_section(activities or []), _analysis_guide_section(cfg, recent)):
+    for extra in (
+        _compliance_section(activities or [], units),
+        _analysis_guide_section(cfg, recent, units),
+    ):
         if extra:
             sections.append(extra)
             periods.append(())
@@ -231,7 +264,7 @@ def build_system(
             profile,
             _memories_section(memories),
             _calendar_prefs_section(),
-            _upcoming_workouts_section(),
+            _upcoming_workouts_section(units),
             _voice_section(coach_voice),
         ],
         sections,
@@ -239,7 +272,9 @@ def build_system(
     )
 
 
-def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
+def build_training_log(
+    rows: list[sqlite3.Row], mode: str = "running", units: UnitSystem = DEFAULT_UNIT_SYSTEM
+) -> str:
     if not rows:
         return "No activities found."
     cfg = MODES.get(mode, MODES["running"])
@@ -252,11 +287,11 @@ def build_training_log(rows: list[sqlite3.Row], mode: str = "running") -> str:
             cfg = MODES["hybrid"]
 
     sep = "-" * cfg.log_sep_len
-    lines = [cfg.log_header, sep]
+    lines = [cfg.log_header(units), sep]
     for r in reversed(rows):
-        lines.append(cfg.format_log_row(r))
+        lines.append(cfg.format_log_row(r, units))
     lines.append(sep)
-    lines.append(cfg.format_log_total(rows))
+    lines.append(cfg.format_log_total(rows, units))
     return "\n".join(lines)
 
 
@@ -267,7 +302,9 @@ def build_initial_history(
     return [{"role": m["role"], "content": m["content"]} for m in prior_messages[-RECALL_MESSAGES:]]
 
 
-def older_activity_summary(activities: list[dict], today=None) -> str:
+def older_activity_summary(
+    activities: list[dict], today=None, units: UnitSystem = DEFAULT_UNIT_SYSTEM
+) -> str:
     """Exact disjoint aggregates, bounded to 12 weeks, 24 months and one older bucket per sport."""
     from collections import defaultdict
     from datetime import date
@@ -316,11 +353,15 @@ def older_activity_summary(activities: list[dict], today=None) -> str:
         def total(field):
             return sum(a.get(field) or 0 for _, a in rows)
 
+        def total_in(field, qty):
+            return f"{unit_label(qty, units)}={convert(total(field), qty, units):.2f}"
+
         lines.append(
             f"{period} | {kind} | {min(dates)}..{max(dates)} | count={len(rows)} | "
-            f'km={total("distance_m")/1000:.2f} | minutes={total("moving_time_s")/60:.1f} | '
-            f'elevation_m={total("elevation_gain_m"):.1f} | '
-            f'sets={total("total_sets")} | volume_kg={total("total_volume_kg"):.1f}'
+            f"distance_{total_in('distance_m', Quantity.DISTANCE)} | "
+            f'minutes={total("moving_time_s")/60:.1f} | '
+            f"elevation_{total_in('elevation_gain_m', Quantity.ELEVATION)} | "
+            f'sets={total("total_sets")} | volume_{total_in("total_volume_kg", Quantity.MASS)}'
         )
     if unknown:
         lines.append(f"Omitted: {unknown} activities with missing or invalid dates.")

@@ -16,7 +16,8 @@ from ...db.engine import get_session
 from ...profile import profile_to_text
 from ...sources import get_source_for_activity
 from ...sources.base import AuthError, ConfigurationError, NoDataError
-from ..deps import get_backend
+from ...units import UnitSystem
+from ..deps import get_backend, get_units
 
 router = APIRouter()
 log = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ async def deep_dive(
     force: bool = False,
     session: Session = Depends(get_session),
     backend=Depends(get_backend),
+    units: UnitSystem = Depends(get_units),
 ) -> DeepDiveResponse:
     """
     Generate (or return cached) a deep-dive LLM analysis for a single activity.
@@ -76,7 +78,7 @@ async def deep_dive(
     source = get_source_for_activity(activity)
 
     try:
-        system_prompt, user_content = source.build_deep_dive_content(activity, backend)
+        system_prompt, user_content = source.build_deep_dive_content(activity, backend, units)
     except ConfigurationError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     except AuthError as exc:
@@ -92,7 +94,7 @@ async def deep_dive(
         raise HTTPException(status_code=502, detail="Failed to fetch activity data")
 
     # Enrich system prompt with athlete profile and coaching memories
-    profile_text = profile_to_text(get_profile_fields(mode), mode)
+    profile_text = profile_to_text(get_profile_fields(mode), mode, units)
     if profile_text:
         system_prompt += f"\n\n{profile_text}"
 

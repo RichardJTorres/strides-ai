@@ -37,7 +37,7 @@ def make_activity(
     avg_cadence: float | None = None,
     hr_zone_pct: dict[str, float] | None = None,
     cardiac_decoupling_pct: float | None = None,
-    pace_fade_seconds: float | None = None,
+    pace_fade_s_per_km: float | None = None,
     name: str = "Activity",
 ) -> CardioAnalyticsActivity:
     return CardioAnalyticsActivity(
@@ -53,7 +53,7 @@ def make_activity(
         avg_cadence=avg_cadence,
         hr_zone_pct=hr_zone_pct,
         cardiac_decoupling_pct=cardiac_decoupling_pct,
-        pace_fade_seconds=pace_fade_seconds,
+        pace_fade_s_per_km=pace_fade_s_per_km,
     )
 
 
@@ -261,20 +261,20 @@ def test_cadence_trend_excludes_zero_and_none():
 
 
 def test_pace_fade_trend_allows_negative_values():
-    acts = [make_activity(date(2024, 1, d), pace_fade_seconds=-10.0) for d in range(1, 6)]
-    ds = compute_pace_fade_trend(acts, "miles", TODAY)
+    acts = [make_activity(date(2024, 1, d), pace_fade_s_per_km=-10.0) for d in range(1, 6)]
+    ds = compute_pace_fade_trend(acts, "km", TODAY)
     assert ds.available is True
     assert all(p.value == pytest.approx(-10.0) for p in ds.data)
 
 
 def test_pace_fade_trend_converts_unit():
-    acts = [make_activity(date(2024, 1, d), pace_fade_seconds=60.0) for d in range(1, 6)]
+    acts = [make_activity(date(2024, 1, d), pace_fade_s_per_km=60.0) for d in range(1, 6)]
     ds_miles = compute_pace_fade_trend(acts, "miles", TODAY)
     ds_km = compute_pace_fade_trend(acts, "km", TODAY)
     assert ds_miles.unit == "sec/mi"
     assert ds_km.unit == "sec/km"
-    assert ds_miles.data[0].value == pytest.approx(60.0)
-    assert ds_km.data[0].value == pytest.approx(60.0 / 1.60934, abs=1e-3)
+    assert ds_miles.data[0].value == pytest.approx(60.0 * 1.609344, abs=1e-3)
+    assert ds_km.data[0].value == pytest.approx(60.0)
 
 
 # ── weekly_elevation ─────────────────────────────────────────────────────────────

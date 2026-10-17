@@ -6,6 +6,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlmodel import Session
 
+from ..body_metrics import normalize_personal
 from .models import Profile
 
 
@@ -17,7 +18,8 @@ def get_fields(session: Session, mode: str) -> dict | None:
     """
     personal_row = session.get(Profile, "personal")
     mode_row = session.get(Profile, mode)
-    personal = json.loads(personal_row.fields_json) if personal_row else {}
+    # Legacy free-text height/weight become height_cm/weight_kg here; the next save persists it.
+    personal = normalize_personal(json.loads(personal_row.fields_json)) if personal_row else {}
     mode_data = json.loads(mode_row.fields_json) if mode_row else {}
     if not personal and not mode_data:
         return None

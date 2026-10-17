@@ -8,6 +8,8 @@ import anthropic
 import httpx
 
 from .backends.ollama import DEFAULT_HOST
+from .db.models import TrainingPlan
+from .units import DEFAULT_UNIT_SYSTEM, UnitSystem, describe_for_prompt
 
 NUTRITION_SYSTEM_PROMPT = """\
 You are a sports nutritionist. Analyze the described workout and return structured nutrition recommendations.
@@ -23,9 +25,13 @@ The object must have exactly these keys:
 """
 
 
-def _build_prompt(workout: dict, profile_text: str) -> str:
-    dist = f"{workout['distance_km']} km" if workout.get("distance_km") else "not specified"
-    elev = f"{workout['elevation_m']} m" if workout.get("elevation_m") else "not specified"
+def _build_prompt(workout: dict, profile_text: str, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
+    def measured(field: str) -> str:
+        m = TrainingPlan.measure_field(workout, field, units) if workout.get(field) else None
+        return m.formatted if m else "not specified"
+
+    dist = measured("distance_km")
+    elev = measured("elevation_m")
     dur = f"{workout['duration_min']} minutes" if workout.get("duration_min") else "not specified"
     return f"""\
 Workout type: {workout.get("workout_type", "Unknown")}
@@ -36,16 +42,21 @@ Duration: {dur}
 Notes: {workout.get("description") or "none"}
 
 Athlete profile:
-{profile_text or "No profile provided."}"""
+{profile_text or "No profile provided."}
+
+Keep the JSON keys exactly as specified (hydration values stay in ml); write any amounts in \
+"notes" using {describe_for_prompt(units)}."""
 
 
-def analyze_nutrition(workout: dict, profile_text: str, api_key: str) -> dict:
+def analyze_nutrition(
+    workout: dict, profile_text: str, api_key: str, units: UnitSystem = DEFAULT_UNIT_SYSTEM
+) -> dict:
     """Generate nutrition recommendations for a planned workout.
 
     Routes to Ollama when PROVIDER=ollama, otherwise uses Claude Haiku.
     """
     provider = os.environ.get("PROVIDER", "claude").lower()
-    prompt = _build_prompt(workout, profile_text)
+    prompt = _build_prompt(workout, profile_text, units)
 
     if provider == "ollama":
         model = os.environ.get("OLLAMA_MODEL", "llama3.1")

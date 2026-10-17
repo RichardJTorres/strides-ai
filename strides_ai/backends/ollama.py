@@ -6,6 +6,7 @@ import time
 import httpx
 
 from .base import (
+    WORKOUT_MEASUREMENT_PROPERTIES,
     SAVE_MEMORY_CATEGORIES,
     SAVE_MEMORY_TIMING_PROPERTIES,
     SAVE_MEMORY_DESCRIPTION,
@@ -64,8 +65,7 @@ UPDATE_TRAINING_PLAN_TOOL = {
                                 ),
                             },
                             "description": {"type": "string"},
-                            "distance_km": {"type": "number"},
-                            "elevation_m": {"type": "number"},
+                            **WORKOUT_MEASUREMENT_PROPERTIES,
                             "duration_min": {"type": "integer"},
                             "intensity": {
                                 "type": "string",

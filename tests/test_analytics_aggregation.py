@@ -146,7 +146,7 @@ def test_to_pace_unit_km_identity():
 
 
 def test_to_pace_unit_miles_converts():
-    assert to_pace_unit(300.0, "miles") == pytest.approx(300.0 * 1.60934)
+    assert to_pace_unit(300.0, "miles") == pytest.approx(300.0 * 1.609344)
 
 
 def test_to_hours_converts_seconds():
@@ -169,13 +169,13 @@ def test_to_elevation_unit_none_is_zero():
     assert to_elevation_unit(None, "miles") == 0.0
 
 
-def test_pace_fade_to_unit_miles_identity():
-    assert pace_fade_to_unit(60.0, "miles") == pytest.approx(60.0)
+def test_pace_fade_to_unit_km_identity():
+    assert pace_fade_to_unit(60.0, "km") == pytest.approx(60.0)
 
 
-def test_pace_fade_to_unit_km_converts():
-    # at fixed pace fade, converting from per-mile to per-km reduces the magnitude
-    assert pace_fade_to_unit(60.0, "km") == pytest.approx(60.0 / 1.60934)
+def test_pace_fade_to_unit_miles_converts():
+    # pace fade is stored per km; per mile the same fade is larger in magnitude
+    assert pace_fade_to_unit(60.0, "miles") == pytest.approx(60.0 * 1.609344)
 
 
 def test_date_rolling_average_matches_reference_with_duplicate_dates_and_gaps():

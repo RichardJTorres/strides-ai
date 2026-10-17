@@ -6,21 +6,38 @@ import statistics
 import httpx
 
 from . import db
+from .units import (
+    DEFAULT_UNIT_SYSTEM,
+    FEET_PER_METER,
+    KM_PER_MILE,
+    Quantity,
+    UnitSystem,
+    convert,
+    describe_for_prompt,
+    format_value,
+    unit_label,
+)
 
 log = logging.getLogger(__name__)
 
 STRAVA_STREAMS_URL = "https://www.strava.com/api/v3/activities/{id}/streams"
 STREAM_KEYS = "time,heartrate,velocity_smooth,cadence,altitude,watts"
 
-DEEP_DIVE_SYSTEM_PROMPT = """\
+# Thresholds are stored in SI. They were originally tuned in imperial, so each is written as
+# the conversion of that original number to keep behavior identical.
+HIGH_CLIMB_M_PER_KM = 100 / (FEET_PER_METER * KM_PER_MILE)  # 100 ft/mi
+PACE_FADE_NOTABLE_S_PER_KM = 15 / KM_PER_MILE  # 15 s/mi
+PACE_FADE_SPLIT_S_PER_KM = 30 / KM_PER_MILE  # 30 s/mi
+
+_DEEP_DIVE_SYSTEM_PROMPT_TEMPLATE = """\
 You are a coach performing a detailed analysis of a single training activity.
 
 The data table has these columns:
 - ELAPSED: time since the start of the activity in HH:MM:SS format (NOT a clock time)
-- PACE: running pace in min:sec per mile where LOWER numbers mean FASTER running, or SPEED: cycling speed in km/h
+- PACE: running pace in min:sec per {pace_unit} where LOWER numbers mean FASTER running, or SPEED: cycling speed in {speed_unit}
 - HR: heart rate in beats per minute (BPM)
 - CAD: cadence in steps per minute (running) or RPM (cycling)
-- ALT(m): altitude in metres above sea level
+- ALT({alt_unit}): altitude in {alt_name} above sea level
 - "-" in any column means the sensor did not record a value at that moment
 
 Rows appear at roughly 60-second intervals plus extra rows wherever HR or pace changed sharply.
@@ -34,8 +51,27 @@ Cover each of these dimensions, citing ELAPSED times for specific observations:
 4. Elevation: how do climbs and descents affect pace and heart rate?
 5. Fatigue signs: look for pace fade, HR spike, or cadence collapse in the final third.
 
-End with 3-5 specific, actionable coaching notes the athlete can apply to their next session.\
+End with 3-5 specific, actionable coaching notes the athlete can apply to their next session.
+
+Write all measurements in {units_desc}.\
 """
+
+
+def deep_dive_system_prompt(units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
+    imperial = UnitSystem.parse(units) is UnitSystem.IMPERIAL
+    return _DEEP_DIVE_SYSTEM_PROMPT_TEMPLATE.format(
+        pace_unit="mile" if imperial else "km",
+        speed_unit=unit_label(Quantity.SPEED, units),
+        alt_unit=unit_label(Quantity.ELEVATION, units),
+        alt_name="feet" if imperial else "metres",
+        units_desc=describe_for_prompt(units),
+    )
+
+
+def deep_dive_system_prompt_local(units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
+    return DEEP_DIVE_SYSTEM_PROMPT_LOCAL + (
+        f"\n\nWrite all measurements in {describe_for_prompt(units)}."
+    )
 
 
 DEEP_DIVE_SYSTEM_PROMPT_LOCAL = """\
@@ -163,9 +199,9 @@ def _hr_zones(hr: list, max_hr: int) -> dict[str, float] | None:
         return None
 
 
-def _pace_fade_seconds(velocity: list) -> float | None:
+def _pace_fade_s_per_km(velocity: list) -> float | None:
     """
-    Pace fade = last-third avg pace (s/mile) minus first-third avg pace (s/mile).
+    Pace fade = last-third avg pace (s/km) minus first-third avg pace (s/km).
     Positive = slowing, negative = negative split.
     Filters near-zero velocity (< 0.5 m/s).
     """
@@ -178,12 +214,10 @@ def _pace_fade_seconds(velocity: list) -> float | None:
         first_third = moving[:third]
         last_third = moving[-third:]
 
-        METERS_PER_MILE = 1609.34
+        def avg_pace_s_per_km(velocities: list) -> float:
+            return statistics.mean(1000 / v for v in velocities)
 
-        def avg_pace_s_per_mile(velocities: list) -> float:
-            return statistics.mean(METERS_PER_MILE / v for v in velocities)
-
-        return round(avg_pace_s_per_mile(last_third) - avg_pace_s_per_mile(first_third), 2)
+        return round(avg_pace_s_per_km(last_third) - avg_pace_s_per_km(first_third), 2)
     except Exception:
         return None
 
@@ -222,7 +256,7 @@ def _elevation_metrics(
     elevation_gain_m: float | None, distance_m: float
 ) -> tuple[float | None, int | None]:
     """
-    Compute elevation gain per mile (ft/mile) and high-elevation flag from the activity's
+    Compute climbing ratio (m gained per km) and high-elevation flag from the activity's
     summary elevation_gain_m (set at sync time from Strava's total_elevation_gain) — not the
     altitude stream. The stream is fetched fresh at analysis time and is often empty right after
     upload (Strava's elevation correction hasn't finished yet), which left this metric
@@ -233,11 +267,9 @@ def _elevation_metrics(
         if elevation_gain_m is None or distance_m <= 0:
             return None, None
 
-        gain_ft = elevation_gain_m * 3.28084
-        distance_miles = distance_m / 1609.34
-        per_mile = round(gain_ft / distance_miles, 2)
-        flag = 1 if per_mile > 100 else 0
-        return per_mile, flag
+        per_km = round(elevation_gain_m / (distance_m / 1000), 2)
+        flag = 1 if per_km > HIGH_CLIMB_M_PER_KM else 0
+        return per_km, flag
     except Exception:
         return None, None
 
@@ -294,7 +326,7 @@ def compute_metrics(streams: dict[str, list], activity: dict, max_hr: int = 190)
             metrics[f"hr_zone_{z}_pct"] = None
 
     # Pace fade
-    metrics["pace_fade_seconds"] = _pace_fade_seconds(velocity) if velocity else None
+    metrics["pace_fade_s_per_km"] = _pace_fade_s_per_km(velocity) if velocity else None
 
     # Cadence stats — note: key "avg_cadence" maps to existing DB column
     cadence_mean, cadence_std = _cadence_stats(cadence, is_run) if cadence else (None, None)
@@ -307,8 +339,8 @@ def compute_metrics(streams: dict[str, list], activity: dict, max_hr: int = 190)
     )
 
     # Elevation (from the activity summary field — see _elevation_metrics docstring)
-    elev_per_mile, elev_flag = _elevation_metrics(activity.get("elevation_gain_m"), distance_m)
-    metrics["elevation_per_mile"] = elev_per_mile
+    climb_m_per_km, elev_flag = _elevation_metrics(activity.get("elevation_gain_m"), distance_m)
+    metrics["climb_m_per_km"] = climb_m_per_km
     metrics["high_elevation_flag"] = elev_flag
 
     # Suffer score mismatch
@@ -324,10 +356,11 @@ def compute_metrics(streams: dict[str, list], activity: dict, max_hr: int = 190)
 # ── Natural language summary ──────────────────────────────────────────────────
 
 
-def build_analysis_summary(metrics: dict) -> str:
+def build_analysis_summary(metrics: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
     """
     Generate a rule-based 1-3 sentence natural language summary of a run.
-    Does not call any LLM.
+    Does not call any LLM. Deterministic, so it is re-rendered on read in the athlete's
+    current unit system (see ``render_analysis_summary``).
     """
     parts = []
 
@@ -365,12 +398,14 @@ def build_analysis_summary(metrics: dict) -> str:
             parts.append(f"Effort efficiency {eff:.0f}/100 — below average pace-for-HR output.")
 
     # Pace fade
-    pf = metrics.get("pace_fade_seconds")
-    if pf is not None and abs(pf) > 15:
+    pf = metrics.get("pace_fade_s_per_km")
+    if pf is not None and abs(pf) > PACE_FADE_NOTABLE_S_PER_KM:
+        fade = f"{convert(abs(pf), Quantity.PACE_DELTA, units):.0f}"
+        fade_unit = unit_label(Quantity.PACE_DELTA, units)
         if pf > 0:
-            parts.append(f"Positive pace fade of {pf:.0f}s/mile in final third.")
+            parts.append(f"Positive pace fade of {fade} {fade_unit} in final third.")
         else:
-            parts.append(f"Negative split — improved {abs(pf):.0f}s/mile in final third.")
+            parts.append(f"Negative split — improved {fade} {fade_unit} in final third.")
 
     # Cardiac decoupling — flag only when notable
     cd = metrics.get("cardiac_decoupling_pct")
@@ -382,9 +417,11 @@ def build_analysis_summary(metrics: dict) -> str:
 
     # Elevation
     if metrics.get("high_elevation_flag"):
-        elev = metrics.get("elevation_per_mile")
-        if elev is not None:
-            parts.append(f"Hilly course ({elev:.0f} ft/mile elevation gain).")
+        climb = metrics.get("climb_m_per_km")
+        if climb is not None:
+            parts.append(
+                f"Hilly course ({format_value(climb, Quantity.CLIMB_RATE, units)} elevation gain)."
+            )
 
     # Suffer score mismatch
     if metrics.get("suffer_score_mismatch_flag"):
@@ -394,6 +431,25 @@ def build_analysis_summary(metrics: dict) -> str:
         parts.append("Insufficient stream data for analysis summary.")
 
     return " ".join(parts)
+
+
+def render_analysis_summary(row: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str | None:
+    """The analysis summary for an activity row, in ``units``.
+
+    Stored summaries were rendered in whatever units were active at analysis time. Both
+    summary builders are deterministic, so completed analyses are rebuilt from the stored
+    metrics; anything else (skipped/pending/manual) returns the stored text unchanged.
+    """
+    stored = row.get("analysis_summary")
+    if row.get("analysis_status") != "done":
+        return stored
+    if row.get("sport_type") in db.LIFT_TYPES:
+        if not row.get("exercises_json"):
+            return stored
+        from .hevy_analysis import compute_hevy_metrics
+
+        return compute_hevy_metrics(row["exercises_json"], units).get("analysis_summary", stored)
+    return build_analysis_summary(row, units)
 
 
 # ── Top-level orchestrator ────────────────────────────────────────────────────
@@ -499,7 +555,10 @@ def analyze_activity(
 
 
 def condense_streams_for_deep_dive(
-    streams: dict[str, list], activity: dict, interval_s: int = 60
+    streams: dict[str, list],
+    activity: dict,
+    interval_s: int = 60,
+    units: UnitSystem = DEFAULT_UNIT_SYSTEM,
 ) -> str:
     """
     Format stream data as a compact text table for LLM deep-dive analysis.
@@ -517,7 +576,6 @@ def condense_streams_for_deep_dive(
     if n == 0:
         return "No stream data available."
 
-    METERS_PER_MILE = 1609.34
     sport_type = activity.get("sport_type", "")
     is_run = sport_type in db.RUN_TYPES
 
@@ -527,14 +585,12 @@ def condense_streams_for_deep_dive(
     def fmt_pace(v):
         if v is None or v <= 0:
             return "-"
-        pace_s = METERS_PER_MILE / v
-        m, s = divmod(int(pace_s), 60)
-        return f"{m}:{s:02d}/mi"
+        return format_value(1000 / v, Quantity.PACE, units)
 
     def fmt_speed(v):
         if v is None or v <= 0:
             return "-"
-        return f"{v * 3.6:.1f}km/h"
+        return format_value(v, Quantity.SPEED, units).replace(" ", "")
 
     def fmt_cadence(c):
         if c is None:
@@ -573,11 +629,12 @@ def condense_streams_for_deep_dive(
 
     # Build header
     pace_col = "PACE" if is_run else "SPEED"
+    alt_col = f"ALT({unit_label(Quantity.ELEVATION, units)})"
     lines = [
         f"Activity: {activity.get('name', 'Unknown')} | {activity.get('date', '')} | "
-        f"Distance: {(activity.get('distance_m') or 0) / 1609.34:.2f} mi",
+        f"Distance: {format_value(activity.get('distance_m') or 0, Quantity.DISTANCE, units)}",
         "",
-        f"{'ELAPSED':>8} | {pace_col:>9} | {'HR':>5} | {'CAD':>5} | {'ALT(m)':>7}",
+        f"{'ELAPSED':>8} | {pace_col:>9} | {'HR':>5} | {'CAD':>5} | {alt_col:>7}",
         "-" * 46,
     ]
 
@@ -586,7 +643,7 @@ def condense_streams_for_deep_dive(
         v = safe_get(velocity_stream, i)
 
         # Skip rows where the athlete is effectively stopped — velocity < 0.5 m/s
-        # produces extreme pace values (e.g. 268:13/mi) that confuse LLMs.
+        # produces extreme pace values (e.g. 268:13/km) that confuse LLMs.
         if v is not None and v < 0.5:
             continue
 
@@ -598,7 +655,7 @@ def condense_streams_for_deep_dive(
         pace_str = fmt_pace(v) if is_run else fmt_speed(v)
         hr_str = str(int(hr)) if hr else "-"
         cad_str = fmt_cadence(cad)
-        alt_str = f"{alt:.0f}" if alt is not None else "-"
+        alt_str = format_value(alt, Quantity.ELEVATION, units, with_label=False, empty="-")
 
         lines.append(f"{elapsed:>8} | {pace_str:>9} | {hr_str:>5} | {cad_str:>5} | {alt_str:>7}")
 
@@ -614,7 +671,9 @@ def condense_streams_for_deep_dive(
 # ── Pre-computed brief for local models ───────────────────────────────────────
 
 
-def build_precomputed_brief(streams: dict[str, list], activity: dict) -> str:
+def build_precomputed_brief(
+    streams: dict[str, list], activity: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM
+) -> str:
     """
     Derive key metrics from the stream data and return a structured prose brief.
 
@@ -622,8 +681,6 @@ def build_precomputed_brief(streams: dict[str, list], activity: dict) -> str:
     The model receives computed facts rather than raw data, reducing the task
     to generating coaching commentary instead of performing the analysis itself.
     """
-    METERS_PER_MILE = 1609.34
-
     time_s = streams.get("time", [])
     hr = streams.get("heartrate", [])
     velocity = streams.get("velocity_smooth", [])
@@ -632,7 +689,6 @@ def build_precomputed_brief(streams: dict[str, list], activity: dict) -> str:
     sport_type = activity.get("sport_type", "")
     is_run = sport_type in db.RUN_TYPES
     distance_m = activity.get("distance_m") or 0
-    distance_mi = distance_m / METERS_PER_MILE
 
     # Duration
     duration_s = time_s[-1] if time_s else (activity.get("moving_time_s") or 0)
@@ -647,9 +703,7 @@ def build_precomputed_brief(streams: dict[str, list], activity: dict) -> str:
     def _fmt_pace(v: float | None) -> str:
         if not v or v <= 0:
             return "-"
-        ps = METERS_PER_MILE / v
-        mm, ss = divmod(int(ps), 60)
-        return f"{mm}:{ss:02d}/mi"
+        return format_value(1000 / v, Quantity.PACE, units)
 
     def _mean(lst: list) -> float | None:
         return statistics.mean(lst) if lst else None
@@ -658,14 +712,15 @@ def build_precomputed_brief(streams: dict[str, list], activity: dict) -> str:
     avg_pace_str = _fmt_pace(_mean(moving_v))
     first_pace_str = _fmt_pace(_mean(moving_v[:third])) if len(moving_v) >= 3 else "-"
     last_pace_str = _fmt_pace(_mean(moving_v[-third:])) if len(moving_v) >= 3 else "-"
-    pace_fade = _pace_fade_seconds(velocity)
+    pace_fade = _pace_fade_s_per_km(velocity)
     if pace_fade is not None:
-        if pace_fade > 30:
-            fade_label = f"+{pace_fade:.0f} sec/mi (positive split — slowing)"
-        elif pace_fade < -30:
-            fade_label = f"{pace_fade:.0f} sec/mi (negative split — speeding up)"
+        fade = format_value(pace_fade, Quantity.PACE_DELTA, units)
+        if pace_fade > PACE_FADE_SPLIT_S_PER_KM:
+            fade_label = f"{fade} (positive split — slowing)"
+        elif pace_fade < -PACE_FADE_SPLIT_S_PER_KM:
+            fade_label = f"{fade} (negative split — speeding up)"
         else:
-            fade_label = f"{pace_fade:+.0f} sec/mi (even pace)"
+            fade_label = f"{fade} (even pace)"
     else:
         fade_label = "-"
 
@@ -715,17 +770,18 @@ def build_precomputed_brief(streams: dict[str, list], activity: dict) -> str:
 
     # Elevation
     elev_gain_m = activity.get("elevation_gain_m") or 0
-    elev_per_mile, _ = _elevation_metrics(activity.get("elevation_gain_m"), distance_m)
-    elev_str = f"{elev_gain_m:.0f}m total gain"
-    if elev_per_mile:
-        elev_str += f" ({elev_per_mile:.0f} ft/mi)"
+    climb_m_per_km, _ = _elevation_metrics(activity.get("elevation_gain_m"), distance_m)
+    elev_str = f"{format_value(elev_gain_m, Quantity.ELEVATION, units)} total gain"
+    if climb_m_per_km:
+        elev_str += f" ({format_value(climb_m_per_km, Quantity.CLIMB_RATE, units)})"
 
     sport_label = "Running" if is_run else "Cycling"
     pace_label = "Pace" if is_run else "Speed"
 
     lines = [
         f"Activity: {activity.get('name', 'Unknown')} | {activity.get('date', '')}",
-        f"Sport: {sport_label} | Distance: {distance_mi:.2f} mi | Duration: {duration_str}",
+        f"Sport: {sport_label} | Distance: {format_value(distance_m, Quantity.DISTANCE, units)} | "
+        f"Duration: {duration_str}",
         "",
         "Pre-computed metrics:",
         f"- Avg {pace_label}: {avg_pace_str} | First third: {first_pace_str} | Last third: {last_pace_str} | Trend: {fade_label}",

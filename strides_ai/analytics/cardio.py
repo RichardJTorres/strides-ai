@@ -396,8 +396,8 @@ def compute_pace_fade_trend(
         title="Pace Fade Trend",
         unit=f"sec/{_unit_label(unit)}",
         extract=lambda a: (
-            pace_fade_to_unit(a.pace_fade_seconds, unit)
-            if a.pace_fade_seconds is not None
+            pace_fade_to_unit(a.pace_fade_s_per_km, unit)
+            if a.pace_fade_s_per_km is not None
             else None
         ),
     )

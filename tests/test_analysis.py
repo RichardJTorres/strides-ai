@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from strides_ai.analysis import (
+    HIGH_CLIMB_M_PER_KM,
     RateLimitError,
     _cadence_stats,
     _cardiac_decoupling,
@@ -12,7 +13,7 @@ from strides_ai.analysis import (
     _elevation_metrics,
     _fetch_streams,
     _hr_zones,
-    _pace_fade_seconds,
+    _pace_fade_s_per_km,
     _process_streams,
     _suffer_mismatch,
     analyze_activity,
@@ -22,7 +23,6 @@ from strides_ai.analysis import (
     fetch_activity_streams,
 )
 from strides_ai import db
-
 
 # ── _cardiac_decoupling ───────────────────────────────────────────────────────
 
@@ -122,43 +122,43 @@ def test_hr_zones_zone_boundaries():
     assert zones_above["hr_zone_3_pct"] == pytest.approx(100.0)
 
 
-# ── _pace_fade_seconds ────────────────────────────────────────────────────────
+# ── _pace_fade_s_per_km ────────────────────────────────────────────────────────
 
 
 def test_pace_fade_slowing():
     # 3 m/s in first third, 2 m/s in last third
-    # pace at 3 m/s = 1609.34/3 ≈ 536.4 s/mile
-    # pace at 2 m/s = 1609.34/2 ≈ 804.7 s/mile
-    # fade ≈ 268 s/mile (positive = slowing)
+    # pace at 3 m/s = 1000/3 ≈ 333.3 s/km
+    # pace at 2 m/s = 1000/2 = 500 s/km
+    # fade ≈ 167 s/km (positive = slowing)
     velocity = [3.0] * 30 + [2.5] * 30 + [2.0] * 30
-    result = _pace_fade_seconds(velocity)
+    result = _pace_fade_s_per_km(velocity)
     assert result is not None
-    assert result > 200  # positive = slowing
+    assert result > 150  # positive = slowing
 
 
 def test_pace_fade_negative_split():
     velocity = [2.0] * 30 + [2.5] * 30 + [3.0] * 30
-    result = _pace_fade_seconds(velocity)
+    result = _pace_fade_s_per_km(velocity)
     assert result is not None
-    assert result < -100  # negative = faster in final third
+    assert result < -60  # negative = faster in final third
 
 
 def test_pace_fade_steady_pace():
     velocity = [3.0] * 90
-    result = _pace_fade_seconds(velocity)
+    result = _pace_fade_s_per_km(velocity)
     assert result == pytest.approx(0.0, abs=1.0)
 
 
 def test_pace_fade_filters_near_zero():
     # Stops should be excluded
     velocity = [0.0] * 10 + [3.0] * 30 + [2.5] * 30 + [2.0] * 30
-    result = _pace_fade_seconds(velocity)
+    result = _pace_fade_s_per_km(velocity)
     assert result is not None
     assert result > 0
 
 
 def test_pace_fade_too_few_samples_returns_none():
-    assert _pace_fade_seconds([3.0] * 5) is None
+    assert _pace_fade_s_per_km([3.0] * 5) is None
 
 
 # ── _cadence_stats ────────────────────────────────────────────────────────────
@@ -239,17 +239,17 @@ def test_elevation_metrics_flat():
 
 
 def test_elevation_metrics_hilly():
-    # 400m gain over exactly 2 miles (3218.68m) -> 400*3.28084/2 = 656.17 ft/mile
-    per_mile, flag = _elevation_metrics(elevation_gain_m=400.0, distance_m=3218.68)
-    assert per_mile == pytest.approx(656.17, abs=0.1)
+    # 400m gain over 3.21868 km -> 124.27 m/km (656 ft/mi)
+    per_km, flag = _elevation_metrics(elevation_gain_m=400.0, distance_m=3218.68)
+    assert per_km == pytest.approx(124.27, abs=0.1)
     assert flag == 1
 
 
 def test_elevation_metrics_high_elevation_flag():
-    # 200m (656 ft) gain over 1 mile (1609.34m) = 656 ft/mile -> flag
-    per_mile, flag = _elevation_metrics(elevation_gain_m=200.0, distance_m=1609.34)
-    assert per_mile is not None
-    assert per_mile > 100
+    # 200m gain over 1 mile (1609.34m) = 124 m/km (656 ft/mi) -> flag
+    per_km, flag = _elevation_metrics(elevation_gain_m=200.0, distance_m=1609.34)
+    assert per_km is not None
+    assert per_km > HIGH_CLIMB_M_PER_KM
     assert flag == 1
 
 
@@ -311,7 +311,7 @@ def test_summary_strong_aerobic():
         "hr_zone_3_pct": 10.0,
         "hr_zone_4_pct": 3.0,
         "hr_zone_5_pct": 2.0,
-        "pace_fade_seconds": 5.0,
+        "pace_fade_s_per_km": 5.0,
         "high_elevation_flag": 0,
         "suffer_score_mismatch_flag": 0,
     }
@@ -330,7 +330,7 @@ def test_summary_high_cardiac_stress():
         "hr_zone_3_pct": 15.0,
         "hr_zone_4_pct": 35.0,
         "hr_zone_5_pct": 35.0,
-        "pace_fade_seconds": 0.0,
+        "pace_fade_s_per_km": 0.0,
         "high_elevation_flag": 0,
         "suffer_score_mismatch_flag": 0,
     }
@@ -349,7 +349,7 @@ def test_summary_includes_pace_fade_when_significant():
         "hr_zone_3_pct": 10.0,
         "hr_zone_4_pct": 5.0,
         "hr_zone_5_pct": 5.0,
-        "pace_fade_seconds": 30.0,
+        "pace_fade_s_per_km": 30.0,
         "high_elevation_flag": 0,
         "suffer_score_mismatch_flag": 0,
     }
@@ -361,7 +361,7 @@ def test_summary_includes_pace_fade_when_significant():
 def test_summary_ignores_small_pace_fade():
     metrics = {
         "cardiac_decoupling_pct": 4.0,
-        "pace_fade_seconds": 5.0,
+        "pace_fade_s_per_km": 5.0,
         "hr_zone_1_pct": 60.0,
         "hr_zone_2_pct": 30.0,
         "hr_zone_3_pct": 5.0,
@@ -383,9 +383,9 @@ def test_summary_hilly_course():
         "hr_zone_3_pct": 10.0,
         "hr_zone_4_pct": 5.0,
         "hr_zone_5_pct": 5.0,
-        "pace_fade_seconds": 0.0,
+        "pace_fade_s_per_km": 0.0,
         "high_elevation_flag": 1,
-        "elevation_per_mile": 150.0,
+        "climb_m_per_km": 150.0,
         "suffer_score_mismatch_flag": 0,
     }
     summary = build_analysis_summary(metrics)
@@ -400,7 +400,7 @@ def test_summary_mismatch_warning():
         "hr_zone_3_pct": 10.0,
         "hr_zone_4_pct": 5.0,
         "hr_zone_5_pct": 5.0,
-        "pace_fade_seconds": 0.0,
+        "pace_fade_s_per_km": 0.0,
         "high_elevation_flag": 0,
         "suffer_score_mismatch_flag": 1,
     }
@@ -416,7 +416,7 @@ def test_summary_no_cardiac_data():
         "hr_zone_3_pct": None,
         "hr_zone_4_pct": None,
         "hr_zone_5_pct": None,
-        "pace_fade_seconds": None,
+        "pace_fade_s_per_km": None,
         "high_elevation_flag": 0,
         "suffer_score_mismatch_flag": None,
     }
@@ -446,12 +446,12 @@ def test_compute_metrics_full_streams():
     metrics = compute_metrics(streams, activity, max_hr=190)
     assert "cardiac_decoupling_pct" in metrics
     assert "hr_zone_1_pct" in metrics
-    assert "pace_fade_seconds" in metrics
+    assert "pace_fade_s_per_km" in metrics
     assert "avg_cadence" in metrics  # maps to existing DB column
     assert "cadence_std_dev" in metrics
     assert "effort_efficiency_raw" in metrics
     # computed from the activity summary field, not a stream -- no altitude stream needed
-    assert metrics["elevation_per_mile"] is not None
+    assert metrics["climb_m_per_km"] is not None
     assert "high_elevation_flag" in metrics
 
 
@@ -470,7 +470,7 @@ def test_compute_metrics_elevation_does_not_need_altitude_stream():
         "elevation_gain_m": 200.0,  # 656 ft -> 656 ft/mile
     }
     metrics = compute_metrics(streams, activity, max_hr=190)
-    assert metrics["elevation_per_mile"] == pytest.approx(656.17, abs=0.1)
+    assert metrics["climb_m_per_km"] == pytest.approx(124.27, abs=0.1)
     assert metrics["high_elevation_flag"] == 1
 
 

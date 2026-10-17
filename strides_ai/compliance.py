@@ -28,6 +28,7 @@ from enum import Enum
 from typing import Optional
 
 from .activity_types import CYCLE_TYPES, RUN_TYPES
+from .units import DEFAULT_UNIT_SYSTEM, Quantity, UnitSystem, format_value
 
 # Mirrors web/src/pages/Calendar.tsx's WORKOUT_TYPE_GROUPS — keep in sync; drift falls back to
 # SportGroup.AMBIGUOUS (presence-only matching), never crashes or misclassifies.
@@ -137,6 +138,7 @@ def compute_day_compliance(
     planned: PlannedWorkout,
     same_day_activities: list[ComplianceActivity],
     today: date,
+    units: UnitSystem = DEFAULT_UNIT_SYSTEM,
 ) -> DayCompliance:
     group = classify_workout_type(planned.workout_type)
     qualifying = _qualifying(group, same_day_activities)
@@ -187,9 +189,11 @@ def compute_day_compliance(
             )
         else:
             status = ComplianceStatus.MODIFIED
+            actual = format_value(actual_km * 1000, Quantity.DISTANCE, units, decimals=1)
+            target = format_value(planned.distance_km * 1000, Quantity.DISTANCE, units, decimals=1)
             note = (
-                f"Matching-sport activity found but {actual_km:.1f}km vs planned "
-                f"{planned.distance_km:.1f}km (below {int(DISTANCE_SHORTFALL_TOLERANCE * 100)}% target)"
+                f"Matching-sport activity found but {actual} vs planned {target} "
+                f"(below {int(DISTANCE_SHORTFALL_TOLERANCE * 100)}% target)"
             )
         return day(status, actual_km, note)
 
@@ -203,6 +207,7 @@ def compute_range_compliance(
     planned_workouts: list[PlannedWorkout],
     activities: list[ComplianceActivity],
     today: date,
+    units: UnitSystem = DEFAULT_UNIT_SYSTEM,
 ) -> list[DayCompliance]:
     """One DayCompliance per input PlannedWorkout. Does not deduplicate by date — correctness
     for 'at most one planned workout per date' is guaranteed upstream by training_plan.date
@@ -211,7 +216,9 @@ def compute_range_compliance(
     by_date: dict[date, list[ComplianceActivity]] = defaultdict(list)
     for a in activities:
         by_date[a.date].append(a)
-    return [compute_day_compliance(p, by_date.get(p.date, []), today) for p in planned_workouts]
+    return [
+        compute_day_compliance(p, by_date.get(p.date, []), today, units) for p in planned_workouts
+    ]
 
 
 def summarize_compliance(days: list[DayCompliance]) -> ComplianceSummary:

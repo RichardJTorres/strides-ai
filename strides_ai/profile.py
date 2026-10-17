@@ -3,6 +3,8 @@
 import copy
 
 from .modes import MODES
+from .body_metrics import normalize_personal
+from .units import DEFAULT_UNIT_SYSTEM, Quantity, UnitSystem, format_value
 
 # ── Per-mode default field schemas ────────────────────────────────────────────
 
@@ -11,8 +13,8 @@ RUNNING_DEFAULTS: dict = {
         "name": "",
         "gender": "",
         "date_of_birth": "",
-        "height": "",
-        "weight": "",
+        "height_cm": None,
+        "weight_kg": None,
         "max_hr": "",
     },
     "running_background": {
@@ -40,8 +42,8 @@ CYCLING_DEFAULTS: dict = {
         "name": "",
         "gender": "",
         "date_of_birth": "",
-        "height": "",
-        "weight": "",
+        "height_cm": None,
+        "weight_kg": None,
         "max_hr": "",
     },
     "cycling_background": {
@@ -69,8 +71,8 @@ HYBRID_DEFAULTS: dict = {
         "name": "",
         "gender": "",
         "date_of_birth": "",
-        "height": "",
-        "weight": "",
+        "height_cm": None,
+        "weight_kg": None,
         "max_hr": "",
     },
     "running_background": {
@@ -108,8 +110,8 @@ LIFTING_DEFAULTS: dict = {
         "name": "",
         "gender": "",
         "date_of_birth": "",
-        "height": "",
-        "weight": "",
+        "height_cm": None,
+        "weight_kg": None,
     },
     "lifting_background": {
         "lifting_since": "",
@@ -159,14 +161,16 @@ def _section(title: str, lines: list[str]) -> str:
 # ── Per-section renderers ──────────────────────────────────────────────────────
 
 
-def _render_personal(fields: dict) -> str:
-    p = fields.get("personal", {})
+def _render_personal(fields: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
+    p = normalize_personal(fields.get("personal", {}))
+    height, weight = p.get("height_cm"), p.get("weight_kg")
     lines = [
         f"Name: {_v(p.get('name'))}" if _v(p.get("name")) else "",
         f"Gender: {_v(p.get('gender'))}" if _v(p.get("gender")) else "",
         f"Date of birth: {_v(p.get('date_of_birth'))}" if _v(p.get("date_of_birth")) else "",
-        f"Height: {_v(p.get('height'))}" if _v(p.get("height")) else "",
-        f"Weight: {_v(p.get('weight'))}" if _v(p.get("weight")) else "",
+        f"Height: {format_value(height, Quantity.HEIGHT, units)}" if height else "",
+        f"Weight: {format_value(weight, Quantity.MASS, units, decimals=1)}" if weight else "",
+        f"Body notes: {_v(p.get('body_notes'))}" if _v(p.get("body_notes")) else "",
         f"Max heart rate: {_v(p.get('max_hr'))} bpm" if _v(p.get("max_hr")) else "",
     ]
     return _section("Personal", lines)
@@ -354,7 +358,7 @@ _SECTION_RENDERERS: dict[str, Callable[[dict], str]] = {
 }
 
 
-def profile_to_text(fields: dict | None, mode: str) -> str:
+def profile_to_text(fields: dict | None, mode: str, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
     """Convert a profile fields dict to readable text for the system prompt.
 
     Only non-empty fields are emitted. Returns "" if fields is None or all blank.
@@ -367,7 +371,7 @@ def profile_to_text(fields: dict | None, mode: str) -> str:
     for key in cfg.profile_section_keys:
         renderer = _SECTION_RENDERERS.get(key)
         if renderer:
-            rendered = renderer(fields)
+            rendered = renderer(fields, units) if key == "personal" else renderer(fields)
             if rendered:
                 sections.append(rendered)
 

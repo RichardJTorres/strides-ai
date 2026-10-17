@@ -16,6 +16,15 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .db.models import CYCLE_TYPES, LIFT_TYPES, RUN_TYPES
+from .units import (
+    DEFAULT_UNIT_SYSTEM,
+    Quantity,
+    UnitSystem,
+    convert,
+    format_speed_from_pace,
+    format_value,
+    unit_label,
+)
 
 # ── System prompts ─────────────────────────────────────────────────────────────
 
@@ -29,7 +38,6 @@ provided recent activity details and historical aggregates. Your role is to:
 injury prevention, and periodisation.
 - Be concise but thorough. When referencing specific runs, cite the date and \
 key metrics (distance, pace, HR).
-- Use metric units (km, min/km) unless the athlete asks otherwise.
 - When advising on nutrition for a run, suggest a concrete sample loadout \
 (e.g. "2 gels, 1 granola bar, 500 ml electrolytes"). If the athlete has listed \
 preferred snacks in their profile, choose from those; otherwise use sensible \
@@ -57,7 +65,6 @@ provided recent activity details and historical aggregates. Your role is to:
 injury prevention, and periodisation for cyclists.
 - Be concise but thorough. When referencing specific rides, cite the date and \
 key metrics (distance, speed, HR).
-- Use metric units (km, km/h) unless the athlete asks otherwise.
 - When advising on nutrition for a ride, suggest a concrete sample loadout \
 (e.g. "2 gels, 1 energy bar, 750 ml electrolytes"). If the athlete has listed \
 preferred snacks in their profile, choose from those; otherwise use sensible \
@@ -85,7 +92,6 @@ provided recent activity details and historical aggregates for running and cycli
 pacing, recovery, race preparation, injury prevention, and periodisation.
 - Be concise but thorough. When referencing specific activities, cite the date, \
 sport type, and key metrics.
-- Use metric units unless the athlete asks otherwise.
 - When advising on nutrition for any activity, suggest a concrete sample loadout \
 (e.g. "2 gels, 1 granola bar, 500 ml electrolytes"). If the athlete has listed \
 preferred snacks in their profile, choose from those; otherwise use sensible \
@@ -109,7 +115,6 @@ provided recent strength activity details and historical aggregates. Your role i
 injury prevention, deload timing, and exercise selection.
 - Be concise but thorough. When referencing specific sessions, cite the date and \
 key metrics (exercises, volume, RPE, estimated 1RM).
-- Use metric units (kg) unless the athlete asks otherwise.
 - When estimating 1-rep maxes, use the Epley formula (weight × (1 + reps/30)) and \
 note it is an estimate.
 
@@ -129,19 +134,24 @@ persist across sessions.\
 # ── Training log format helpers ────────────────────────────────────────────────
 
 
-def _format_pace(s_per_km: float | None) -> str:
-    if s_per_km is None:
-        return "—"
-    mins = int(s_per_km // 60)
-    secs = int(s_per_km % 60)
-    return f"{mins}:{secs:02d}/km"
+def _format_pace(s_per_km: float | None, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
+    return format_value(s_per_km, Quantity.PACE, units)
 
 
-def _format_speed(s_per_km: float | None) -> str:
-    if s_per_km is None or s_per_km <= 0:
-        return "—"
-    kph = 3600 / s_per_km
-    return f"{kph:.1f}km/h"
+def _format_speed(s_per_km: float | None, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
+    return format_speed_from_pace(s_per_km, units)
+
+
+def _num(value: float | None, qty: Quantity, units: UnitSystem, decimals: int) -> str:
+    """Bare converted number for a fixed-width log column (unit lives in the header)."""
+    shown = convert(value, qty, units)
+    return "—" if shown is None else f"{shown:.{decimals}f}"
+
+
+def _summary(r: dict, units: UnitSystem) -> str:
+    from .analysis import render_analysis_summary
+
+    return (render_analysis_summary(r, units) or "")[:60]
 
 
 def _format_duration(seconds: int | None) -> str:
@@ -157,93 +167,98 @@ def _format_duration(seconds: int | None) -> str:
 # ── Per-mode log row formatters ────────────────────────────────────────────────
 
 
-def _running_log_row(r: dict) -> str:
-    dist_km = (r["distance_m"] or 0) / 1000
-    analysis = (r.get("analysis_summary") or "")[:60]
+def _running_log_row(r: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
+    dist = _num(r["distance_m"] or 0, Quantity.DISTANCE, units, 2)
+    analysis = _summary(r, units)
     return (
         f"{r['date'] or '?':10s} | "
         f"{(r['name'] or '')[:30]:30s} | "
-        f"{dist_km:8.2f} | "
+        f"{dist:>8} | "
         f"{_format_duration(r['moving_time_s']):8s} | "
-        f"{_format_pace(r['avg_pace_s_per_km']):8s} | "
+        f"{_format_pace(r['avg_pace_s_per_km'], units):8s} | "
         f"{r['avg_hr'] or '—':6} | "
         f"{r['max_hr'] or '—':6} | "
         f"{r['avg_cadence'] or '—':12} | "
-        f"{r['elevation_gain_m'] or '—':7} | "
+        f"{_num(r['elevation_gain_m'], Quantity.ELEVATION, units, 0):>7} | "
         f"{r['suffer_score'] or '—':6} | "
         f"{r['perceived_exertion'] or '—':3} | "
         f"{analysis}"
     )
 
 
-def _cycling_log_row(r: dict) -> str:
-    dist_km = (r["distance_m"] or 0) / 1000
-    analysis = (r.get("analysis_summary") or "")[:60]
+def _cycling_log_row(r: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
+    dist = _num(r["distance_m"] or 0, Quantity.DISTANCE, units, 2)
+    analysis = _summary(r, units)
     return (
         f"{r['date'] or '?':10s} | "
         f"{(r['name'] or '')[:30]:30s} | "
-        f"{dist_km:8.2f} | "
+        f"{dist:>8} | "
         f"{_format_duration(r['moving_time_s']):8s} | "
-        f"{_format_speed(r['avg_pace_s_per_km']):8s} | "
+        f"{_format_speed(r['avg_pace_s_per_km'], units):9s} | "
         f"{r['avg_hr'] or '—':6} | "
         f"{r['max_hr'] or '—':6} | "
         f"{r['avg_cadence'] or '—':12} | "
-        f"{r['elevation_gain_m'] or '—':7} | "
+        f"{_num(r['elevation_gain_m'], Quantity.ELEVATION, units, 0):>7} | "
         f"{r['suffer_score'] or '—':6} | "
         f"{r['perceived_exertion'] or '—':3} | "
         f"{analysis}"
     )
 
 
-def _hybrid_log_row(r: dict) -> str:
-    dist_km = (r["distance_m"] or 0) / 1000
+def _hybrid_log_row(r: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
+    dist = _num(r["distance_m"] or 0, Quantity.DISTANCE, units, 2)
     sport = r["sport_type"] or ""
     is_run = sport in RUN_TYPES
     pace_speed = (
-        _format_pace(r["avg_pace_s_per_km"]) if is_run else _format_speed(r["avg_pace_s_per_km"])
+        _format_pace(r["avg_pace_s_per_km"], units)
+        if is_run
+        else _format_speed(r["avg_pace_s_per_km"], units)
     )
-    analysis = (r.get("analysis_summary") or "")[:60]
+    analysis = _summary(r, units)
     return (
         f"{r['date'] or '?':10s} | "
         f"{sport[:10]:10s} | "
         f"{(r['name'] or '')[:30]:30s} | "
-        f"{dist_km:8.2f} | "
+        f"{dist:>8} | "
         f"{_format_duration(r['moving_time_s']):8s} | "
         f"{pace_speed:11s} | "
         f"{r['avg_hr'] or '—':6} | "
         f"{r['max_hr'] or '—':6} | "
         f"{r['avg_cadence'] or '—':7} | "
-        f"{r['elevation_gain_m'] or '—':7} | "
+        f"{_num(r['elevation_gain_m'], Quantity.ELEVATION, units, 0):>7} | "
         f"{r['suffer_score'] or '—':6} | "
         f"{r['perceived_exertion'] or '—':3} | "
         f"{analysis}"
     )
 
 
-def _lifting_log_row(r: dict) -> str:
-    analysis = (r.get("analysis_summary") or "")[:60]
+def _lifting_log_row(r: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
+    analysis = _summary(r, units)
     return (
         f"{r['date'] or '?':10s} | "
         f"{(r['name'] or '')[:30]:30s} | "
         f"{_format_duration(r['moving_time_s']):8s} | "
         f"{r['total_sets'] or '—':4} | "
-        f"{r['total_volume_kg'] or '—':10} | "
+        f"{_num(r['total_volume_kg'], Quantity.MASS, units, 0):>10} | "
         f"{r['perceived_exertion'] or '—':3} | "
         f"{analysis}"
     )
 
 
-def _make_cardio_total(label: str) -> Callable[[list[dict]], str]:
-    def total(rows: list[dict]) -> str:
-        total_km = sum((r["distance_m"] or 0) / 1000 for r in rows)
-        return f"Total: {len(rows)} {label}, {total_km:.1f} km"
+def _make_cardio_total(label: str) -> Callable[[list[dict], UnitSystem], str]:
+    def total(rows: list[dict], units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
+        total_m = sum((r["distance_m"] or 0) for r in rows)
+        return f"Total: {len(rows)} {label}, {format_value(total_m, Quantity.DISTANCE, units, decimals=1)}"
 
     return total
 
 
-def _lifting_log_total(rows: list[dict]) -> str:
+def _lifting_log_total(rows: list[dict], units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
     total_volume = sum((r["total_volume_kg"] or 0) for r in rows)
-    return f"Total: {len(rows)} sessions, {total_volume:.0f} kg cumulative volume"
+    return (
+        f"Total: {len(rows)} sessions, "
+        f"{format_value(total_volume, Quantity.MASS, units)} cumulative volume"
+    )
 
 
 # ── ModeConfig ─────────────────────────────────────────────────────────────────
@@ -257,11 +272,18 @@ class ModeConfig:
     has_analysis: bool  # whether to inject the cardio metrics guide
     hidden_tabs: frozenset[str]  # frontend tabs to hide for this mode
     activity_label: str  # "runs", "rides", "sessions", "activities"
-    log_header: str  # column header row for training log
+    log_header_template: str  # column header row; {dist}/{elev}/{mass} are unit placeholders
     log_sep_len: int  # length of the separator line
-    format_log_row: Callable[[dict], str]
-    format_log_total: Callable[[list[dict]], str]
+    format_log_row: Callable[[dict, UnitSystem], str]
+    format_log_total: Callable[[list[dict], UnitSystem], str]
     profile_section_keys: list[str]  # ordered section keys for profile_to_text
+
+    def log_header(self, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
+        return self.log_header_template.format(
+            dist=f"DIST({unit_label(Quantity.DISTANCE, units)})",
+            elev=f"ELEV({unit_label(Quantity.ELEVATION, units)})",
+            mass=f"VOLUME({unit_label(Quantity.MASS, units)})",
+        )
 
 
 MODES: dict[str, ModeConfig] = {
@@ -272,9 +294,9 @@ MODES: dict[str, ModeConfig] = {
         has_analysis=True,
         hidden_tabs=frozenset(),
         activity_label="runs",
-        log_header=(
-            "DATE       | NAME                           | DIST(km) | DURATION | PACE     "
-            "| AVG HR | MAX HR | CADENCE(spm) | ELEV(m) | SUFFER | RPE | ANALYSIS"
+        log_header_template=(
+            "DATE       | NAME                           | {dist:8} | DURATION | PACE     "
+            "| AVG HR | MAX HR | CADENCE(spm) | {elev:7} | SUFFER | RPE | ANALYSIS"
         ),
         log_sep_len=200,
         format_log_row=_running_log_row,
@@ -297,9 +319,9 @@ MODES: dict[str, ModeConfig] = {
         has_analysis=True,
         hidden_tabs=frozenset(),
         activity_label="rides",
-        log_header=(
-            "DATE       | NAME                           | DIST(km) | DURATION | SPEED    "
-            "| AVG HR | MAX HR | CADENCE(rpm) | ELEV(m) | SUFFER | RPE | ANALYSIS"
+        log_header_template=(
+            "DATE       | NAME                           | {dist:8} | DURATION | SPEED     "
+            "| AVG HR | MAX HR | CADENCE(rpm) | {elev:7} | SUFFER | RPE | ANALYSIS"
         ),
         log_sep_len=200,
         format_log_row=_cycling_log_row,
@@ -322,9 +344,9 @@ MODES: dict[str, ModeConfig] = {
         has_analysis=True,
         hidden_tabs=frozenset(),
         activity_label="activities",
-        log_header=(
-            "DATE       | TYPE       | NAME                           | DIST(km) | DURATION "
-            "| PACE/SPEED  | AVG HR | MAX HR | CADENCE | ELEV(m) | SUFFER | RPE | ANALYSIS"
+        log_header_template=(
+            "DATE       | TYPE       | NAME                           | {dist:8} | DURATION "
+            "| PACE/SPEED  | AVG HR | MAX HR | CADENCE | {elev:7} | SUFFER | RPE | ANALYSIS"
         ),
         log_sep_len=215,
         format_log_row=_hybrid_log_row,
@@ -349,8 +371,8 @@ MODES: dict[str, ModeConfig] = {
         has_analysis=False,
         hidden_tabs=frozenset({"calendar"}),
         activity_label="sessions",
-        log_header=(
-            "DATE       | NAME                           | DURATION | SETS | VOLUME(kg) | RPE | ANALYSIS"
+        log_header_template=(
+            "DATE       | NAME                           | DURATION | SETS | {mass:10} | RPE | ANALYSIS"
         ),
         log_sep_len=140,
         format_log_row=_lifting_log_row,

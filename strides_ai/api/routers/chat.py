@@ -18,6 +18,7 @@ from ...config import MAX_FILE_BYTES, SUPPORTED_IMAGE_TYPES, UPLOADS_DIR
 from ...db import activities as act_crud
 from ...db import memories as mem_crud
 from ...db import profiles as prof_crud
+from ...db import settings as settings_crud
 from ...db.engine import get_session
 from ...profile import profile_to_text
 from ..conversations import ConversationCoordinator
@@ -65,7 +66,8 @@ def _build_chat_system(session: Session, mode: str) -> str:
     """Assemble the full system prompt from DB state."""
     memories = mem_crud.get_all(session)
     profile_fields = prof_crud.get_fields(session, mode)
-    profile = profile_to_text(profile_fields, mode)
+    units = settings_crud.get_unit_system(session)
+    profile = profile_to_text(profile_fields, mode, units)
     coach_voice = (profile_fields or {}).get("coach_voice", "")
     activities = [r.model_dump() for r in act_crud.get_all(session)]
     return build_system(
@@ -74,6 +76,7 @@ def _build_chat_system(session: Session, mode: str) -> str:
         mode=mode,
         activities=activities,
         coach_voice=coach_voice,
+        units=units,
     )
 
 
@@ -123,7 +126,14 @@ async def chat(
             activity = act_crud.get(session, activity_id)
             if activity is None:
                 raise HTTPException(status_code=404, detail=f"Activity {activity_id} not found")
-            llm_blocks.append({"type": "text", "text": build_activity_card(activity.model_dump())})
+            llm_blocks.append(
+                {
+                    "type": "text",
+                    "text": build_activity_card(
+                        activity.model_dump(), settings_crud.get_unit_system(session)
+                    ),
+                }
+            )
             db_parts.append(f"📎 Activity: {activity.name or 'Untitled'} ({activity.date or '?'})")
 
         saved_message = message

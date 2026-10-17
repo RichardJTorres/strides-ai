@@ -35,7 +35,7 @@ class CardioAnalyticsActivity:
     avg_cadence: Optional[float]
     hr_zone_pct: Optional[dict[str, float]]
     cardiac_decoupling_pct: Optional[float]
-    pace_fade_seconds: Optional[float]  # stored unit: sec/mile, fixed by the analysis pipeline
+    pace_fade_s_per_km: Optional[float]
 
 
 class UnavailableReason(str, Enum):

@@ -1,16 +1,60 @@
 """SQLModel table definitions."""
 
-from typing import Optional
+from typing import Any, ClassVar, Optional
 
 import sqlalchemy as sa
 from sqlmodel import Column, Field, SQLModel
 
 # Re-export groupings for existing callers; the canonical taxonomy is source-independent.
 from ..activity_types import CYCLE_TYPES, LIFT_TYPES, RUN_TYPES, SportType
+from ..units import Measurement, Quantity, UnitSystem, measure
+
+# field name -> (quantity, scale from the stored value to the quantity's canonical SI unit)
+MeasurementSpec = dict[str, tuple[Quantity, float]]
 
 
-class Activity(SQLModel, table=True):
+class MeasuredModel:
+    """Mixin for models that store measurements.
+
+    Each subclass declares ``__measurements__`` so its own fields say what unit they hold.
+    The helpers work on model instances and, via the classmethods, on plain row dicts (the
+    coach formatters pass ``model_dump()`` dicts around).
+    """
+
+    __measurements__: ClassVar[MeasurementSpec] = {}
+
+    @classmethod
+    def measure_field(
+        cls, row: dict[str, Any], field: str, system: UnitSystem
+    ) -> Measurement | None:
+        qty, scale = cls.__measurements__[field]
+        return measure(row.get(field), qty, system, scale=scale)
+
+    @classmethod
+    def measure_row(cls, row: dict[str, Any], system: UnitSystem) -> dict[str, Measurement]:
+        return {
+            f: m
+            for f in cls.__measurements__
+            if (m := cls.measure_field(row, f, system)) is not None
+        }
+
+    def measurement(self, field: str, system: UnitSystem) -> Measurement | None:
+        return self.measure_field({field: getattr(self, field)}, field, system)
+
+    def measurements(self, system: UnitSystem) -> dict[str, Measurement]:
+        return self.measure_row({f: getattr(self, f) for f in self.__measurements__}, system)
+
+
+class Activity(MeasuredModel, SQLModel, table=True):
     __tablename__ = "activities"
+    __measurements__: ClassVar[MeasurementSpec] = {
+        "distance_m": (Quantity.DISTANCE, 1.0),
+        "elevation_gain_m": (Quantity.ELEVATION, 1.0),
+        "avg_pace_s_per_km": (Quantity.PACE, 1.0),
+        "pace_fade_s_per_km": (Quantity.PACE_DELTA, 1.0),
+        "climb_m_per_km": (Quantity.CLIMB_RATE, 1.0),
+        "total_volume_kg": (Quantity.MASS, 1.0),
+    }
 
     id: int = Field(primary_key=True)
     name: Optional[str] = None
@@ -36,11 +80,11 @@ class Activity(SQLModel, table=True):
     hr_zone_3_pct: Optional[float] = None
     hr_zone_4_pct: Optional[float] = None
     hr_zone_5_pct: Optional[float] = None
-    pace_fade_seconds: Optional[float] = None
+    pace_fade_s_per_km: Optional[float] = None
     cadence_std_dev: Optional[float] = None
     effort_efficiency_raw: Optional[float] = None
     effort_efficiency_score: Optional[float] = None
-    elevation_per_mile: Optional[float] = None
+    climb_m_per_km: Optional[float] = None
     high_elevation_flag: Optional[int] = None
     suffer_score_mismatch_flag: Optional[int] = None
     analysis_summary: Optional[str] = None
@@ -134,8 +178,12 @@ class CalendarPref(SQLModel, table=True):
     )
 
 
-class TrainingPlan(SQLModel, table=True):
+class TrainingPlan(MeasuredModel, SQLModel, table=True):
     __tablename__ = "training_plan"
+    __measurements__: ClassVar[MeasurementSpec] = {
+        "distance_km": (Quantity.DISTANCE, 1000.0),
+        "elevation_m": (Quantity.ELEVATION, 1.0),
+    }
 
     date: str = Field(primary_key=True)
     workout_type: Optional[str] = None

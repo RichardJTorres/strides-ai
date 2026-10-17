@@ -1,0 +1,127 @@
+{
+  "_comment": "Shared conversion cases. Asserted by tests/test_units.py (Python registry) and web/units.test.mjs (TypeScript mirror) so the two can never drift.",
+  "convert": [
+    {
+      "qty": "distance",
+      "si": 10000,
+      "metric": 10.0,
+      "imperial": 6.213712
+    },
+    {
+      "qty": "elevation",
+      "si": 100,
+      "metric": 100.0,
+      "imperial": 328.084
+    },
+    {
+      "qty": "pace",
+      "si": 300,
+      "metric": 300.0,
+      "imperial": 482.8032
+    },
+    {
+      "qty": "speed",
+      "si": 10,
+      "metric": 36.0,
+      "imperial": 22.369363
+    },
+    {
+      "qty": "pace_delta",
+      "si": 10,
+      "metric": 10.0,
+      "imperial": 16.09344
+    },
+    {
+      "qty": "climb_rate",
+      "si": 20,
+      "metric": 20.0,
+      "imperial": 105.6
+    },
+    {
+      "qty": "mass",
+      "si": 100,
+      "metric": 100.0,
+      "imperial": 220.462
+    },
+    {
+      "qty": "volume",
+      "si": 500,
+      "metric": 500.0,
+      "imperial": 16.907
+    },
+    {
+      "qty": "height",
+      "si": 177.8,
+      "metric": 177.8,
+      "imperial": 70.0
+    }
+  ],
+  "format": [
+    {
+      "qty": "distance",
+      "si": 10000,
+      "metric": "10.00 km",
+      "imperial": "6.21 mi"
+    },
+    {
+      "qty": "elevation",
+      "si": 100,
+      "metric": "100 m",
+      "imperial": "328 ft"
+    },
+    {
+      "qty": "pace",
+      "si": 300,
+      "metric": "5:00/km",
+      "imperial": "8:02/mi"
+    },
+    {
+      "qty": "speed",
+      "si": 10,
+      "metric": "36.0 km/h",
+      "imperial": "22.4 mph"
+    },
+    {
+      "qty": "pace_delta",
+      "si": 10,
+      "metric": "+10 s/km",
+      "imperial": "+16 s/mi"
+    },
+    {
+      "qty": "pace_delta",
+      "si": -10,
+      "metric": "-10 s/km",
+      "imperial": "-16 s/mi"
+    },
+    {
+      "qty": "climb_rate",
+      "si": 20,
+      "metric": "20 m/km",
+      "imperial": "106 ft/mi"
+    },
+    {
+      "qty": "mass",
+      "si": 100,
+      "metric": "100 kg",
+      "imperial": "220 lb"
+    },
+    {
+      "qty": "volume",
+      "si": 500,
+      "metric": "500 ml",
+      "imperial": "17 fl oz"
+    },
+    {
+      "qty": "height",
+      "si": 177.8,
+      "metric": "178 cm",
+      "imperial": "5' 10\""
+    },
+    {
+      "qty": "height",
+      "si": 182.88,
+      "metric": "183 cm",
+      "imperial": "6' 0\""
+    }
+  ]
+}

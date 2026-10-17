@@ -308,12 +308,12 @@ def test_format_speed_negative():
 
 def test_format_speed_normal():
     # 360 s/km → 3600 / 360 = 10.0 km/h
-    assert _format_speed(360.0) == "10.0km/h"
+    assert _format_speed(360.0) == "10.0 km/h"
 
 
 def test_format_speed_fast():
     # 180 s/km → 20.0 km/h
-    assert _format_speed(180.0) == "20.0km/h"
+    assert _format_speed(180.0) == "20.0 km/h"
 
 
 # ── build_system mode variants ────────────────────────────────────────────────
