@@ -5,6 +5,14 @@ import type { Mode, ThemeConfig } from "../App";
 import { formatSyncFreshness } from "./syncFreshness";
 import { PENDING_CHAT_ACTIVITY_KEY } from "./chatActivityHandoff";
 import { useUnits } from "../UnitsContext";
+import {
+  buildBaselines,
+  labelsFor,
+  sportGroup,
+  type ActivityLabels,
+  type FieldLabel,
+  type LabelTone,
+} from "./activityLabels";
 
 // Mirrors strides_ai/analysis.py: pace-fade threshold, stored in s/km (= 15 s/mi).
 const PACE_FADE_NOTABLE_S_PER_KM = 15 / 1.609344;
@@ -80,7 +88,26 @@ function formatSet(s: any, units: ReturnType<typeof useUnits>): string {
 }
 
 function isRide(sportType: string | null | undefined): boolean {
-  return sportType === "Ride" || sportType === "VirtualRide" || sportType === "GravelRide";
+  return sportGroup(sportType) === "ride";
+}
+
+const CHIP_TONES: Record<LabelTone, string> = {
+  green: "bg-green-900 text-green-300",
+  yellow: "bg-yellow-900 text-yellow-300",
+  red: "bg-red-900 text-red-300",
+  default: "bg-gray-800 text-gray-400",
+};
+
+/** Small qualitative chip shown under a table value. */
+function LabelChip({ label }: { label: FieldLabel | null }) {
+  if (!label) return null;
+  return (
+    <div className="mt-0.5">
+      <span className={`px-1.5 py-0.5 rounded text-[10px] whitespace-nowrap ${CHIP_TONES[label.tone]}`} title={label.detail}>
+        {label.text}
+      </span>
+    </div>
+  );
 }
 
 function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
@@ -408,6 +435,10 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
     });
   }, [activities, search, dateFrom, dateTo, minDist, sortKey, sortDir, isLifting, modeOnly, units]);
 
+  const baselines = useMemo(() => buildBaselines(activities), [activities]);
+  const labelsOf = (a: Activity): ActivityLabels => labelsFor(a, baselines);
+  const selectedLabels = selectedActivity ? labelsOf(selectedActivity) : null;
+
   const paceLabel = mode === "cycling" ? "Speed" : mode === "hybrid" ? "Pace/Speed" : "Pace";
   const focusClass = "focus:outline-none focus:border-gray-500";
 
@@ -598,7 +629,9 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
                   </td>
                 </tr>
               ) : (
-                filtered.map((a) => (
+                filtered.map((a) => {
+                  const lbl = labelsOf(a);
+                  return (
                   <tr
                     key={a.id}
                     className={`hover:bg-gray-800/50 transition-colors cursor-pointer ${selectedId === a.id ? "bg-gray-800/60" : ""}`}
@@ -639,21 +672,27 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
                       <>
                         <td className="px-4 py-2 text-right text-gray-100">
                           {units.fmt(a.distance_m || 0, "distance", { withLabel: false })}
+                          <LabelChip label={lbl.distance} />
                         </td>
                         <td className="px-4 py-2 text-right text-gray-400">
                           {formatDuration(a.moving_time_s)}
+                          <LabelChip label={lbl.time} />
                         </td>
                         <td className="px-4 py-2 text-right text-gray-400">
                           {paceOrSpeed(a)}
+                          <LabelChip label={lbl.pace} />
                         </td>
                         <td className="px-4 py-2 text-right text-gray-400">
                           {a.avg_hr ?? "—"}
+                          <LabelChip label={lbl.hr} />
                         </td>
                         <td className="px-4 py-2 text-right text-gray-400">
                           {units.fmt(a.elevation_gain_m, "elevation", { withLabel: false })}
+                          <LabelChip label={lbl.elevation} />
                         </td>
                         <td className="px-4 py-2 text-right text-gray-400">
                           {units.fmt(a.climb_m_per_km, "climb_rate", { withLabel: false })}
+                          <LabelChip label={lbl.climb} />
                         </td>
                       </>
                     )}
@@ -666,7 +705,8 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
                       </button>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -743,18 +783,26 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
                   <MetricTile
                     label="Distance"
                     value={units.fmt(selectedActivity.distance_m || 0, "distance")}
+                    sub={selectedLabels?.distance ? `${selectedLabels.distance.text} · ${selectedLabels.distance.detail.split(" (")[0]}` : undefined}
+                    color={selectedLabels?.distance?.tone}
                   />
                   <MetricTile
                     label="Time"
                     value={formatDuration(selectedActivity.moving_time_s)}
+                    sub={selectedLabels?.time ? `${selectedLabels.time.text} · ${selectedLabels.time.detail.split(" (")[0]}` : undefined}
+                    color={selectedLabels?.time?.tone}
                   />
                   <MetricTile
                     label={mode === "cycling" || isRide(selectedActivity.sport_type) ? "Speed" : "Pace"}
                     value={paceOrSpeed(selectedActivity, mode === "cycling")}
+                    sub={selectedLabels?.pace ? `${selectedLabels.pace.text} · ${selectedLabels.pace.detail}` : undefined}
+                    color={selectedLabels?.pace?.tone}
                   />
                   <MetricTile
                     label="Avg HR"
                     value={selectedActivity.avg_hr ? `${Math.round(selectedActivity.avg_hr)} bpm` : "—"}
+                    sub={selectedLabels?.hr ? `${selectedLabels.hr.text} · ${selectedLabels.hr.detail}` : undefined}
+                    color={selectedLabels?.hr?.tone}
                   />
                 </div>
               )}
@@ -813,8 +861,8 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
                       <MetricTile
                         label="Climbing Ratio"
                         value={units.fmt(selectedActivity.climb_m_per_km, "climb_rate")}
-                        sub={selectedActivity.high_elevation_flag ? "Hilly course" : "Flat to moderate"}
-                        color={selectedActivity.high_elevation_flag ? "yellow" : "default"}
+                        sub={selectedLabels?.climb ? `${selectedLabels.climb.text} · ${selectedLabels.climb.detail}` : undefined}
+                        color={selectedLabels?.climb?.tone}
                       />
                     )}
                     {selectedActivity.suffer_score_mismatch_flag === 1 && (
