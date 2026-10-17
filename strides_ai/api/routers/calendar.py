@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from ... import compliance
-from ...config import get_settings
+from ...config import VALID_MODES, get_settings
 from ...coach import RECENT_ACTIVITIES_IN_SYSTEM
 from ...db import activities as act_crud
 from ...db import calendar as crud
@@ -32,6 +32,7 @@ from ...schedule import analyze_nutrition
 from ...sources.base import AuthError, ConfigurationError, NoDataError
 from ...sources.ridewithgps import condense_elevation_profile
 from ...sources.routes import fetch_route_detail, fetch_route_summary
+from ...training_state import build_training_state, check_plan_changes, render_for_prompt
 from ...units import UnitSystem
 from ..deps import get_backend, get_units
 
@@ -81,6 +82,7 @@ class GeneratedWorkout(BaseModel):
 class GeneratePlanResponse(BaseModel):
     workouts: list[GeneratedWorkout]
     summary: str = ""
+    warnings: list[str] = []
 
 
 @router.get("/calendar/prefs")
@@ -92,6 +94,24 @@ def get_calendar_prefs(session: Session = Depends(get_session)):
 def put_calendar_prefs(body: CalendarPrefsBody, session: Session = Depends(get_session)):
     crud.save_prefs(session, body.blocked_days, body.races)
     return {"status": "ok"}
+
+
+@router.get("/calendar/training-state")
+def get_training_state(
+    request: Request,
+    mode: str | None = None,
+    session: Session = Depends(get_session),
+    units: UnitSystem = Depends(get_units),
+):
+    """Current load, planned-load projection, weekly ramp and plan conflicts (training_state.py)."""
+    mode = mode or getattr(request.app.state, "mode", "running")
+    if mode not in VALID_MODES or mode == "lifting":
+        mode = "running"
+    rows = [r.model_dump() for r in act_crud.get_for_mode(session, mode)]
+    plan_rows = [w.model_dump() for w in crud.get_plan(session)]
+    return build_training_state(
+        rows, plan_rows, crud.get_prefs(session), mode, units, date_cls.today()
+    ).to_dict()
 
 
 @router.get("/calendar/plan")
@@ -197,6 +217,22 @@ def bulk_update_plan(body: BulkPlanBody, session: Session = Depends(get_session)
     return {"status": "ok", "set": len(body.set), "deleted": len(body.delete)}
 
 
+def _apply_guardrails(result, mode_rows, plan_rows, prefs, mode, units, today) -> dict:
+    """Drop generated workouts on blocked-out/race days (a prompt-only rule the model can break)
+    and report load warnings (ramp, projected ratio) without changing the proposal."""
+    if mode == "lifting":
+        return result
+    violations = check_plan_changes(
+        mode_rows, plan_rows, prefs, mode, units, today, {"set": result["workouts"]}
+    )
+    hard_dates = {v.date for v in violations if v.hard}
+    result["workouts"] = [w for w in result["workouts"] if w["date"] not in hard_dates]
+    result["warnings"] = [
+        f"Removed {v.date}: {v.detail}" if v.hard else v.detail for v in violations
+    ]
+    return result
+
+
 @router.post("/calendar/generate-plan", response_model=GeneratePlanResponse)
 async def generate_plan(
     body: GeneratePlanBody,
@@ -228,6 +264,16 @@ async def generate_plan(
     recent_activities = [a.model_dump() for a in act_crud.get_all(session)][
         :RECENT_ACTIVITIES_IN_SYSTEM
     ]
+    mode_rows = [a.model_dump() for a in act_crud.get_for_mode(session, mode)]
+    all_plan = [w.model_dump() for w in crud.get_plan(session)]
+    today = date_cls.today()
+    training_state_text = (
+        render_for_prompt(
+            build_training_state(mode_rows, all_plan, prefs, mode, units, today), units
+        )
+        if mode in VALID_MODES and mode != "lifting"
+        else ""
+    )
 
     prompt = build_plan_generation_prompt(
         mode,
@@ -240,6 +286,7 @@ async def generate_plan(
         body.end_date,
         body.freeform_text,
         units,
+        training_state_text,
     )
 
     def _run_llm():
@@ -249,7 +296,8 @@ async def generate_plan(
 
     try:
         text = await asyncio.get_event_loop().run_in_executor(None, _run_llm)
-        return parse_plan_generation_response(text, body.start_date, body.end_date, units)
+        result = parse_plan_generation_response(text, body.start_date, body.end_date, units)
+        return _apply_guardrails(result, mode_rows, all_plan, prefs, mode, units, today)
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
         raise HTTPException(status_code=502, detail=f"Failed to parse generated plan: {exc}")
     except Exception as exc:

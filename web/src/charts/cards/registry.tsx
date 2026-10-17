@@ -1,4 +1,4 @@
-import type { ChartDataset } from "../api";
+import type { ChartDataset, LoadContext } from "../api";
 import AerobicEfficiencyCard from "./AerobicEfficiencyCard";
 import AtlCtlCard from "./AtlCtlCard";
 import StackedBarMetricCard from "./StackedBarMetricCard";
@@ -11,6 +11,7 @@ interface RenderProps {
   until: string | null;
   isAllTime: boolean;
   unit: "miles" | "km";
+  loadContext?: LoadContext;
 }
 
 const HR_ZONE_COLORS: Record<string, string> = {
@@ -29,7 +30,7 @@ const ALLOCATION_COLORS: Record<string, string> = {
 /** metric_key -> renderer. The two metrics with bespoke visuals (custom tooltips, multi-tier
  * empty states) get dedicated components; everything else reuses one of the three generic
  * per-chart_type cards with metric-specific copy/colors. */
-export function renderChartDataset({ dataset, since, until, isAllTime, unit }: RenderProps) {
+export function renderChartDataset({ dataset, since, until, isAllTime, unit, loadContext }: RenderProps) {
   switch (dataset.metric_key) {
     case "weekly_distance":
       if (dataset.chart_type === "stacked_bar") {
@@ -78,7 +79,7 @@ export function renderChartDataset({ dataset, since, until, isAllTime, unit }: R
       );
     case "atl_ctl":
       if (dataset.chart_type !== "atl_ctl") return null;
-      return <AtlCtlCard dataset={dataset} since={since} until={until} isAllTime={isAllTime} unit={unit} />;
+      return <AtlCtlCard dataset={dataset} since={since} until={until} isAllTime={isAllTime} unit={unit} loadContext={loadContext} />;
     case "aerobic_efficiency":
       if (dataset.chart_type !== "scatter") return null;
       return <AerobicEfficiencyCard dataset={dataset} since={since} until={until} />;

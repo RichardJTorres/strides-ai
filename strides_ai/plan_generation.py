@@ -35,7 +35,8 @@ athlete right now
 
 Only include days you want to schedule something for — you do not need an entry for every date in \
 the range. Do not schedule on blocked-out days or on top of races. Use the surrounding training \
-context to keep load progression and taper sensible; do not propose changes outside the requested \
+context and the Training State section (current load, weekly ramp, guardrails) to keep load \
+progression and taper sensible; do not propose changes outside the requested \
 date range — that context is read-only.\
 """
 
@@ -95,6 +96,7 @@ def build_plan_generation_prompt(
     end_date: str,
     freeform_text: str,
     units: UnitSystem = DEFAULT_UNIT_SYSTEM,
+    training_state_text: str = "",
 ) -> str:
     cfg = MODES.get(mode, MODES["running"])
     sections = [
@@ -139,6 +141,9 @@ def build_plan_generation_prompt(
             'in the past tense (e.g. not "Sunday\'s ride") unless it is confirmed by the '
             "Recent Activities log below.\n" + _plan_table(surrounding_plan, units)
         )
+
+    if training_state_text:
+        sections.append(training_state_text)
 
     if recent_activities:
         log = build_training_log(recent_activities, mode, units)

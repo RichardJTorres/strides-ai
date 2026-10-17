@@ -7,6 +7,7 @@ from . import compliance, db
 from .db.models import TrainingPlan
 from .memory_context import memories_section
 from .modes import MODES
+from .training_state import build_training_state, render_for_prompt
 from .units import (
     DEFAULT_UNIT_SYSTEM,
     Quantity,
@@ -142,6 +143,47 @@ def _compliance_section(activities: list[dict], units: UnitSystem = DEFAULT_UNIT
     return "## Plan-vs-Actual Compliance\n" + "\n".join(lines)
 
 
+def _training_state_section(
+    activities: list[dict], mode: str, units: UnitSystem = DEFAULT_UNIT_SYSTEM
+) -> str:
+    """Load, projected load of the planned calendar, weekly ramp and plan conflicts — computed by
+    training_state.py so the coach, the dashboard and plan edits all use the same numbers."""
+    if mode == "lifting":
+        return ""
+    cfg = MODES.get(mode, MODES["running"])
+    rows = [
+        a for a in activities if cfg.sport_types is None or a.get("sport_type") in cfg.sport_types
+    ]
+    today = datetime.now().date()
+    plan_rows, prefs = db.get_training_plan(), db.get_calendar_prefs()
+    state = build_training_state(rows, plan_rows, prefs, mode, units, today)
+    text = render_for_prompt(state, units)
+    readout = _dashboard_readout(rows, plan_rows, prefs, mode, units, today)
+    return f"{text}\n\n{readout}" if readout else text
+
+
+def _dashboard_readout(rows, plan_rows, prefs, mode, units, today) -> str:
+    """The athlete's Analytics insights card, when it is still fresh, so the coach and the
+    dashboard give consistent advice. Stale or missing readouts are omitted, never guessed."""
+    import json
+
+    from .insights import digest_fingerprint
+
+    raw = db.get_setting(f"charts_insights:{mode}:{UnitSystem.parse(units).value}")
+    try:
+        cached = json.loads(raw) if raw else None
+    except json.JSONDecodeError:
+        return ""
+    if not cached or cached.get("fingerprint") != digest_fingerprint(
+        rows, mode, units, today, plan_rows, prefs
+    ):
+        return ""
+    report = cached.get("report") or {}
+    lines = [f"Dashboard readout (status: {report.get('status')}): {report.get('headline', '')}"]
+    lines += [f"  - Recommended: {r['action']}" for r in report.get("recommendations", [])]
+    return "\n".join(lines)
+
+
 def _upcoming_workouts_section(units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
     upcoming = db.get_upcoming_planned_workouts(days=PLANNED_WORKOUTS_WINDOW_DAYS)
     if not upcoming:
@@ -265,6 +307,7 @@ def build_system(
             _memories_section(memories),
             _calendar_prefs_section(),
             _upcoming_workouts_section(units),
+            _training_state_section(activities or [], mode, units),
             _voice_section(coach_voice),
         ],
         sections,

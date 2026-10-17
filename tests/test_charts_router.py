@@ -31,7 +31,7 @@ def test_invalid_mode_falls_back_to_running(tmp_db):
 
 def test_cardio_response_envelope_shape(tmp_db):
     result = _call(mode="running")
-    assert set(result.keys()) == {"mode", "unit", "charts"}
+    assert set(result.keys()) == {"mode", "unit", "charts", "load_context"}
     assert result["mode"] == "running"
     assert result["unit"] == "miles"
     assert isinstance(result["charts"], list)

@@ -142,6 +142,17 @@ interface GeneratedWorkout {
 interface GeneratePlanResult {
   workouts: GeneratedWorkout[];
   summary: string;
+  warnings?: string[];
+}
+
+// strides_ai/training_state.py (GET /api/calendar/training-state). Volumes are in the athlete's
+// display unit; ramp_pct is vs the prior 4-week average.
+interface TrainingState {
+  load: { ctl: number | null; atl: number | null; ratio: number | null };
+  thresholds: { acwr_low: number; acwr_high: number; ramp_elevated: number; ramp_high: number };
+  unit: string;
+  weeks: { week_start: string; volume: number; ramp_pct: number | null; flags: string[] }[];
+  conflicts: { kind: string; date: string; detail: string; hard: boolean }[];
 }
 
 interface GridCell {
@@ -257,6 +268,7 @@ export default function Calendar() {
   const [plan, setPlan] = useState<Record<string, Workout>>({});
   const [activities, setActivities] = useState<Record<string, Activity[]>>({});
   const [compliance, setCompliance] = useState<Record<string, ComplianceDay>>({});
+  const [trainingState, setTrainingState] = useState<TrainingState | null>(null);
   const [selectedWeek, setSelectedWeek] = useState<WeekSummary | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
@@ -272,8 +284,9 @@ export default function Calendar() {
   const [showRaceForm, setShowRaceForm] = useState(false);
   const [raceForm, setRaceForm] = useState({ date: "", name: "", target_time: "" });
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const detailPanelRef = useRef<HTMLDivElement>(null);
 
+  const [range, setRange] = useState<{ start: string; end: string } | null>(null);
+  const rangeAnchor = useRef<string | null>(null);
   const [genModalOpen, setGenModalOpen] = useState(false);
   const [genStart, setGenStart] = useState(todayStr);
   const [genEnd, setGenEnd] = useState(todayStr);
@@ -283,13 +296,23 @@ export default function Calendar() {
   const [genError, setGenError] = useState<string | null>(null);
   const [genResult, setGenResult] = useState<GeneratePlanResult | null>(null);
 
-  // On small/short screens the detail panel can render below the fold once a day
-  // is selected — scroll it into view so it's never left invisible off-screen.
   useEffect(() => {
-    if (selectedDate) {
-      detailPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  }, [selectedDate]);
+    if (!range) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !genModalOpen) setRange(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [range, genModalOpen]);
+
+  // Load, projected ramp and plan conflicts depend on the plan and blocked days/races, so they
+  // are refetched whenever either changes (the backend is the single source of these numbers).
+  useEffect(() => {
+    fetch("/api/calendar/training-state")
+      .then(r => (r.ok ? r.json() : null))
+      .then(setTrainingState)
+      .catch(() => {});
+  }, [plan, prefs, units.system]);
 
   useEffect(() => {
     fetch("/api/calendar/prefs")
@@ -542,9 +565,9 @@ export default function Calendar() {
     }
   };
 
-  const openGenerateModal = () => {
-    setGenStart(todayStr);
-    setGenEnd(todayStr);
+  const openGenerateModal = (range?: { start: string; end: string }) => {
+    setGenStart(range?.start ?? todayStr);
+    setGenEnd(range?.end ?? todayStr);
     setGenFreeform("");
     setGenResult(null);
     setGenError(null);
@@ -615,6 +638,20 @@ export default function Calendar() {
     setForm(existing ? formFromWorkout(existing) : EMPTY_FORM);
   };
 
+  // Shift-click extends a range from the last plainly-clicked day (the anchor); a plain click
+  // moves the anchor and clears any range. The range feeds "Generate plan" for those days.
+  const handleDayClick = (e: React.MouseEvent, date: string) => {
+    if (e.shiftKey) {
+      const anchor = rangeAnchor.current ?? selectedDate ?? date;
+      rangeAnchor.current = anchor;
+      setRange(anchor <= date ? { start: anchor, end: date } : { start: date, end: anchor });
+      return;
+    }
+    rangeAnchor.current = date;
+    setRange(null);
+    openDay(date);
+  };
+
   const openDay = (date: string) => {
     if (selectedDate === date) {
       setSelectedDate(null);
@@ -658,6 +695,13 @@ export default function Calendar() {
   const weeks: GridCell[][] = [];
   for (let i = 0; i < gridCells.length; i += 7) weeks.push(gridCells.slice(i, i + 7));
 
+  const rangeDays = range
+    ? Math.round(
+        (new Date(range.end + "T12:00:00").getTime() - new Date(range.start + "T12:00:00").getTime()) /
+          86_400_000
+      ) + 1
+    : 0;
+
   const dowName = (dateStr: string) =>
     DAY_NAMES[new Date(dateStr + "T12:00:00").getDay()];
 
@@ -674,6 +718,29 @@ export default function Calendar() {
 
   const showNutritionCol = selectedWorkout && !editMode && selectedWorkout.workout_type !== "Rest";
 
+  // First conflict per date (blocked-day / race-day) for the ⚠ badge on a day cell.
+  const conflictByDate: Record<string, string> = {};
+  for (const c of trainingState?.conflicts ?? []) {
+    if (c.hard && !conflictByDate[c.date]) conflictByDate[c.date] = c.detail;
+  }
+
+  // Ramp vs the prior 4-week average for the ISO week (Mon-Sun) shown in this Sunday-start row.
+  // Past weeks have no entry (the backend only returns the current and upcoming weeks).
+  const rampChip = (weekCells: GridCell[]) => {
+    const monday = weekCells.find(c => c.date.getDay() === 1);
+    const w = monday && trainingState?.weeks.find(x => x.week_start === monday.dateStr);
+    if (!w || w.ramp_pct === null || !trainingState) return null;
+    const t = trainingState.thresholds;
+    const color =
+      w.ramp_pct > t.ramp_high ? "text-red-400" : w.ramp_pct > t.ramp_elevated ? "text-amber-400" : "text-zinc-500";
+    const title = w.flags.length ? w.flags.join(", ").replace(/_/g, " ") : "vs prior 4-week average";
+    return (
+      <div className={`text-[10px] ${color}`} title={title}>
+        {w.ramp_pct > 0 ? "+" : ""}{Math.round(w.ramp_pct)}% ramp{w.flags.includes("no_recovery_week") ? " ⚠" : ""}
+      </div>
+    );
+  };
+
   return (
     <div className="flex h-full bg-zinc-900 text-zinc-100 overflow-hidden">
 
@@ -682,7 +749,7 @@ export default function Calendar() {
 
         <div>
           <button
-            onClick={openGenerateModal}
+            onClick={() => openGenerateModal()}
             className="w-full text-left bg-gradient-to-br from-green-700/90 to-green-800/90 hover:from-green-600/90 hover:to-green-700/90 text-white rounded-lg px-3 py-2.5 flex items-center gap-2.5 transition-colors border border-green-600/40"
           >
             <span className="text-lg leading-none">✨</span>
@@ -781,7 +848,8 @@ export default function Calendar() {
       </aside>
 
       {/* ── Main column ── */}
-      <div className="flex-1 flex flex-col overflow-y-auto">
+      <div className="flex-1 flex min-w-0 overflow-hidden">
+      <div className="flex-1 min-w-0 flex flex-col overflow-y-auto">
 
         {/* ── Calendar grid ── */}
         <div className="flex-shrink-0">
@@ -805,11 +873,13 @@ export default function Calendar() {
             >›</button>
           </div>
 
+          {trainingState && <LoadStrip state={trainingState} />}
+
           <div className="p-3">
             {/* Day-of-week headers */}
             <div className="flex gap-1 mb-1">
               {DAYS_OF_WEEK.map(d => (
-                <div key={d} className="flex-1 text-center text-xs text-zinc-500 font-medium py-1">{d}</div>
+                <div key={d} className="flex-1 min-w-0 text-center text-xs text-zinc-500 font-medium py-1">{d}</div>
               ))}
               <div className="w-20 flex-shrink-0" />
             </div>
@@ -854,6 +924,7 @@ export default function Calendar() {
                     const dayActivities = activities[dateStr] ?? [];
                     const isToday = dateStr === todayStr;
                     const isSelected = selectedDate === dateStr;
+                    const inRange = !!range && dateStr >= range.start && dateStr <= range.end;
                     const isBlocked = prefs.blocked_days.includes(dateStr);
                     const race = raceOnDate(dateStr);
                     const showMonthLabel = cell.dayNum === 1 && !cell.inCurrentMonth;
@@ -863,10 +934,11 @@ export default function Calendar() {
                     return (
                       <div
                         key={dateStr}
-                        onClick={() => openDay(dateStr)}
+                        onClick={e => handleDayClick(e, dateStr)}
+                        onMouseDown={e => { if (e.shiftKey) e.preventDefault(); }}
                         className={[
-                          "flex-1 min-h-16 p-1.5 rounded cursor-pointer border transition-colors",
-                          isSelected ? "border-zinc-400 bg-zinc-700/60" : "border-zinc-800 hover:border-zinc-600",
+                          "flex-1 min-w-0 min-h-16 p-1.5 rounded cursor-pointer border transition-colors select-none",
+                          inRange ? "border-green-500/70 bg-green-500/10" : isSelected ? "border-zinc-400 bg-zinc-700/60" : "border-zinc-800 hover:border-zinc-600",
                           isToday ? "ring-2 ring-inset ring-green-400/80 border-green-400/60" : "",
                           isBlocked ? "opacity-40" : "",
                           !cell.inCurrentMonth ? "opacity-55" : "",
@@ -878,6 +950,9 @@ export default function Calendar() {
                             ? `${cell.date.toLocaleString("default", { month: "short" })} ${cell.dayNum}`
                             : cell.dayNum}
                           {isToday && <span className="w-1.5 h-1.5 bg-green-400 rounded-full" />}
+                          {conflictByDate[dateStr] && (
+                            <span title={conflictByDate[dateStr]} className="text-amber-400 ml-auto">⚠</span>
+                          )}
                           {dotColor && (
                             <span
                               title={compliance[dateStr]?.note}
@@ -929,6 +1004,7 @@ export default function Calendar() {
                         {plannedKm > 0 ? fmtKm(plannedKm, 1, false) : "—"}
                       </div>
                       {plannedKm > 0 && <div className="text-[10px] text-zinc-500">{distLabel}</div>}
+                      {rampChip(weekCells)}
                     </div>
                     <div>
                       <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Actual</div>
@@ -951,13 +1027,41 @@ export default function Calendar() {
           </div>
         </div>
 
-        {/* ── Detail panel (below calendar) ── */}
-        {selectedDate && (
-          <div ref={detailPanelRef} className="border-t border-zinc-800">
-            <div className="p-4 flex gap-6 items-start">
+      </div>
+
+        {/* ── Side panel: range actions or the selected day. A fixed overlay below lg so it never
+            pushes the grid; docked beside the grid on wide screens so the calendar stays in view. ── */}
+        {(range || selectedDate) && (
+          <aside className="fixed inset-y-0 right-0 z-30 w-full sm:w-96 lg:static lg:z-auto lg:w-80 lg:flex-shrink-0 border-l border-zinc-800 bg-zinc-900 overflow-y-auto shadow-2xl lg:shadow-none">
+            {range ? (
+              <div className="p-4 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-zinc-200">
+                      {rangeDays} day{rangeDays === 1 ? "" : "s"} selected
+                    </div>
+                    <div className="text-xs text-zinc-500">{range.start} → {range.end}</div>
+                  </div>
+                  <button
+                    onClick={() => setRange(null)}
+                    className="text-zinc-500 hover:text-zinc-300 text-xl leading-none"
+                  >×</button>
+                </div>
+                <button
+                  onClick={() => openGenerateModal(range)}
+                  className="w-full bg-green-600 hover:bg-green-500 text-white rounded px-3 py-2 text-sm font-medium"
+                >
+                  Generate plan for selection
+                </button>
+                <p className="text-xs text-zinc-600">
+                  Shift-click another day to adjust the range. Click a day or press Esc to clear it.
+                </p>
+              </div>
+            ) : selectedDate && (
+            <div className="p-4 flex flex-col gap-6">
 
               {/* Col 1: date info + planned workout */}
-              <div className="flex-1 min-w-0 space-y-3">
+              <div className="min-w-0 space-y-3">
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="text-sm font-semibold text-zinc-200">{selectedDate}</div>
@@ -1204,7 +1308,7 @@ export default function Calendar() {
 
               {/* Col 2: Strava activities */}
               {selectedActivities.length > 0 && (
-                <div className="w-44 flex-shrink-0 space-y-2">
+                <div className="space-y-2">
                   <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Strava</h4>
                   {selectedActivities.map(a => {
                     const isRun = RUN_TYPES.has(a.sport_type);
@@ -1244,7 +1348,7 @@ export default function Calendar() {
 
               {/* Col 3: Nutrition */}
               {showNutritionCol && (
-                <div className="w-96 flex-shrink-0 space-y-2">
+                <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Nutrition</h4>
                     <button
@@ -1289,7 +1393,8 @@ export default function Calendar() {
                 </div>
               )}
             </div>
-          </div>
+            )}
+          </aside>
         )}
       </div>
 
@@ -1358,6 +1463,9 @@ export default function Calendar() {
                     {genResult.summary && (
                       <p className="text-sm text-zinc-300 leading-relaxed">{genResult.summary}</p>
                     )}
+                    {(genResult.warnings ?? []).map((w, i) => (
+                      <p key={i} className="text-xs text-amber-400">⚠ {w}</p>
+                    ))}
                     {genResult.workouts.length === 0 ? (
                       <p className="text-sm text-zinc-500 italic">No workouts suggested for this range.</p>
                     ) : (
@@ -1528,6 +1636,35 @@ export default function Calendar() {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+
+function LoadStrip({ state }: { state: TrainingState }) {
+  const { ctl, atl, ratio } = state.load;
+  if (ctl === null || atl === null) return null;
+  const t = state.thresholds;
+  const zone =
+    ratio === null ? null
+    : ratio > t.acwr_high ? { label: "High fatigue", color: "text-red-400" }
+    : ratio < t.acwr_low ? { label: "Fresh / detraining", color: "text-zinc-400" }
+    : { label: "Optimal", color: "text-green-400" };
+  const ul = state.unit === "miles" ? "mi" : "km";
+  const hard = state.conflicts.filter(c => c.hard).length;
+  const soft = state.conflicts.filter(c => !c.hard);
+  return (
+    <div className="px-4 py-2 border-b border-zinc-800 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-zinc-400">
+      <span>CTL <b className="text-blue-400">{ctl.toFixed(1)}</b> {ul}/d</span>
+      <span>ATL <b className="text-red-400">{atl.toFixed(1)}</b> {ul}/d</span>
+      {zone && ratio !== null && (
+        <span>Ratio <b className={zone.color}>{ratio.toFixed(2)}</b> · {zone.label}</span>
+      )}
+      {hard > 0 && <span className="text-amber-400">⚠ {hard} workout(s) on blocked/race days</span>}
+      {soft.slice(0, 2).map((c, i) => (
+        <span key={i} className="text-amber-400" title={c.detail}>⚠ {c.detail}</span>
+      ))}
+      <a href="#analytics" className="ml-auto text-zinc-500 hover:text-zinc-300">Analytics →</a>
     </div>
   );
 }

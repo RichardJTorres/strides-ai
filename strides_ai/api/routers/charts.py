@@ -22,6 +22,7 @@ from ...insights import (
     digest_fingerprint,
     parse_insights_response,
 )
+from ...training_state import THRESHOLDS, build_training_state
 from ...units import UnitSystem
 from ..deps import get_backend, get_units
 
@@ -47,7 +48,27 @@ def charts(
         # Unchanged — the typed analytics envelope below is cardio-only.
         muscle_map = tmpl_crud.get_muscle_map(session)
         return get_lifting_chart_data(rows, template_muscle_map=muscle_map)
-    return {"mode": mode, "unit": unit, "charts": get_chart_datasets(rows, mode, unit)}
+    # Forward-looking context for the load chart: projected ATL/CTL from the calendar, the
+    # shared thresholds, and the days the athlete has ruled out.
+    state = build_training_state(
+        rows,
+        [w.model_dump() for w in calendar_crud.get_plan(session)],
+        calendar_crud.get_prefs(session),
+        mode,
+        UnitSystem.IMPERIAL if unit == "miles" else UnitSystem.METRIC,
+        date.today(),
+    )
+    return {
+        "mode": mode,
+        "unit": unit,
+        "charts": get_chart_datasets(rows, mode, unit),
+        "load_context": {
+            "thresholds": THRESHOLDS,
+            "projection": state.projection,
+            "blocked_days": state.constraints["blocked_days"],
+            "race_dates": [r["date"] for r in state.constraints["races"]],
+        },
+    }
 
 
 def _insights_key(mode: str, units: UnitSystem) -> str:
@@ -60,9 +81,12 @@ def _insights_inputs(session: Session, mode: str, units: UnitSystem):
     today = date.today()
     rows = [r.model_dump() for r in crud.get_for_mode(session, mode)]
     plan_rows = [w.model_dump() for w in calendar_crud.get_plan(session)]
-    races = calendar_crud.get_prefs(session).get("races", [])
-    digest = build_digest(rows, mode, units, today, plan_rows=plan_rows, races=races)
-    return digest, digest_fingerprint(rows, mode, units, today)
+    prefs = calendar_crud.get_prefs(session)
+    state = build_training_state(rows, plan_rows, prefs, mode, units, today)
+    digest = build_digest(
+        rows, mode, units, today, plan_rows=plan_rows, races=prefs.get("races", []), state=state
+    )
+    return digest, digest_fingerprint(rows, mode, units, today, plan_rows, prefs)
 
 
 def _load_cached_insights(session: Session, mode: str, units: UnitSystem) -> dict | None:

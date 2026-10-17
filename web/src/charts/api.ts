@@ -95,10 +95,22 @@ export type ChartDataset =
   | TimeSeriesDataset
   | StackedBarDataset;
 
+/** Shared thresholds + planned-load projection from the calendar (strides_ai/training_state.py). */
+export interface LoadContext {
+  thresholds: {
+    acwr_low: number; acwr_high: number; acwr_danger: number;
+    ramp_elevated: number; ramp_high: number;
+  };
+  projection: { date: string; atl: number; ctl: number; ratio: number | null; planned: number }[];
+  blocked_days: string[];
+  race_dates: string[];
+}
+
 export interface CardioChartsResponse {
   mode: string;
   unit: string;
   charts: ChartDataset[];
+  load_context?: LoadContext;
 }
 
 export async function fetchCardioCharts(
@@ -152,6 +164,12 @@ export interface InsightsDigest {
       window_days: number; scored: number; completed: number;
       modified: number; missed: number; consistency_pct: number | null;
     } | null;
+    upcoming?: {
+      sessions: { date: string; workout_type: string; distance: string | null; intensity: string | null }[];
+      blocked_days: string[];
+      race_dates: string[];
+      conflicts: { kind: string; date: string; detail: string; hard: boolean }[];
+    } | null;
   };
 }
 
@@ -159,7 +177,7 @@ export interface InsightsReport {
   status: InsightStatus;
   headline: string;
   findings: { title: string; detail: string; tone: "positive" | "neutral" | "warning"; metric_ids: string[] }[];
-  recommendations: { action: string; why: string; metric_ids: string[] }[];
+  recommendations: { action: string; why: string; metric_ids: string[]; date?: string | null }[];
 }
 
 export interface InsightsPayload {

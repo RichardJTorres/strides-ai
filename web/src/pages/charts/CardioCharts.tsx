@@ -182,6 +182,7 @@ export default function CardioCharts({ mode, theme }: Props) {
                     until: range.until,
                     isAllTime,
                     unit,
+                    loadContext: data?.load_context,
                   })
                 )}
               </div>
