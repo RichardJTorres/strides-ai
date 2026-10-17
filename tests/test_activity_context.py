@@ -18,9 +18,9 @@ def _base_run():
         "analysis_status": None,
         "cardiac_decoupling_pct": None,
         "effort_efficiency_score": None,
-        "pace_fade_seconds": None,
+        "pace_fade_s_per_km": None,
         "avg_cadence": None,
-        "elevation_per_mile": None,
+        "climb_m_per_km": None,
         "hr_zone_1_pct": None,
         "hr_zone_2_pct": None,
         "hr_zone_3_pct": None,
@@ -78,11 +78,11 @@ def test_zero_values_are_not_treated_as_missing():
     activity = _base_run()
     activity["avg_hr"] = 0.0
     activity["elevation_gain_m"] = 0.0
-    activity["pace_fade_seconds"] = 0.0
+    activity["pace_fade_s_per_km"] = 0.0
     card = build_activity_card(activity)
     assert "Avg HR: 0 bpm" in card
     assert "Elevation gain: 0 m" in card
-    assert "pace fade +0 s/mile" in card
+    assert "pace fade +0 s/km" in card
 
 
 def test_no_analysis_summary_or_status_reports_not_analyzed():
@@ -101,6 +101,9 @@ def test_analysis_summary_takes_priority_over_status():
     activity = _base_run()
     activity["analysis_status"] = "done"
     activity["analysis_summary"] = "Aerobic effort — 80% time in Z1/Z2."
+    # Completed analyses are re-rendered from their stored metrics on read.
+    activity.update(hr_zone_1_pct=30.0, hr_zone_2_pct=50.0, hr_zone_3_pct=20.0)
+    activity.update(hr_zone_4_pct=0.0, hr_zone_5_pct=0.0)
     card = build_activity_card(activity)
     assert "Analysis: Aerobic effort — 80% time in Z1/Z2." in card
     assert "Analysis status:" not in card

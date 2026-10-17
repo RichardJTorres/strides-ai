@@ -5,6 +5,7 @@ from typing import Callable
 
 from .. import db
 from ..budget import Limits, TurnBudget, bounded_turn, BudgetExceeded, estimate
+from ..units import Quantity, UnitSystem, to_si
 
 SAVE_MEMORY_DESCRIPTION = (
     "Save an important fact about the athlete to persistent memory. "
@@ -53,8 +54,35 @@ UPDATE_TRAINING_PLAN_DESCRIPTION = (
     "them without the athlete's go-ahead. When the athlete says they can't complete a workout, or "
     "a conflict shows up on a date you'd otherwise use, delete or move that day rather than "
     "double-booking it. When regenerating a whole block, combine `delete` for the days that need "
-    "to change with `set` for their replacements in the same call."
+    "to change with `set` for their replacements in the same call. Give `distance` and "
+    "`elevation` in the athlete's units and say which with `distance_unit` / `elevation_unit`."
 )
+
+# Measurement fields of an update_training_plan workout entry, as JSON Schema (Claude, OpenAI and
+# Ollama share this; Gemini mirrors it with its own Schema types). The model states its units
+# instead of converting, and _workout_measurements() normalizes to the stored km / m.
+DISTANCE_UNITS = {"km": UnitSystem.METRIC, "mi": UnitSystem.IMPERIAL}
+ELEVATION_UNITS = {"m": UnitSystem.METRIC, "ft": UnitSystem.IMPERIAL}
+WORKOUT_MEASUREMENT_PROPERTIES = {
+    "distance": {"type": "number", "description": "Planned distance, in distance_unit"},
+    "distance_unit": {"type": "string", "enum": list(DISTANCE_UNITS)},
+    "elevation": {"type": "number", "description": "Planned elevation gain, in elevation_unit"},
+    "elevation_unit": {"type": "string", "enum": list(ELEVATION_UNITS)},
+}
+
+
+def _workout_measurements(workout: dict) -> tuple[float | None, float | None]:
+    """(distance_km, elevation_m) for a tool workout entry. Accepts the unit-tagged fields and
+    falls back to the legacy distance_km / elevation_m keys."""
+    distance_km = workout.get("distance_km")
+    if workout.get("distance") is not None:
+        system = DISTANCE_UNITS.get(workout.get("distance_unit") or "km", UnitSystem.METRIC)
+        distance_km = round(to_si(float(workout["distance"]), Quantity.DISTANCE, system) / 1000, 2)
+    elevation_m = workout.get("elevation_m")
+    if workout.get("elevation") is not None:
+        system = ELEVATION_UNITS.get(workout.get("elevation_unit") or "m", UnitSystem.METRIC)
+        elevation_m = round(to_si(float(workout["elevation"]), Quantity.ELEVATION, system))
+    return distance_km, elevation_m
 
 
 class BaseBackend(ABC):
@@ -374,12 +402,13 @@ class BaseBackend(ABC):
             if not date:
                 continue
             workout_type = workout.get("workout_type", "Workout")
+            distance_km, elevation_m = _workout_measurements(workout)
             db.save_planned_workout(
                 date,
                 workout_type,
                 workout.get("description"),
-                workout.get("distance_km"),
-                workout.get("elevation_m"),
+                distance_km,
+                elevation_m,
                 workout.get("duration_min"),
                 workout.get("intensity"),
             )

@@ -64,7 +64,7 @@ def to_cardio_analytics(rows: list[dict]) -> list[CardioAnalyticsActivity]:
                 avg_cadence=_nonnegative_or_none(row.get("avg_cadence")),
                 hr_zone_pct=_hr_zone_pct(row),
                 cardiac_decoupling_pct=_finite_or_none(row.get("cardiac_decoupling_pct")),
-                pace_fade_seconds=_finite_or_none(row.get("pace_fade_seconds")),
+                pace_fade_s_per_km=_finite_or_none(row.get("pace_fade_s_per_km")),
             )
         )
     return result

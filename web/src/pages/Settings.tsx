@@ -1,5 +1,7 @@
 import { useState, useEffect, type Dispatch, type SetStateAction } from "react";
 import type { Mode, ThemeConfig } from "../App";
+import { useUnits } from "../UnitsContext";
+import type { UnitSystem } from "../units";
 
 interface Provider {
   id: string;
@@ -66,6 +68,11 @@ const MODE_CARDS: {
 
 type SyncState = "idle" | "syncing" | "done" | "error";
 
+const UNIT_CARDS: { id: UnitSystem; label: string; description: string }[] = [
+  { id: "metric", label: "Metric", description: "km, min/km, km/h, m, kg, ml" },
+  { id: "imperial", label: "Imperial", description: "mi, min/mi, mph, ft, lb, fl oz" },
+];
+
 const VOICE_OPTIONS: { value: string; label: string; description: string }[] = [
   { value: "", label: "Default", description: "Uses the mode's standard coaching style" },
   { value: "supportive", label: "Supportive", description: "Warm, encouraging, celebrates every win" },
@@ -94,6 +101,17 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
   const [customText, setCustomText] = useState<Record<string, string>>({});
   const [customSelected, setCustomSelected] = useState<Record<string, boolean>>({});
   const [voiceSaving, setVoiceSaving] = useState(false);
+  const units = useUnits();
+  const [unitsError, setUnitsError] = useState(false);
+
+  async function handleUnitsChange(next: UnitSystem) {
+    setUnitsError(false);
+    try {
+      await units.setSystem(next);
+    } catch {
+      setUnitsError(true);
+    }
+  }
 
   useEffect(() => {
     const modes: Mode[] = ["running", "cycling", "hybrid", "lifting"];
@@ -275,6 +293,47 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
                 );
               })}
             </div>
+          </section>
+
+          <section>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">
+              Units
+            </h3>
+            <p className="text-xs text-gray-600 mb-3">
+              Applies everywhere: activities, calendar, charts, and the coach. Your data is stored
+              once and converted for display, so switching never changes it. Past chat messages
+              keep the units they were written in.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              {UNIT_CARDS.map((card) => {
+                const selected = units.system === card.id;
+                return (
+                  <button
+                    key={card.id}
+                    onClick={() => handleUnitsChange(card.id)}
+                    aria-pressed={selected}
+                    className={`text-left p-4 rounded-lg border-2 transition-colors bg-gray-900 ${
+                      selected ? "border-gray-300" : "border-gray-700 hover:border-gray-500"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 mb-1">
+                      <span
+                        className={`font-medium text-sm ${selected ? theme.accentClass : "text-gray-200"}`}
+                      >
+                        {card.label}
+                      </span>
+                      {selected && (
+                        <span className={`ml-auto text-xs ${theme.accentClass}`}>Active</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-500">{card.description}</p>
+                  </button>
+                );
+              })}
+            </div>
+            {unitsError && (
+              <p className="text-xs text-red-400 mt-2">Couldn't save the unit setting. Try again.</p>
+            )}
           </section>
 
           <section>

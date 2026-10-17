@@ -3,8 +3,9 @@
 import json
 
 from ..config import get_settings
-from ..hevy_analysis import LIFTING_DEEP_DIVE_SYSTEM_PROMPT
+from ..hevy_analysis import lifting_deep_dive_system_prompt
 from ..hevy_sync import sync_exercise_templates, sync_hevy_workouts
+from ..units import DEFAULT_UNIT_SYSTEM, Quantity, UnitSystem, format_value
 from .base import ConfigurationError, NoDataError
 
 
@@ -16,7 +17,9 @@ class HevySource:
     def is_configured(self) -> bool:
         return bool(get_settings().hevy_api_key)
 
-    def build_deep_dive_content(self, activity, backend) -> tuple[str, str]:
+    def build_deep_dive_content(
+        self, activity, backend, units: UnitSystem = DEFAULT_UNIT_SYSTEM
+    ) -> tuple[str, str]:
         if not activity.exercises_json:
             raise NoDataError("No exercise data available for this session")
 
@@ -28,21 +31,25 @@ class HevySource:
         lines = [f"Workout: {activity.name or 'Weight Training'}  |  Date: {activity.date}"]
         if activity.total_volume_kg:
             lines.append(
-                f"Total volume: {activity.total_volume_kg:.0f} kg"
+                f"Total volume: {activity.measurement('total_volume_kg', units).formatted}"
                 f"  |  Sets: {activity.total_sets or '?'}"
             )
         lines.append("")
         for ex in exercises:
             lines.append(f"### {ex.get('title') or ex.get('name', 'Exercise')}")
             for s in ex.get("sets", []):
-                weight = f"{s['weight_kg']} kg" if s.get("weight_kg") is not None else "BW"
+                weight = (
+                    format_value(s["weight_kg"], Quantity.MASS, units, decimals=1)
+                    if s.get("weight_kg") is not None
+                    else "BW"
+                )
                 reps = f"x{s['reps']}" if s.get("reps") is not None else ""
                 rpe = f"  RPE {s['rpe']}" if s.get("rpe") is not None else ""
                 stype = f"[{s['type']}]" if s.get("type") and s["type"] != "normal" else ""
                 lines.append(f"  {stype} {weight} {reps}{rpe}".strip())
             lines.append("")
 
-        return LIFTING_DEEP_DIVE_SYSTEM_PROMPT, "\n".join(lines)
+        return lifting_deep_dive_system_prompt(units), "\n".join(lines)
 
     def sync(self, full: bool = False) -> int:
         settings = get_settings()

@@ -7,6 +7,7 @@ from sqlmodel import Session
 from ...config import VALID_MODES, VALID_PROVIDERS, get_settings
 from ...db import settings as crud
 from ...db.engine import get_session
+from ...units import UnitSystem
 from ..deps import get_provider_models, provider_statuses, init_backend
 
 router = APIRouter()
@@ -16,14 +17,20 @@ class SettingsBody(BaseModel):
     mode: str | None = None
     provider: str | None = None
     model: str | None = None
+    unit_system: str | None = None
+
+
+def _settings_payload(session: Session) -> dict:
+    return {
+        "mode": crud.get(session, "mode", "running"),
+        "provider": crud.get(session, "provider", get_settings().provider),
+        "unit_system": crud.get_unit_system(session).value,
+    }
 
 
 @router.get("/settings")
 def get_api_settings(session: Session = Depends(get_session)):
-    return {
-        "mode": crud.get(session, "mode", "running"),
-        "provider": crud.get(session, "provider", get_settings().provider),
-    }
+    return _settings_payload(session)
 
 
 @router.put("/settings")
@@ -48,12 +55,17 @@ def put_settings(
     if body.model is not None:
         target = body.provider or crud.get(session, "provider", settings.provider) or "claude"
         crud.set(session, f"{target}_model", body.model)
+    if body.unit_system is not None:
+        valid = {u.value for u in UnitSystem}
+        if body.unit_system not in valid:
+            raise HTTPException(
+                status_code=400, detail=f"unit_system must be one of {sorted(valid)}"
+            )
+        # No backend re-init needed: the system prompt is rebuilt from settings every turn.
+        crud.set(session, crud.UNIT_SYSTEM_KEY, body.unit_system)
     if body.mode is not None or body.provider is not None or body.model is not None:
         init_backend(request.app, mode=body.mode, provider=body.provider)
-    return {
-        "mode": crud.get(session, "mode", "running"),
-        "provider": crud.get(session, "provider", settings.provider),
-    }
+    return _settings_payload(session)
 
 
 @router.get("/providers")

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useUnits } from "../UnitsContext";
 
 const DAYS_OF_WEEK = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -161,11 +162,13 @@ interface WeekSummary {
   onTargetPct: number | null;
 }
 
+// distance/elevation hold what the athlete sees and types, in their unit system; they are
+// converted back to the stored km / m on save (see kmFromInput / mFromInput).
 const EMPTY_FORM = {
   workout_type: "Easy Run",
   description: "",
-  distance_km: "",
-  elevation_m: "",
+  distance: "",
+  elevation: "",
   duration_min: "",
   intensity: "easy",
   route_url: "",
@@ -187,13 +190,6 @@ function fmtDuration(seconds: number): string {
   return `${m}m ${s.toString().padStart(2, "0")}s`;
 }
 
-function fmtPace(sPerKm: number | null): string {
-  if (!sPerKm) return "—";
-  const m = Math.floor(sPerKm / 60);
-  const s = Math.round(sPerKm % 60);
-  return `${m}:${s.toString().padStart(2, "0")}/km`;
-}
-
 const RUN_TYPES = new Set(["Run", "TrailRun", "VirtualRun"]);
 
 const isRouteUrl = (url: string) => /(?:ridewithgps|strava)\.com\/routes\/\d+/i.test(url);
@@ -209,6 +205,48 @@ async function fetchRoutePreview(url: string): Promise<RoutePreview | null> {
 }
 
 export default function Calendar() {
+  const units = useUnits();
+  // Planned distances are stored in km; activities in meters.
+  const fmtKm = (km: number | null | undefined, decimals = 1, withLabel = true) =>
+    units.fmt(km == null ? null : km * 1000, "distance", { decimals, withLabel });
+  const distLabel = units.label("distance");
+  // The values the edit form was opened with, so an untouched field saves its exact stored
+  // number instead of a round-tripped conversion (10 km -> "6.21" mi -> 9.99 km).
+  const formOrigin = useRef<{ distance: string; distance_km: number | null; elevation: string; elevation_m: number | null }>(
+    { distance: "", distance_km: null, elevation: "", elevation_m: null },
+  );
+  const distanceInput = (km: number | null | undefined) =>
+    km ? String(Number(units.convert(km * 1000, "distance")!.toFixed(2))) : "";
+  const elevationInput = (m: number | null | undefined) =>
+    m ? String(Math.round(units.convert(m, "elevation")!)) : "";
+  const formFromWorkout = (w: Workout | null | undefined) => {
+    const distance = distanceInput(w?.distance_km);
+    const elevation = elevationInput(w?.elevation_m);
+    formOrigin.current = {
+      distance, distance_km: w?.distance_km ?? null, elevation, elevation_m: w?.elevation_m ?? null,
+    };
+    return {
+      workout_type: w?.workout_type || "Easy Run",
+      description: w?.description || "",
+      distance,
+      elevation,
+      duration_min: w?.duration_min?.toString() || "",
+      intensity: w?.intensity || "easy",
+      route_url: w?.route_url || "",
+    };
+  };
+  const kmFromInput = (value: string): number | null => {
+    if (!value) return null;
+    if (value === formOrigin.current.distance) return formOrigin.current.distance_km;
+    const meters = units.toSI(parseFloat(value), "distance");
+    return meters == null ? null : meters / 1000;
+  };
+  const mFromInput = (value: string): number | null => {
+    if (!value) return null;
+    if (value === formOrigin.current.elevation) return formOrigin.current.elevation_m;
+    const meters = units.toSI(parseFloat(value), "elevation");
+    return meters == null ? null : Math.round(meters);
+  };
   const today = new Date();
   const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
@@ -298,7 +336,8 @@ export default function Calendar() {
         setCompliance(byDate);
       })
       .catch(() => {});
-  }, [currentMonth]);
+    // units.system: compliance notes are rendered server-side in the current units.
+  }, [currentMonth, units.system]);
 
   // The modal snapshots a week's cells at click time; closing it on month navigation avoids
   // showing a stale week (whose GridCell objects belonged to a now-discarded `weeks` array).
@@ -368,10 +407,12 @@ export default function Calendar() {
       }
       setForm(f => ({
         ...f,
-        distance_km: preview.distance_m ? (preview.distance_m / 1000).toFixed(1) : f.distance_km,
-        elevation_m: preview.elevation_gain_m
-          ? Math.round(preview.elevation_gain_m).toString()
-          : f.elevation_m,
+        distance: preview.distance_m
+          ? units.fmt(preview.distance_m, "distance", { decimals: 1, withLabel: false })
+          : f.distance,
+        elevation: preview.elevation_gain_m
+          ? units.fmt(preview.elevation_gain_m, "elevation", { withLabel: false })
+          : f.elevation,
       }));
       setRoutePreviewNotice(`Filled in distance/elevation from "${preview.name || "route"}".`);
     }, 600);
@@ -386,8 +427,8 @@ export default function Calendar() {
     const body = {
       workout_type: form.workout_type,
       description: form.description || null,
-      distance_km: !noDistance && form.distance_km ? parseFloat(form.distance_km) : null,
-      elevation_m: !noDistance && form.elevation_m ? parseFloat(form.elevation_m) : null,
+      distance_km: noDistance ? null : kmFromInput(form.distance),
+      elevation_m: noDistance ? null : mFromInput(form.elevation),
       duration_min: form.duration_min ? parseInt(form.duration_min) : null,
       intensity: form.intensity,
       route_url: !noRoute && form.route_url ? form.route_url : null,
@@ -571,15 +612,7 @@ export default function Calendar() {
     setShowRouteForm(false);
     setRoutePreviewNotice(null);
     const existing = plan[date];
-    setForm(existing ? {
-      workout_type: existing.workout_type || "Easy Run",
-      description: existing.description || "",
-      distance_km: existing.distance_km?.toString() || "",
-      elevation_m: existing.elevation_m?.toString() || "",
-      duration_min: existing.duration_min?.toString() || "",
-      intensity: existing.intensity || "easy",
-      route_url: existing.route_url || "",
-    } : EMPTY_FORM);
+    setForm(existing ? formFromWorkout(existing) : EMPTY_FORM);
   };
 
   const openDay = (date: string) => {
@@ -597,15 +630,7 @@ export default function Calendar() {
 
   const startEdit = () => {
     const existing = selectedDate ? plan[selectedDate] : null;
-    setForm({
-      workout_type: existing?.workout_type || "Easy Run",
-      description: existing?.description || "",
-      distance_km: existing?.distance_km?.toString() || "",
-      elevation_m: existing?.elevation_m?.toString() || "",
-      duration_min: existing?.duration_min?.toString() || "",
-      intensity: existing?.intensity || "easy",
-      route_url: existing?.route_url || "",
-    });
+    setForm(formFromWorkout(existing));
     setRoutePreviewNotice(null);
     setEditMode(true);
   };
@@ -869,13 +894,13 @@ export default function Calendar() {
                           <div className={`text-xs px-1 py-0.5 rounded border truncate mb-0.5 ${WORKOUT_COLORS[workout.workout_type] ?? "bg-zinc-700/50 text-zinc-400 border-zinc-600/30"}`}>
                             {workout.workout_type}
                             {workout.distance_km && (
-                              <span className="ml-1 opacity-70">{workout.distance_km}k</span>
+                              <span className="ml-1 opacity-70">{fmtKm(workout.distance_km)}</span>
                             )}
                           </div>
                         )}
                         {dayActivities.map(a => (
                           <div key={a.id} className="text-xs px-1 py-0.5 rounded bg-zinc-600/40 text-zinc-300 border border-zinc-600/40 truncate mb-0.5">
-                            ✓ {((a.distance_m ?? 0) / 1000).toFixed(1)}k {a.sport_type}
+                            ✓ {units.fmt(a.distance_m ?? 0, "distance", { decimals: 1 })} {a.sport_type}
                           </div>
                         ))}
                       </div>
@@ -901,16 +926,16 @@ export default function Calendar() {
                     <div>
                       <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Planned</div>
                       <div className="text-sm text-zinc-300 font-semibold">
-                        {plannedKm > 0 ? `${plannedKm.toFixed(1)}` : "—"}
+                        {plannedKm > 0 ? fmtKm(plannedKm, 1, false) : "—"}
                       </div>
-                      {plannedKm > 0 && <div className="text-[10px] text-zinc-500">km</div>}
+                      {plannedKm > 0 && <div className="text-[10px] text-zinc-500">{distLabel}</div>}
                     </div>
                     <div>
                       <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Actual</div>
                       <div className={`text-sm font-semibold ${actualKm > 0 ? "text-green-400" : "text-zinc-600"}`}>
-                        {actualKm > 0 ? `${actualKm.toFixed(1)}` : "—"}
+                        {actualKm > 0 ? fmtKm(actualKm, 1, false) : "—"}
                       </div>
-                      {actualKm > 0 && <div className="text-[10px] text-zinc-500">km</div>}
+                      {actualKm > 0 && <div className="text-[10px] text-zinc-500">{distLabel}</div>}
                     </div>
                     {weekScored > 0 && (
                       <div>
@@ -969,7 +994,7 @@ export default function Calendar() {
                         {selectedWorkout.distance_km && (
                           <div className="bg-zinc-800 rounded p-2 text-xs">
                             <div className="text-zinc-500">Distance</div>
-                            <div className="text-zinc-200 font-medium">{selectedWorkout.distance_km} km</div>
+                            <div className="text-zinc-200 font-medium">{fmtKm(selectedWorkout.distance_km, 2)}</div>
                           </div>
                         )}
                         {selectedWorkout.duration_min && (
@@ -981,7 +1006,7 @@ export default function Calendar() {
                         {selectedWorkout.elevation_m && (
                           <div className="bg-zinc-800 rounded p-2 text-xs">
                             <div className="text-zinc-500">Elevation</div>
-                            <div className="text-zinc-200 font-medium">{selectedWorkout.elevation_m} m</div>
+                            <div className="text-zinc-200 font-medium">{units.fmt(selectedWorkout.elevation_m, "elevation")}</div>
                           </div>
                         )}
                       </div>
@@ -1093,22 +1118,22 @@ export default function Calendar() {
                     <div className="grid grid-cols-2 gap-2">
                       {!NO_DISTANCE_WORKOUT_TYPES.has(form.workout_type) && (
                       <div>
-                        <label className="text-xs text-zinc-500 mb-1 block">Distance (km)</label>
+                        <label className="text-xs text-zinc-500 mb-1 block">Distance ({distLabel})</label>
                         <input
                           type="number" step="0.1" placeholder="—"
-                          value={form.distance_km}
-                          onChange={e => setForm(f => ({ ...f, distance_km: e.target.value }))}
+                          value={form.distance}
+                          onChange={e => setForm(f => ({ ...f, distance: e.target.value }))}
                           className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
                         />
                       </div>
                       )}
                       {!NO_DISTANCE_WORKOUT_TYPES.has(form.workout_type) && (
                       <div>
-                        <label className="text-xs text-zinc-500 mb-1 block">Elevation (m)</label>
+                        <label className="text-xs text-zinc-500 mb-1 block">Elevation ({units.label("elevation")})</label>
                         <input
                           type="number" placeholder="—"
-                          value={form.elevation_m}
-                          onChange={e => setForm(f => ({ ...f, elevation_m: e.target.value }))}
+                          value={form.elevation}
+                          onChange={e => setForm(f => ({ ...f, elevation: e.target.value }))}
                           className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
                         />
                       </div>
@@ -1182,7 +1207,6 @@ export default function Calendar() {
                 <div className="w-44 flex-shrink-0 space-y-2">
                   <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Strava</h4>
                   {selectedActivities.map(a => {
-                    const distKm = ((a.distance_m ?? 0) / 1000).toFixed(2);
                     const isRun = RUN_TYPES.has(a.sport_type);
                     return (
                       <div key={a.id} className="bg-zinc-800/60 rounded p-2 border border-zinc-700/50 space-y-1">
@@ -1190,13 +1214,13 @@ export default function Calendar() {
                         <div className="text-xs text-zinc-500">{a.sport_type}</div>
                         <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs">
                           <span className="text-zinc-500">Distance</span>
-                          <span className="text-zinc-300">{distKm} km</span>
+                          <span className="text-zinc-300">{units.fmt(a.distance_m ?? 0, "distance")}</span>
                           <span className="text-zinc-500">Duration</span>
                           <span className="text-zinc-300">{fmtDuration(a.moving_time_s)}</span>
                           {isRun && a.avg_pace_s_per_km && (
                             <>
                               <span className="text-zinc-500">Pace</span>
-                              <span className="text-zinc-300">{fmtPace(a.avg_pace_s_per_km)}</span>
+                              <span className="text-zinc-300">{units.fmt(a.avg_pace_s_per_km, "pace")}</span>
                             </>
                           )}
                           {a.avg_hr && (
@@ -1208,7 +1232,7 @@ export default function Calendar() {
                           {a.elevation_gain_m != null && (
                             <>
                               <span className="text-zinc-500">Elevation</span>
-                              <span className="text-zinc-300">{Math.round(a.elevation_gain_m)} m</span>
+                              <span className="text-zinc-300">{units.fmt(a.elevation_gain_m, "elevation")}</span>
                             </>
                           )}
                         </div>
@@ -1244,13 +1268,13 @@ export default function Calendar() {
                           </div>
                         ))}
                       </div>
-                      <div className="text-sm text-zinc-400 font-medium">Hydration (ml)</div>
+                      <div className="text-sm text-zinc-400 font-medium">Hydration ({units.label("volume")})</div>
                       <div className="grid grid-cols-3 gap-2 text-center">
                         {(["pre", "during", "post"] as const).map(phase => (
                           <div key={phase} className="bg-zinc-800/60 rounded p-2">
                             <div className="text-xs text-zinc-500 capitalize mb-1">{phase}</div>
                             <div className="text-sm font-semibold text-blue-300">
-                              {selectedNutrition[`hydration_${phase}_ml` as keyof NutritionData] as number}
+                              {units.fmt(selectedNutrition[`hydration_${phase}_ml` as keyof NutritionData] as number, "volume", { withLabel: false })}
                             </div>
                           </div>
                         ))}
@@ -1347,7 +1371,7 @@ export default function Calendar() {
                               <span className="font-medium">{w.date} — {w.workout_type}</span>
                               <span className="text-xs opacity-70 text-right">
                                 {[
-                                  w.distance_km ? `${w.distance_km}km` : null,
+                                  w.distance_km ? fmtKm(w.distance_km) : null,
                                   w.duration_min ? `${w.duration_min}min` : null,
                                   w.intensity,
                                 ].filter(Boolean).join(" · ")}
@@ -1429,7 +1453,7 @@ export default function Calendar() {
                   <div className="bg-zinc-800/40 rounded p-3">
                     <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Distance</div>
                     <div className="text-sm text-zinc-200">
-                      {selectedWeek.plannedKm.toFixed(1)}km planned · {selectedWeek.actualKm.toFixed(1)}km actual
+                      {fmtKm(selectedWeek.plannedKm)} planned · {fmtKm(selectedWeek.actualKm)} actual
                     </div>
                   </div>
                   <div className="bg-zinc-800/40 rounded p-3">
@@ -1470,14 +1494,14 @@ export default function Calendar() {
                                 className={`inline-block text-xs px-1.5 py-0.5 rounded border ${WORKOUT_COLORS[workout.workout_type] ?? "bg-zinc-700/50 text-zinc-400 border-zinc-600/30"}`}
                               >
                                 {workout.workout_type}
-                                {workout.distance_km ? ` · ${workout.distance_km}km` : ""}
+                                {workout.distance_km ? ` · ${fmtKm(workout.distance_km)}` : ""}
                               </div>
                             ) : (
                               <div className="text-xs text-zinc-600 italic">No planned workout</div>
                             )}
                             {dayActivities.map(a => (
                               <div key={a.id} className="text-xs text-zinc-400">
-                                ✓ {((a.distance_m ?? 0) / 1000).toFixed(1)}km {a.sport_type}
+                                ✓ {units.fmt(a.distance_m ?? 0, "distance", { decimals: 1 })} {a.sport_type}
                               </div>
                             ))}
                             {complianceDay && (

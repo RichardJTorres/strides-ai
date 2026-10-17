@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "test": "node --test chatAdmission.test.mjs",
+    "test": "node --test chatAdmission.test.mjs units.test.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },

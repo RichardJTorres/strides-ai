@@ -5,8 +5,8 @@ import { getPresetRange, type DateRange, type FilterPreset } from "../../charts/
 import { useChartData } from "../../charts/useChartData";
 import { renderChartDataset } from "../../charts/cards/registry";
 import { groupIntoSections } from "../../charts/sections";
-
-type Unit = "miles" | "km";
+import { useUnits } from "../../UnitsContext";
+import { chartUnitParam } from "../../units";
 
 interface Props {
   mode: Mode;
@@ -14,9 +14,8 @@ interface Props {
 }
 
 export default function CardioCharts({ mode, theme }: Props) {
-  const [unit, setUnit] = useState<Unit>(() => {
-    return (localStorage.getItem("strides_unit") as Unit) || "miles";
-  });
+  // Units follow the app-wide setting (Settings → Units); the charts API still speaks "miles"/"km".
+  const unit = chartUnitParam(useUnits().system);
   const { data, loading, error } = useChartData(mode, unit);
 
   const [preset, setPreset] = useState<FilterPreset>("last-3m");
@@ -24,11 +23,6 @@ export default function CardioCharts({ mode, theme }: Props) {
   const [customUntil, setCustomUntil] = useState("");
   const [showUnavailable, setShowUnavailable] = useState(false);
   const [activeSectionId, setActiveSectionId] = useState<string>("load");
-
-  function selectUnit(u: Unit) {
-    setUnit(u);
-    localStorage.setItem("strides_unit", u);
-  }
 
   const range = useMemo((): DateRange => {
     if (preset === "custom") return { since: customSince || null, until: customUntil || null };
@@ -65,21 +59,6 @@ export default function CardioCharts({ mode, theme }: Props) {
       <div className="p-6 space-y-5 max-w-5xl mx-auto">
         <div className="flex flex-wrap gap-3 items-center justify-between">
           <h2 className="text-xl font-bold text-gray-100">Training Charts</h2>
-          <div className="flex rounded-md overflow-hidden border border-gray-700 text-sm">
-            {(["miles", "km"] as Unit[]).map((u) => (
-              <button
-                key={u}
-                onClick={() => selectUnit(u)}
-                className={`px-4 py-1.5 transition-colors ${
-                  unit === u
-                    ? `${theme.accentBg} ${theme.accentClass} font-medium`
-                    : "text-gray-400 hover:bg-gray-800"
-                }`}
-              >
-                {u === "miles" ? "Miles" : "km"}
-              </button>
-            ))}
-          </div>
         </div>
 
         <FilterBar

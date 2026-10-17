@@ -39,7 +39,7 @@ def test_prompt_includes_workout_goal():
     prompt = build_route_analysis_prompt(SAMPLE_WORKOUT, SAMPLE_ROUTE_SUMMARY, [], "")
     assert "Easy Ride" in prompt
     assert "Recovery spin, keep it conversational" in prompt
-    assert "30.0 km" in prompt
+    assert "30.00 km" in prompt
 
 
 def test_prompt_includes_route_stats():

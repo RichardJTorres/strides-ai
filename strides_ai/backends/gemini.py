@@ -9,6 +9,8 @@ from google.genai.errors import ClientError
 from ..budget import BudgetExceeded
 
 from .base import (
+    DISTANCE_UNITS,
+    ELEVATION_UNITS,
     SAVE_MEMORY_CATEGORIES,
     SAVE_MEMORY_TIMING_PROPERTIES,
     SAVE_MEMORY_DESCRIPTION,
@@ -83,8 +85,14 @@ UPDATE_TRAINING_PLAN_TOOL = types.Tool(
                                     ),
                                 ),
                                 "description": types.Schema(type=types.Type.STRING),
-                                "distance_km": types.Schema(type=types.Type.NUMBER),
-                                "elevation_m": types.Schema(type=types.Type.NUMBER),
+                                "distance": types.Schema(type=types.Type.NUMBER),
+                                "distance_unit": types.Schema(
+                                    type=types.Type.STRING, enum=list(DISTANCE_UNITS)
+                                ),
+                                "elevation": types.Schema(type=types.Type.NUMBER),
+                                "elevation_unit": types.Schema(
+                                    type=types.Type.STRING, enum=list(ELEVATION_UNITS)
+                                ),
                                 "duration_min": types.Schema(type=types.Type.INTEGER),
                                 "intensity": types.Schema(
                                     type=types.Type.STRING,

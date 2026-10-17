@@ -11,6 +11,7 @@ import {
   type FilterPreset,
 } from "../../charts/dateFilter";
 import { SERIES_PALETTE } from "../../charts/tokens";
+import { useUnits } from "../../UnitsContext";
 
 interface OneRMPoint {
   date: string;
@@ -68,6 +69,8 @@ function pivotOneRm(series: Record<string, OneRMPoint[]>): Record<string, unknow
 }
 
 export default function LiftingCharts({ theme }: Props) {
+  const units = useUnits();
+  const massLabel = units.label("mass");
   const [data, setData] = useState<LiftingChartData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -103,7 +106,13 @@ export default function LiftingCharts({ theme }: Props) {
     const { since, until } = range;
     const isAllTime = preset === "all-time";
 
-    const weeklyVol = filterByDate(data.weekly_volume, "week", since, until);
+    // The API returns kg; convert once here so every card below is in the athlete's units.
+    const toMass = (kg: number) => units.convert(kg, "mass") ?? 0;
+    const weeklyVol = filterByDate(data.weekly_volume, "week", since, until).map((p) => ({
+      ...p,
+      value: toMass(p.value),
+      rolling_avg: toMass(p.rolling_avg),
+    }));
     const weeklySess = filterByDate(data.weekly_sessions, "week", since, until);
     const muscleWeeks = filterByDate(data.muscle_group_sets.weeks, "week", since, until);
     const rpeTrend = filterByDate(data.rpe_trend, "date", since, until);
@@ -111,7 +120,10 @@ export default function LiftingCharts({ theme }: Props) {
     // Filter each 1RM exercise's series, then drop exercises with no points.
     const oneRmFiltered: Record<string, OneRMPoint[]> = {};
     for (const [ex, pts] of Object.entries(data.one_rm_progression.series)) {
-      const f = filterByDate(pts, "date", since, until);
+      const f = filterByDate(pts, "date", since, until).map((p) => ({
+        ...p,
+        one_rm_kg: Math.round(toMass(p.one_rm_kg) * 10) / 10,
+      }));
       if (f.length > 0) oneRmFiltered[ex] = f;
     }
 
@@ -128,7 +140,7 @@ export default function LiftingCharts({ theme }: Props) {
       },
       rpe_trend: rpeTrend,
     };
-  }, [data, range, preset]);
+  }, [data, range, preset, units]);
 
   const empty =
     filtered &&
@@ -199,9 +211,9 @@ export default function LiftingCharts({ theme }: Props) {
             <WeeklyBarCard
               title="Weekly Training Volume"
               data={filtered.weekly_volume}
-              unitLabel="kg"
+              unitLabel={massLabel}
               valueLabel="Volume"
-              formatValue={(n) => `${n.toLocaleString(undefined, { maximumFractionDigits: 0 })} kg`}
+              formatValue={(n) => `${n.toLocaleString(undefined, { maximumFractionDigits: 0 })} ${massLabel}`}
             />
 
             {filtered.one_rm_progression.exercises.length > 0 ? (
@@ -214,8 +226,8 @@ export default function LiftingCharts({ theme }: Props) {
                 yAxes={[
                   {
                     id: "y",
-                    tickFormatter: (v) => `${v}kg`,
-                    label: "kg",
+                    tickFormatter: (v) => `${v}${massLabel}`,
+                    label: massLabel,
                   },
                 ]}
               />

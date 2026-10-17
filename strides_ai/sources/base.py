@@ -2,6 +2,8 @@
 
 from typing import Protocol, runtime_checkable
 
+from ..units import DEFAULT_UNIT_SYSTEM, UnitSystem
+
 
 class ConfigurationError(Exception):
     """Source credentials or required configuration are missing."""
@@ -25,8 +27,11 @@ class DataSource(Protocol):
         """Return True if the credentials / config needed to sync are present."""
         ...
 
-    def build_deep_dive_content(self, activity, backend) -> tuple[str, str]:
-        """Return ``(system_prompt, user_content)`` for a deep-dive LLM call.
+    def build_deep_dive_content(
+        self, activity, backend, units: UnitSystem = DEFAULT_UNIT_SYSTEM
+    ) -> tuple[str, str]:
+        """Return ``(system_prompt, user_content)`` for a deep-dive LLM call, with every
+        measurement in ``units``.
 
         Raises:
             ConfigurationError: credentials / config missing

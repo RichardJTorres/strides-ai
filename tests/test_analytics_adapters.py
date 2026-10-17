@@ -28,7 +28,7 @@ def make_row(**overrides) -> dict:
         "hr_zone_4_pct": 8.0,
         "hr_zone_5_pct": 2.0,
         "cardiac_decoupling_pct": 4.5,
-        "pace_fade_seconds": 12.0,
+        "pace_fade_s_per_km": 12.0,
     }
     row.update(overrides)
     return row

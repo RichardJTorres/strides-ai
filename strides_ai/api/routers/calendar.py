@@ -17,10 +17,10 @@ from ...db import memories as mem_crud
 from ...db import profiles as prof_crud
 from ...db.engine import get_session
 from ...plan_generation import (
-    PLAN_GENERATION_SYSTEM_PROMPT,
     SURROUNDING_WINDOW_DAYS,
     build_plan_generation_prompt,
     parse_plan_generation_response,
+    plan_generation_system_prompt,
 )
 from ...profile import profile_to_text
 from ...route_analysis import (
@@ -32,7 +32,8 @@ from ...schedule import analyze_nutrition
 from ...sources.base import AuthError, ConfigurationError, NoDataError
 from ...sources.ridewithgps import condense_elevation_profile
 from ...sources.routes import fetch_route_detail, fetch_route_summary
-from ..deps import get_backend
+from ...units import UnitSystem
+from ..deps import get_backend, get_units
 
 router = APIRouter()
 
@@ -99,7 +100,12 @@ def get_calendar_plan(session: Session = Depends(get_session)):
 
 
 @router.get("/calendar/compliance")
-def get_compliance(start_date: str, end_date: str, session: Session = Depends(get_session)):
+def get_compliance(
+    start_date: str,
+    end_date: str,
+    session: Session = Depends(get_session),
+    units: UnitSystem = Depends(get_units),
+):
     """Compute plan-vs-actual compliance for a date range, mirroring the same computation the
     coach's system prompt uses (strides_ai/coach.py:_compliance_section) so the Calendar UI and
     the coach can never disagree about what counts as completed/modified/missed."""
@@ -120,7 +126,7 @@ def get_compliance(start_date: str, end_date: str, session: Session = Depends(ge
 
     planned = compliance.planned_workouts_from_rows(plan_rows)
     acts = compliance.compliance_activities_from_rows(activity_rows)
-    days = compliance.compute_range_compliance(planned, acts, date_cls.today())
+    days = compliance.compute_range_compliance(planned, acts, date_cls.today(), units)
     summary = compliance.summarize_compliance(days)
 
     return {
@@ -197,6 +203,7 @@ async def generate_plan(
     request: Request,
     session: Session = Depends(get_session),
     backend=Depends(get_backend),
+    units: UnitSystem = Depends(get_units),
 ):
     """Generate a suggested training block for a date range. Does not write to the calendar —
     the frontend accepts the result via POST /calendar/plan/bulk."""
@@ -210,7 +217,7 @@ async def generate_plan(
 
     mode = getattr(request.app.state, "mode", "running")
     profile_fields = prof_crud.get_fields(session, mode)
-    profile_text = profile_to_text(profile_fields, mode)
+    profile_text = profile_to_text(profile_fields, mode, units)
     memories = [m.model_dump() for m in mem_crud.get_all(session)]
     prefs = crud.get_prefs(session)
 
@@ -232,16 +239,17 @@ async def generate_plan(
         body.start_date,
         body.end_date,
         body.freeform_text,
+        units,
     )
 
     def _run_llm():
         return backend.stateless_turn(
-            PLAN_GENERATION_SYSTEM_PROMPT, prompt, on_token=lambda _: None
+            plan_generation_system_prompt(units), prompt, on_token=lambda _: None
         )
 
     try:
         text = await asyncio.get_event_loop().run_in_executor(None, _run_llm)
-        return parse_plan_generation_response(text, body.start_date, body.end_date)
+        return parse_plan_generation_response(text, body.start_date, body.end_date, units)
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
         raise HTTPException(status_code=502, detail=f"Failed to parse generated plan: {exc}")
     except Exception as exc:
@@ -253,6 +261,7 @@ def analyze_workout_nutrition(
     date: str,
     request: Request,
     session: Session = Depends(get_session),
+    units: UnitSystem = Depends(get_units),
 ):
     api_key = get_settings().anthropic_api_key
     if not api_key:
@@ -265,9 +274,9 @@ def analyze_workout_nutrition(
 
     mode = getattr(request.app.state, "mode", "running")
     profile_fields = prof_crud.get_fields(session, mode)
-    profile_text = profile_to_text(profile_fields, mode)
+    profile_text = profile_to_text(profile_fields, mode, units)
 
-    nutrition = analyze_nutrition(workout, profile_text, api_key)
+    nutrition = analyze_nutrition(workout, profile_text, api_key, units)
     crud.save_workout_nutrition(session, date, nutrition)
     return nutrition
 
@@ -298,6 +307,7 @@ async def analyze_workout_route(
     force: bool = False,
     session: Session = Depends(get_session),
     backend=Depends(get_backend),
+    units: UnitSystem = Depends(get_units),
 ):
     """Fetch the workout's route (Strava or RideWithGPS) and judge whether it fits the
     workout's goal."""
@@ -333,9 +343,11 @@ async def analyze_workout_route(
 
     mode = getattr(request.app.state, "mode", "running")
     profile_fields = prof_crud.get_fields(session, mode)
-    profile_text = profile_to_text(profile_fields, mode)
+    profile_text = profile_to_text(profile_fields, mode, units)
 
-    prompt = build_route_analysis_prompt(workout, route_detail, elevation_profile, profile_text)
+    prompt = build_route_analysis_prompt(
+        workout, route_detail, elevation_profile, profile_text, units
+    )
 
     def _run_llm():
         return backend.stateless_turn(ROUTE_ANALYSIS_SYSTEM_PROMPT, prompt, on_token=lambda _: None)

@@ -1,16 +1,17 @@
 """Strava data source — cardio activities (runs, rides, etc.)."""
 
 from ..analysis import (
-    DEEP_DIVE_SYSTEM_PROMPT,
-    DEEP_DIVE_SYSTEM_PROMPT_LOCAL,
     RateLimitError,
     build_precomputed_brief,
     condense_streams_for_deep_dive,
+    deep_dive_system_prompt,
+    deep_dive_system_prompt_local,
     fetch_activity_streams,
 )
 from ..auth import get_access_token
 from ..config import get_settings
 from ..sync import sync_activities
+from ..units import DEFAULT_UNIT_SYSTEM, UnitSystem
 from .base import AuthError, ConfigurationError, NoDataError
 
 
@@ -23,7 +24,9 @@ class StravaSource:
         s = get_settings()
         return bool(s.strava_client_id and s.strava_client_secret)
 
-    def build_deep_dive_content(self, activity, backend) -> tuple[str, str]:
+    def build_deep_dive_content(
+        self, activity, backend, units: UnitSystem = DEFAULT_UNIT_SYSTEM
+    ) -> tuple[str, str]:
         settings = get_settings()
         if not settings.strava_client_id or not settings.strava_client_secret:
             raise ConfigurationError("Strava credentials not configured")
@@ -49,11 +52,11 @@ class StravaSource:
 
         activity_dict = activity.model_dump()
         if backend.prefers_precomputed_brief:
-            system_prompt = DEEP_DIVE_SYSTEM_PROMPT_LOCAL
-            user_content = build_precomputed_brief(streams, activity_dict)
+            system_prompt = deep_dive_system_prompt_local(units)
+            user_content = build_precomputed_brief(streams, activity_dict, units=units)
         else:
-            system_prompt = DEEP_DIVE_SYSTEM_PROMPT
-            user_content = condense_streams_for_deep_dive(streams, activity_dict)
+            system_prompt = deep_dive_system_prompt(units)
+            user_content = condense_streams_for_deep_dive(streams, activity_dict, units=units)
 
         return system_prompt, user_content
 

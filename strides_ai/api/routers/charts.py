@@ -9,16 +9,22 @@ from ...config import VALID_MODES
 from ...db import activities as crud
 from ...db import exercise_templates as tmpl_crud
 from ...db.engine import get_session
+from ...units import UnitSystem
+from ..deps import get_units
 
 router = APIRouter()
 
 
 @router.get("/charts")
 def charts(
-    unit: str = "miles",
+    unit: str | None = None,
     mode: str = "running",
     session: Session = Depends(get_session),
+    units: UnitSystem = Depends(get_units),
 ):
+    # The unit system setting drives charts; an explicit ?unit= still overrides it.
+    if unit is None:
+        unit = "miles" if units is UnitSystem.IMPERIAL else "km"
     if unit not in ("miles", "km"):
         raise HTTPException(status_code=400, detail="unit must be 'miles' or 'km'")
     if mode not in VALID_MODES:

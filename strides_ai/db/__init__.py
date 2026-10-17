@@ -209,6 +209,11 @@ def set_setting(key: str, value: str) -> None:
         _sett.set(s, key, value)
 
 
+def get_unit_system():
+    with _session() as s:
+        return _sett.get_unit_system(s)
+
+
 # ── Conversations ─────────────────────────────────────────────────────────────
 
 

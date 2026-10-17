@@ -212,10 +212,10 @@ Every activity synced from Strava is automatically analysed using time-series st
 |---|---|---|
 | **Cardiac decoupling %** | Aerobic efficiency — how much the HR/pace ratio drifts across the run | <5% excellent, 5–10% acceptable, >10% high stress |
 | **HR zones (Z1–Z5)** | Time distribution across HR intensity zones (based on `max_hr` setting, default 190) | Z1 recovery, Z2 aerobic, Z3 tempo, Z4 threshold, Z5 VO2max |
-| **Pace fade (sec/mile)** | Last-third avg pace minus first-third avg pace | Positive = slowing, negative = negative split |
+| **Pace fade** | Last-third avg pace minus first-third avg pace (stored in s/km, shown in s/km or s/mi) | Positive = slowing, negative = negative split |
 | **Cadence avg / std dev** | Mean and variability of step rate (spm for runs, rpm for rides) | — |
 | **Effort efficiency score** | 0–100, normalized across athlete history; higher = better pace for a given HR | — |
-| **Elevation per mile** | Total elevation gain in ft/mile; flags hilly courses (>100 ft/mile) | — |
+| **Climbing ratio** | Elevation gain per distance (stored in m/km, shown in m/km or ft/mi); flags hilly courses (>100 ft/mi ≈ 19 m/km) | — |
 | **Suffer score validation** | Cross-checks Strava's suffer score against computed HR zone distribution | Flags potential HR sensor issues |
 
 ### Analysis summary

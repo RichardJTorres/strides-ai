@@ -61,7 +61,7 @@ Select backend with `PROVIDER=claude` (default), `PROVIDER=gemini`, `PROVIDER=op
 
 ### System prompt assembly (`strides_ai/coach.py`)
 
-On every turn `build_system()` assembles: mode-specific base prompt → current date/time → athlete profile text → coaching memories → calendar constraints (upcoming races and blocked-out days from `calendar_prefs`) → upcoming planned workouts (next `PLANNED_WORKOUTS_WINDOW_DAYS` days, default 60) → recent activities training log (last 30, `RECENT_ACTIVITIES_IN_SYSTEM`).
+On every turn `build_system()` assembles: mode-specific base prompt → units section (the athlete's `unit_system`) → current date/time → athlete profile text → coaching memories → calendar constraints (upcoming races and blocked-out days from `calendar_prefs`) → upcoming planned workouts (next `PLANNED_WORKOUTS_WINDOW_DAYS` days, default 60) → recent activities training log (last 30, `RECENT_ACTIVITIES_IN_SYSTEM`).
 
 At session start, `build_initial_history()` seeds the full activity log (all activities) as the first exchange in `_history`, so older runs are accessible even though the system prompt only carries the 30 most recent. Last 40 messages (`RECALL_MESSAGES`) from the DB are appended after.
 
@@ -82,6 +82,18 @@ Three separate system prompts and DB rows per mode. Activities filtered by `spor
 FastAPI app; a single backend instance is created at startup via FastAPI's lifespan context manager (`deps.py`). `/api/chat` is SSE — a sync `stream_turn` thread writes tokens into a `queue.SimpleQueue`, which an async generator drains. The frontend parses `data:` lines and a `[MEMORIES]` sentinel sent after the full response.
 
 The Vite dev server proxies `/api` and `/uploads` → `localhost:8000` (`web/vite.config.ts`), so no CORS issues in dev.
+
+### Units (`strides_ai/units.py`, `web/src/units.ts`)
+
+Every stored measurement is SI-based: meters, s/km, m/km, kg, ml (`TrainingPlan.distance_km` is the one km column). Nothing is ever stored in the athlete's display units. The `unit_system` setting (`metric` default | `imperial`, `settings` table, `GET/PUT /api/settings`) only controls display and what the coach is told.
+
+- **Registry** — `units.py` defines `UnitSystem`, `Quantity` (one per canonical unit) and `convert` / `to_si` / `format_value`. All conversion goes through it; don't hand-roll `/ 1000` or `* 3.28`.
+- **Models** — `MeasuredModel` (`db/models.py`): each model declares `__measurements__ = {field: (Quantity, scale)}` and gets `measurement(field, system)` / `measurements(system)`, plus `Model.measure_field(row_dict, ...)` for the plain dicts the formatters pass around. A new measured column = one declaration line.
+- **Cascade** — routers resolve the setting once per request (`Depends(get_units)` in `api/deps.py`) and pass `units: UnitSystem` explicitly through every formatter and prompt builder (coach, modes, compliance, plan generation, route analysis, nutrition, deep dives). The system prompt is rebuilt every turn, so a switch takes effect on the next message; stored chat messages keep their original units.
+- **LLM input** — `update_training_plan` and plan generation take `distance`/`elevation` in the athlete's units (plus `distance_unit`/`elevation_unit` on the tool) and normalize to SI server-side; legacy `distance_km`/`elevation_m` still work.
+- **Profile body measurements** — `personal.height_cm` / `personal.weight_kg` are numbers (`Quantity.HEIGHT` shows ft + in in imperial). Older free-text `height`/`weight` is parsed on read by `body_metrics.normalize_personal()` (called from `db/profiles.get_fields`); unparseable text is kept in `personal.body_notes`.
+- **`analysis_summary`** is deterministic, so `render_analysis_summary(row, units)` rebuilds completed summaries on read in the current units.
+- **Frontend** — `units.ts` mirrors the registry; `UnitsContext` (`useUnits()`) is seeded from `/api/settings` in `App.tsx` and re-renders every consumer when the Settings page switches it. `tests/fixtures/unit_cases.json` is asserted by both `tests/test_units.py` and `web/units.test.mjs` (`npm test`) so the two can't drift.
 
 ### Analysis pipeline (`strides_ai/analysis.py`)
 

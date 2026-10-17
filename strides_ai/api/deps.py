@@ -1,6 +1,7 @@
 """Shared dependencies: backend lifecycle and provider utilities."""
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
+from sqlmodel import Session
 
 from .. import db
 from ..backends.claude import ClaudeBackend
@@ -9,6 +10,14 @@ from ..backends.ollama import OllamaBackend
 from ..backends.openai import OpenAIBackend
 from ..coach import build_initial_history, RECALL_MESSAGES
 from ..config import get_settings
+from ..db import settings as settings_crud
+from ..db.engine import get_session
+from ..units import UnitSystem
+
+
+def get_units(session: Session = Depends(get_session)) -> UnitSystem:
+    """FastAPI dependency: the athlete's unit system, resolved once per request."""
+    return settings_crud.get_unit_system(session)
 
 
 def get_provider_models(provider_id: str) -> list[dict]:

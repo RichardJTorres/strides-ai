@@ -6,10 +6,10 @@ cardio.py, not here — this module only knows about dates, numbers, and units.
 
 from datetime import date, timedelta
 
-M_TO_MI = 0.000621371
-M_TO_KM = 0.001
-M_TO_FT = 3.28084
-KM_TO_MI_FACTOR = 1.60934
+from ..units import Quantity, UnitSystem, convert
+
+# `unit` throughout this module is the charts API vocabulary ("miles" | "km"), which
+# UnitSystem.parse maps onto the app-wide unit system; the arithmetic lives in strides_ai/units.py.
 
 
 def monday_of(d: date) -> date:
@@ -81,12 +81,12 @@ def trailing_date_rolling_avg(points: list[tuple[date, float]], window_days: int
 
 
 def to_distance_unit(meters: float | None, unit: str) -> float:
-    return (meters or 0.0) * (M_TO_MI if unit == "miles" else M_TO_KM)
+    return convert(meters or 0.0, Quantity.DISTANCE, UnitSystem.parse(unit))
 
 
 def to_pace_unit(s_per_km: float, unit: str) -> float:
     """Convert s/km -> s/unit."""
-    return s_per_km * (KM_TO_MI_FACTOR if unit == "miles" else 1.0)
+    return convert(s_per_km, Quantity.PACE, UnitSystem.parse(unit))
 
 
 def to_hours(seconds: float | None) -> float:
@@ -94,14 +94,12 @@ def to_hours(seconds: float | None) -> float:
 
 
 def to_elevation_unit(meters: float | None, unit: str) -> float:
-    """Feet when unit == 'miles' (matches the existing ft/mile convention in analysis.py's
-    elevation-per-mile metric), meters when unit == 'km'."""
+    """Feet when unit == 'miles', meters when unit == 'km'."""
     if meters is None:
         return 0.0
-    return meters * M_TO_FT if unit == "miles" else meters
+    return convert(meters, Quantity.ELEVATION, UnitSystem.parse(unit))
 
 
-def pace_fade_to_unit(sec_per_mile: float, unit: str) -> float:
-    """pace_fade_seconds is stored as sec/mile, fixed by the analysis pipeline (CLAUDE.md).
-    Convert to sec/unit to match the page's distance-unit toggle."""
-    return sec_per_mile if unit == "miles" else sec_per_mile / KM_TO_MI_FACTOR
+def pace_fade_to_unit(s_per_km: float, unit: str) -> float:
+    """pace_fade_s_per_km is stored as s/km; convert to s/unit."""
+    return convert(s_per_km, Quantity.PACE_DELTA, UnitSystem.parse(unit))
