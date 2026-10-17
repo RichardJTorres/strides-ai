@@ -182,3 +182,45 @@ def test_parser_rejects_non_json():
     digest = build_digest(steady_rows(), "running", UnitSystem.METRIC, TODAY)
     with pytest.raises(json.JSONDecodeError):
         parse_insights_response("not json", digest)
+
+
+def test_fingerprint_changes_on_calendar_edits():
+    rows = steady_rows()
+    plan = [{"date": "2026-06-05", "workout_type": "Easy Run", "distance_km": 8.0}]
+    base = digest_fingerprint(rows, "running", UnitSystem.METRIC, TODAY, plan, {})
+    assert base == digest_fingerprint(rows, "running", UnitSystem.METRIC, TODAY, plan, {})
+    edited = [{**plan[0], "distance_km": 12.0}]
+    assert digest_fingerprint(rows, "running", UnitSystem.METRIC, TODAY, edited, {}) != base
+    for prefs in ({"blocked_days": ["2026-06-06"]}, {"races": [{"date": "2026-07-01"}]}):
+        assert digest_fingerprint(rows, "running", UnitSystem.METRIC, TODAY, plan, prefs) != base
+
+
+def test_upcoming_context_flags_and_recommendation_filter():
+    from strides_ai.training_state import build_training_state
+
+    rows = steady_rows()
+    plan = [
+        {"date": "2026-06-05", "workout_type": "Easy Run", "distance_km": 8.0, "intensity": "easy"}
+    ]
+    prefs = {"blocked_days": ["2026-06-05"], "races": [{"date": "2026-06-20", "name": "10K"}]}
+    state = build_training_state(rows, plan, prefs, "running", UnitSystem.METRIC, TODAY)
+    digest = build_digest(
+        rows, "running", UnitSystem.METRIC, TODAY, plan, prefs["races"], state=state
+    )
+    assert "plan_conflict" in {f["id"] for f in digest["flags"]}
+    assert "Already on the calendar" in build_insights_prompt(digest)
+
+    text = json.dumps(
+        {
+            "status": "building",
+            "headline": "h",
+            "recommendations": [
+                {"action": "Run easy on the blocked day", "date": "2026-06-05"},
+                {"action": "Run easy Saturday", "date": "2026-06-06"},
+                {"action": "Hydrate", "date": "not-a-date"},
+            ],
+        }
+    )
+    recs = parse_insights_response(text, digest)["recommendations"]
+    assert [r["action"] for r in recs] == ["Run easy Saturday", "Hydrate"]
+    assert recs[1]["date"] is None

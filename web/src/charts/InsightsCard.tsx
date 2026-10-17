@@ -1,4 +1,5 @@
 import type { ThemeConfig } from "../App";
+import { PENDING_CHAT_DRAFT_KEY } from "../pages/chatActivityHandoff";
 import type { DigestMetric, InsightStatus, InsightsDigest } from "./api";
 import { useInsights } from "./useInsights";
 import { useUnits } from "../UnitsContext";
@@ -167,6 +168,29 @@ export default function InsightsCard({ mode, theme }: Props) {
                         <div>
                           <span className="text-gray-100">{r.action}</span>
                           {r.why && <span className="text-gray-500"> — {r.why}</span>}
+                          <div className="mt-1 flex gap-3 text-xs">
+                            <button
+                              className="text-gray-400 hover:text-gray-200 underline"
+                              onClick={() => {
+                                try {
+                                  sessionStorage.setItem(
+                                    PENDING_CHAT_DRAFT_KEY,
+                                    `Update my training calendar to follow this recommendation` +
+                                      `${r.date ? ` (${r.date})` : ""}: ${r.action}. ` +
+                                      "Work around my planned workouts, races and blocked-out days.",
+                                  );
+                                } catch { /* best-effort handoff */ }
+                                location.hash = "chat";
+                              }}
+                            >
+                              Plan this with coach
+                            </button>
+                            {r.date && (
+                              <a href="#calendar" className="text-gray-500 hover:text-gray-300">
+                                {r.date} on calendar →
+                              </a>
+                            )}
+                          </div>
                         </div>
                       </li>
                     ))}

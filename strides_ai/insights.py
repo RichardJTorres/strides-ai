@@ -27,6 +27,14 @@ from .compliance import (
     summarize_compliance,
 )
 from .route_analysis import _strip_json_fences
+from .training_state import (
+    ACWR_DANGER,
+    ACWR_HIGH,
+    ACWR_LOW,
+    RAMP_ELEVATED,
+    RAMP_HIGH,
+    TrainingState,
+)
 from .units import (
     DEFAULT_UNIT_SYSTEM,
     Quantity,
@@ -44,6 +52,7 @@ MIN_ACTIVE_WEEKS = 3
 FLAT_PCT = 3.0  # |delta| below this is "flat"
 FLAT_PP = 1.0  # same, for percentage-point metrics
 COMPLIANCE_LOOKBACK_DAYS = 14
+UPCOMING_DAYS = 14
 
 STATUSES = (
     "building",
@@ -237,8 +246,12 @@ def build_digest(
     today: date,
     plan_rows: Optional[list[dict]] = None,
     races: Optional[list[dict]] = None,
+    state: Optional[TrainingState] = None,
 ) -> dict:
-    """DB activity rows -> deterministic digest. Same inputs always produce the same output."""
+    """DB activity rows -> deterministic digest. Same inputs always produce the same output.
+
+    `state` (see training_state.py) adds the forward-looking `plan.*` metrics and the `upcoming`
+    context so the readout is written against the calendar, not just the past."""
     units = UnitSystem.parse(units)
     unit = "miles" if units is UnitSystem.IMPERIAL else "km"
     acts = to_cardio_analytics(rows)
@@ -262,7 +275,7 @@ def build_digest(
         "metrics": [],
         "flags": [],
         "missing": [],
-        "context": {"next_race": None, "compliance": None},
+        "context": {"next_race": None, "compliance": None, "upcoming": None},
     }
     if not sufficient:
         return digest
@@ -405,6 +418,8 @@ def build_digest(
             )
         )
 
+    if state is not None:
+        metrics.extend(_plan_metrics(state, dist_u))
     digest["metrics"] = [m for m in metrics if m]
 
     # Context: next race, recent plan compliance
@@ -438,8 +453,75 @@ def build_digest(
                 "consistency_pct": s.consistency_pct,
             }
 
+    if state is not None:
+        digest["context"]["upcoming"] = _upcoming_context(
+            state, plan_rows or [], today, units, dist_u
+        )
+
     digest["flags"] = _flags(digest)
     return digest
+
+
+def _plan_metrics(state: TrainingState, dist_u: Callable[[float], str]) -> list[Optional[dict]]:
+    out: list[Optional[dict]] = []
+    ratios = [p["ratio"] for p in state.projection[:UPCOMING_DAYS] if p["ratio"] is not None]
+    if ratios:
+        out.append(
+            _metric(
+                "plan.peak_ratio",
+                "Peak projected fatigue/fitness ratio (next 14 d, as planned)",
+                "plan",
+                max(ratios),
+                lambda v: f"{v:.2f}",
+            )
+        )
+    nxt = next((w for w in state.weeks if not w["is_current"]), None)
+    if nxt and nxt["ramp_pct"] is not None:
+        base = nxt["volume"] / (1 + nxt["ramp_pct"] / 100) if nxt["ramp_pct"] > -100 else None
+        out.append(
+            _metric(
+                "plan.next_week",
+                f"Planned volume, week of {nxt['week_start']}",
+                "plan",
+                nxt["volume"],
+                dist_u,
+                base if base and base > 0 else None,
+            )
+        )
+    return out
+
+
+def _upcoming_context(
+    state: TrainingState,
+    plan_rows: list[dict],
+    today: date,
+    units: UnitSystem,
+    dist_u: Callable[[float], str],
+) -> dict:
+    """What is already on the calendar: the model must work with it, never against it."""
+    end = (today + timedelta(days=UPCOMING_DAYS)).isoformat()
+    sessions = []
+    for p in sorted(plan_rows, key=lambda p: p.get("date") or ""):
+        d = p.get("date") or ""
+        if not (today.isoformat() <= d <= end):
+            continue
+        km = p.get("distance_km")
+        sessions.append(
+            {
+                "date": d,
+                "workout_type": p.get("workout_type"),
+                "distance": dist_u(convert(km * 1000.0, Quantity.DISTANCE, units)) if km else None,
+                "intensity": p.get("intensity"),
+            }
+        )
+    c = state.constraints
+    return {
+        "sessions": sessions,
+        "blocked_days": c["blocked_days"],
+        "race_dates": [r["date"] for r in c["races"]],
+        "weeks": state.weeks,
+        "conflicts": state.conflicts,
+    }
 
 
 def _get(digest: dict, metric_id: str) -> Optional[dict]:
@@ -455,14 +537,14 @@ def _flags(digest: dict) -> list[dict]:
 
     ramp = _get(digest, "volume.ramp")
     if ramp and ramp["delta_pct"] is not None:
-        if ramp["delta_pct"] > 15:
+        if ramp["delta_pct"] > RAMP_HIGH:
             add(
                 "ramp_high",
                 "warning",
                 f"Last full week was {ramp['delta_pct']:+.0f}% vs the prior 4-week average.",
                 ["volume.ramp"],
             )
-        elif ramp["delta_pct"] > 10:
+        elif ramp["delta_pct"] > RAMP_ELEVATED:
             add(
                 "ramp_elevated",
                 "info",
@@ -481,18 +563,18 @@ def _flags(digest: dict) -> list[dict]:
 
     acwr = _get(digest, "load.acwr")
     if acwr:
-        if acwr["value"] > 1.5:
+        if acwr["value"] > ACWR_HIGH:
             add(
                 "acwr_high",
-                "warning",
-                f"Fatigue/fitness ratio is {acwr['value']:.2f} (>1.5).",
+                "warning" if acwr["value"] > ACWR_DANGER else "info",
+                f"Fatigue/fitness ratio is {acwr['value']:.2f} (>{ACWR_HIGH}).",
                 ["load.acwr"],
             )
-        elif acwr["value"] < 0.7:
+        elif acwr["value"] < ACWR_LOW:
             add(
                 "acwr_low",
                 "info",
-                f"Fatigue/fitness ratio is {acwr['value']:.2f} (<0.7): fresh or detraining.",
+                f"Fatigue/fitness ratio is {acwr['value']:.2f} (<{ACWR_LOW}): fresh or detraining.",
                 ["load.acwr"],
             )
 
@@ -525,6 +607,21 @@ def _flags(digest: dict) -> list[dict]:
     if race and race["days_out"] <= 21:
         add("race_soon", "info", f"{race['name']} is {race['days_out']} days away.", [])
 
+    up = digest["context"].get("upcoming")
+    if up:
+        hard = [c for c in up["conflicts"] if c["hard"]]
+        if hard:
+            add(
+                "plan_conflict",
+                "warning",
+                f"{len(hard)} planned workout(s) sit on blocked-out or race days "
+                f"(first: {hard[0]['date']}).",
+                [],
+            )
+        soft = [c for c in up["conflicts"] if c["kind"] in ("ramp_high", "ratio_breach")]
+        if soft:
+            add("projected_overload", "warning", soft[0]["detail"], ["plan.peak_ratio"])
+
     comp = digest["context"]["compliance"]
     if comp and comp["consistency_pct"] is not None and comp["consistency_pct"] < 60:
         add(
@@ -536,8 +633,16 @@ def _flags(digest: dict) -> list[dict]:
     return flags
 
 
-def digest_fingerprint(rows: list[dict], mode: str, units: UnitSystem, today: date) -> str:
-    """Changes when activities are added, the athlete's units change, or the ISO week rolls over."""
+def digest_fingerprint(
+    rows: list[dict],
+    mode: str,
+    units: UnitSystem,
+    today: date,
+    plan_rows: Optional[list[dict]] = None,
+    prefs: Optional[dict] = None,
+) -> str:
+    """Changes when activities are added, the athlete's units change, the ISO week rolls over, or
+    the calendar (planned workouts, races, blocked days) is edited."""
     ids = [r.get("id") or 0 for r in rows]
     dates = [r.get("date") or "" for r in rows]
     iso = today.isocalendar()
@@ -549,6 +654,12 @@ def digest_fingerprint(rows: list[dict], mode: str, units: UnitSystem, today: da
         max(dates, default=""),
         iso[0],
         iso[1],
+        sorted(
+            [p.get("date"), p.get("workout_type"), p.get("distance_km"), p.get("intensity")]
+            for p in (plan_rows or [])
+        ),
+        sorted([r.get("date"), r.get("name")] for r in (prefs or {}).get("races", [])),
+        sorted((prefs or {}).get("blocked_days", [])),
     ]
     return hashlib.sha1(json.dumps(payload).encode()).hexdigest()[:16]
 
@@ -575,7 +686,14 @@ Respond with ONLY a valid JSON object — no prose, no markdown fences. Exactly 
                       Prioritize the most notable or surprising datapoints; skip the obvious.
   "recommendations" — up to 3 objects: {"action": concrete imperative with a number or session
                       type where possible, "why": max 15 words, "metric_ids": [..]}
-                      Tie advice to the next race or planned-workout adherence when present.\
+                      Add "date" (YYYY-MM-DD) when the action targets a specific day.
+                      Tie advice to the next race or planned-workout adherence when present.
+
+The digest's "Already on the calendar" section lists sessions, blocked-out days and race dates.
+Work with it, never against it: never recommend training on a blocked-out day or a race day;
+if a planned deload, taper or rest day already delivers the advice, say it is already planned
+instead of repeating it; phrase advice relative to the planned sessions ("keep Thursday's
+tempo, make Saturday's long run easy") rather than adding new sessions.\
 """
 
 
@@ -613,10 +731,37 @@ def build_insights_prompt(digest: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM)
         )
     if ctx_lines:
         lines += ["", "## Context", *ctx_lines]
+    up = ctx.get("upcoming")
+    if up:
+        lines += ["", f"## Already on the calendar (next {UPCOMING_DAYS} days)"]
+        if up["sessions"]:
+            lines += [
+                f"- {x['date']}: {x['workout_type']}"
+                + (f", {x['distance']}" if x["distance"] else "")
+                + (f", {x['intensity']}" if x["intensity"] else "")
+                for x in up["sessions"]
+            ]
+        else:
+            lines.append("- No planned workouts.")
+        if up["blocked_days"]:
+            lines.append("Blocked-out days: " + ", ".join(up["blocked_days"]))
+        if up["race_dates"]:
+            lines.append("Race dates: " + ", ".join(up["race_dates"]))
+        for w in up["weeks"]:
+            ramp = "" if w["ramp_pct"] is None else f" ({w['ramp_pct']:+.0f}% vs prior 4-wk avg)"
+            lines.append(f"Week of {w['week_start']}: {w['volume']:.1f} planned{ramp}")
+        lines += [f"- Plan issue: {c['detail']}" for c in up["conflicts"]]
     if digest["missing"]:
         lines += ["", "Unavailable (not enough data): " + ", ".join(digest["missing"])]
     lines += ["", f"## Units\nWrite all measurements in {describe_for_prompt(units)}."]
     return "\n".join(lines)
+
+
+def _clean_date(value) -> Optional[str]:
+    try:
+        return date.fromisoformat(value).isoformat() if isinstance(value, str) else None
+    except ValueError:
+        return None
 
 
 def _clean_ids(ids, valid: set[str]) -> list[str]:
@@ -631,6 +776,8 @@ def parse_insights_response(text: str, digest: dict) -> dict:
     if not isinstance(parsed, dict):
         raise json.JSONDecodeError("expected a JSON object", text, 0)
     valid = {m["id"] for m in digest["metrics"]}
+    up = (digest.get("context") or {}).get("upcoming") or {}
+    forbidden = set(up.get("blocked_days", [])) | set(up.get("race_dates", []))
     status = parsed.get("status")
     findings = []
     for f in (parsed.get("findings") or [])[:MAX_FINDINGS]:
@@ -649,11 +796,15 @@ def parse_insights_response(text: str, digest: dict) -> dict:
     for r in (parsed.get("recommendations") or [])[:MAX_RECOMMENDATIONS]:
         if not isinstance(r, dict) or not r.get("action"):
             continue
+        rec_date = _clean_date(r.get("date"))
+        if rec_date and rec_date in forbidden:
+            continue  # the model ignored the calendar; drop rather than show a conflict
         recs.append(
             {
                 "action": str(r["action"]),
                 "why": str(r.get("why") or ""),
                 "metric_ids": _clean_ids(r.get("metric_ids"), valid),
+                "date": rec_date,
             }
         )
     return {

@@ -1,7 +1,7 @@
 import TimeSeriesLineCard from "../TimeSeriesLineCard";
 import ChartCard from "../ChartCard";
 import { filterDatasetByRange } from "../dateFilter";
-import type { AtlCtlDataset } from "../api";
+import type { AtlCtlDataset, LoadContext } from "../api";
 import { LifetimeUnavailable, EmptyInRange } from "./EmptyState";
 
 interface Props {
@@ -10,11 +10,18 @@ interface Props {
   until: string | null;
   isAllTime: boolean;
   unit: "miles" | "km";
+  /** Thresholds + calendar projection from the backend; defaults keep the card usable without. */
+  loadContext?: LoadContext;
 }
 
-function ratioZone(ratio: number): { label: string; color: string } {
-  if (ratio > 1.3) return { label: "⚠ Injury risk", color: "#ef4444" };
-  if (ratio < 0.8) return { label: "↓ Detraining", color: "#9ca3af" };
+const DEFAULT_THRESHOLDS = { acwr_low: 0.8, acwr_high: 1.3 };
+
+function ratioZone(
+  ratio: number,
+  t: { acwr_low: number; acwr_high: number } = DEFAULT_THRESHOLDS,
+): { label: string; color: string } {
+  if (ratio > t.acwr_high) return { label: "⚠ Injury risk", color: "#ef4444" };
+  if (ratio < t.acwr_low) return { label: "↓ Detraining", color: "#9ca3af" };
   return { label: "✓ Optimal", color: "#22c55e" };
 }
 
@@ -23,20 +30,23 @@ function ATLTooltip({
   payload,
   label,
   unit,
+  th,
 }: {
   active?: boolean;
   payload?: { dataKey: string; value: number }[];
   label?: string;
   unit: "miles" | "km";
+  th: { acwr_low: number; acwr_high: number };
 }) {
   if (!active || !payload?.length) return null;
-  const get = (key: string) => payload.find((p) => p.dataKey === key)?.value;
+  const get = (key: string) =>
+    (payload.find((p) => p.dataKey === key) ?? payload.find((p) => p.dataKey === `${key}_proj`))?.value;
   const atl = get("atl");
   const ctl = get("ctl");
   const ratio = get("ratio");
   const ul = unit === "miles" ? "mi" : "km";
 
-  const zone = ratio != null ? ratioZone(ratio).label : "";
+  const zone = ratio != null ? ratioZone(ratio, th).label : "";
 
   return (
     <div className="bg-gray-800 border border-gray-700 rounded-md p-2.5 text-xs shadow-lg leading-5">
@@ -60,7 +70,7 @@ function ATLTooltip({
   );
 }
 
-export default function AtlCtlCard({ dataset, since, until, isAllTime, unit }: Props) {
+export default function AtlCtlCard({ dataset, since, until, isAllTime, unit, loadContext }: Props) {
   if (!dataset.available) {
     return (
       <ChartCard title={dataset.title}>
@@ -80,13 +90,35 @@ export default function AtlCtlCard({ dataset, since, until, isAllTime, unit }: P
   }
 
   const ul = unit === "miles" ? "mi" : "km";
-  const ratioMax = Math.max(2.5, ...data.map((d) => d.ratio ?? 0));
+  const th = loadContext?.thresholds ?? DEFAULT_THRESHOLDS;
+
+  // Planned workouts on the calendar extend ATL/CTL forward as dashed lines. The last actual
+  // point seeds the projected series so the two lines join. Only shown when the selected range
+  // reaches today (a past-only filter has nothing to project from).
+  const projection = loadContext?.projection ?? [];
+  const showProjection = projection.length > 0 && (until === null || until >= data[data.length - 1].date);
+  const lastActual = data[data.length - 1];
+  const chartData: Record<string, unknown>[] = data.map((d) =>
+    showProjection && d === lastActual
+      ? { ...d, atl_proj: d.atl, ctl_proj: d.ctl, ratio_proj: d.ratio }
+      : { ...d },
+  );
+  if (showProjection) {
+    for (const p of projection) {
+      chartData.push({ date: p.date, atl_proj: p.atl, ctl_proj: p.ctl, ratio_proj: p.ratio });
+    }
+  }
+  const ratioMax = Math.max(
+    2.5,
+    ...data.map((d) => d.ratio ?? 0),
+    ...(showProjection ? projection.map((p) => p.ratio ?? 0) : []),
+  );
   const ratioMaxRounded = Math.ceil(ratioMax * 10) / 10;
 
   // Most recent point in the currently-displayed (filtered) series — shown as a persistent
   // stats row so the current load is visible without hovering the chart.
   const latest = data[data.length - 1];
-  const latestZone = latest.ratio != null ? ratioZone(latest.ratio) : null;
+  const latestZone = latest.ratio != null ? ratioZone(latest.ratio, th) : null;
 
   const statsRow = (
     <div className="flex flex-wrap gap-5">
@@ -123,30 +155,38 @@ export default function AtlCtlCard({ dataset, since, until, isAllTime, unit }: P
       subtitle={
         <>
           ATL = 7-day EWA · CTL = 42-day EWA · Ratio zones:{" "}
-          <span className="text-green-400">optimal 0.8–1.3</span>
+          <span className="text-green-400">optimal {th.acwr_low}–{th.acwr_high}</span>
           {" · "}
-          <span className="text-red-400">injury risk &gt;1.3</span>
+          <span className="text-red-400">injury risk &gt;{th.acwr_high}</span>
           {" · "}
-          <span className="text-gray-400">detraining &lt;0.8</span>
+          <span className="text-gray-400">detraining &lt;{th.acwr_low}</span>
+          {showProjection && " · dashed = projected from planned workouts"}
         </>
       }
-      data={data as unknown as Record<string, unknown>[]}
+      data={chartData}
       xKey="date"
       series={[
         { key: "atl", label: "ATL (7d)", color: "#ef4444", yAxisId: "load" },
         { key: "ctl", label: "CTL (42d)", color: "#60a5fa", yAxisId: "load" },
         { key: "ratio", label: "ATL/CTL", color: "#a78bfa", yAxisId: "ratio", dashed: true },
+        ...(showProjection
+          ? [
+              { key: "atl_proj", label: "ATL (planned)", color: "#ef4444", yAxisId: "load", dashed: true, strokeWidth: 1 },
+              { key: "ctl_proj", label: "CTL (planned)", color: "#60a5fa", yAxisId: "load", dashed: true, strokeWidth: 1 },
+              { key: "ratio_proj", label: "ATL/CTL (planned)", color: "#a78bfa", yAxisId: "ratio", dashed: true, strokeWidth: 1 },
+            ]
+          : []),
       ]}
       yAxes={[
         { id: "load", tickFormatter: (v) => v.toFixed(1), label: `${ul}/d` },
         { id: "ratio", orientation: "right", domain: [0, ratioMaxRounded], width: 36, label: "ratio" },
       ]}
       referenceAreas={[
-        { yAxisId: "ratio", y1: 0.8, y2: 1.3, fill: "#22c55e" },
-        { yAxisId: "ratio", y1: 1.3, y2: ratioMaxRounded, fill: "#ef4444" },
-        { yAxisId: "ratio", y1: 0, y2: 0.8, fill: "#6b7280" },
+        { yAxisId: "ratio", y1: th.acwr_low, y2: th.acwr_high, fill: "#22c55e" },
+        { yAxisId: "ratio", y1: th.acwr_high, y2: ratioMaxRounded, fill: "#ef4444" },
+        { yAxisId: "ratio", y1: 0, y2: th.acwr_low, fill: "#6b7280" },
       ]}
-      customTooltip={<ATLTooltip unit={unit} />}
+      customTooltip={<ATLTooltip unit={unit} th={th} />}
       height={300}
       rightMargin={52}
     />

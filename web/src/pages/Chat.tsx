@@ -4,7 +4,7 @@ import remarkGfm from "remark-gfm";
 import type { Mode, ThemeConfig } from "../App";
 import { handleChatAdmission } from "./chatAdmission";
 import { formatSyncFreshness } from "./syncFreshness";
-import { PENDING_CHAT_ACTIVITY_KEY } from "./chatActivityHandoff";
+import { PENDING_CHAT_ACTIVITY_KEY, PENDING_CHAT_DRAFT_KEY } from "./chatActivityHandoff";
 
 interface Message {
   id?: number;
@@ -305,6 +305,16 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
         if (match) attachActivity(match);
       })
       .catch(() => {/* handoff is best-effort */});
+  }, []);
+
+  // A drafted message from Analytics (e.g. "apply this recommendation to my plan"): prefill the
+  // input so the athlete can review and send it; the coach then edits the calendar through
+  // update_training_plan, which is validated against the same training state.
+  useEffect(() => {
+    const draft = sessionStorage.getItem(PENDING_CHAT_DRAFT_KEY);
+    if (!draft) return;
+    sessionStorage.removeItem(PENDING_CHAT_DRAFT_KEY);
+    setInput(draft);
   }, []);
 
   // Reset and reload history whenever mode changes

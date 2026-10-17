@@ -51,7 +51,9 @@ UPDATE_TRAINING_PLAN_DESCRIPTION = (
     "required) and `delete` to clear a date back to a rest day. Always check the "
     "'Upcoming Planned Workouts' and 'Calendar Constraints' sections of this prompt first so you "
     "work around races, blocked-out days, and workouts already scheduled — never schedule over "
-    "them without the athlete's go-ahead. When the athlete says they can't complete a workout, or "
+    "them without the athlete's go-ahead (scheduling on a blocked-out day or race day is rejected). "
+    "Also use the 'Training State' section: keep weekly ramp and the projected fatigue/fitness "
+    "ratio inside its guardrails and add a down week after a few rising weeks. When the athlete says they can't complete a workout, or "
     "a conflict shows up on a date you'd otherwise use, delete or move that day rather than "
     "double-booking it. When regenerating a whole block, combine `delete` for the days that need "
     "to change with `set` for their replacements in the same call. Give `distance` and "
@@ -83,6 +85,45 @@ def _workout_measurements(workout: dict) -> tuple[float | None, float | None]:
         system = ELEVATION_UNITS.get(workout.get("elevation_unit") or "m", UnitSystem.METRIC)
         elevation_m = round(to_si(float(workout["elevation"]), Quantity.ELEVATION, system))
     return distance_km, elevation_m
+
+
+def _normalized_plan_changes(args: dict) -> dict:
+    """update_training_plan args -> {"set": [...distance_km...], "delete": [...]} in stored units."""
+    sets = []
+    for w in args.get("set", []) or []:
+        if not w.get("date"):
+            continue
+        distance_km, _ = _workout_measurements(w)
+        sets.append(
+            {
+                "date": w["date"],
+                "workout_type": w.get("workout_type", "Workout"),
+                "distance_km": distance_km,
+                "intensity": w.get("intensity"),
+            }
+        )
+    return {"set": sets, "delete": list(args.get("delete", []) or [])}
+
+
+def _check_proposed_changes(changes: dict) -> list:
+    """Guardrail violations for a proposed plan edit. Never raises: a failure here must not stop
+    the coach from editing the calendar."""
+    try:
+        from datetime import date as date_cls
+
+        from .. import training_state
+
+        return training_state.check_plan_changes(
+            db.get_all_activities(),
+            db.get_training_plan(),
+            db.get_calendar_prefs(),
+            None,
+            db.get_unit_system(),
+            date_cls.today(),
+            changes,
+        )
+    except Exception:
+        return []
 
 
 class BaseBackend(ABC):
@@ -397,6 +438,17 @@ class BaseBackend(ABC):
         self._budget.tool(args)
         change_start = len(self._budget.changes)
         set_summaries: list[str] = []
+        proposed = _normalized_plan_changes(args)
+        violations = _check_proposed_changes(proposed)
+        hard = [v for v in violations if v.hard]
+        if hard:
+            # Nothing is saved: the model gets the reasons and can resubmit a corrected call.
+            reasons = "; ".join(f"{v.date}: {v.detail}" for v in hard)
+            return (
+                f"Rejected, no changes made. {reasons} Choose other dates, or ask the athlete "
+                "to unblock the day first.",
+                [],
+            )
         for workout in args.get("set", []) or []:
             date = workout.get("date")
             if not date:
@@ -431,6 +483,10 @@ class BaseBackend(ABC):
                 f"Removed {len(delete_summaries)} workout(s): {', '.join(delete_summaries)}"
             )
         summary = ". ".join(parts) if parts else "No changes made."
+        warnings = [v for v in violations if not v.hard]
+        if warnings:
+            summary += ". Warnings: " + "; ".join(v.detail for v in warnings)
+            summary += " Consider revising the plan to stay within the Training State guardrails."
         return summary, self._budget.changes[change_start:]
 
     @abstractmethod
