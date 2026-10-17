@@ -4,9 +4,35 @@ import FilterBar from "../../charts/FilterBar";
 import { getPresetRange, type DateRange, type FilterPreset } from "../../charts/dateFilter";
 import { useChartData } from "../../charts/useChartData";
 import { renderChartDataset } from "../../charts/cards/registry";
+import SportToggleCard from "../../charts/cards/SportToggleCard";
+import type { ChartDataset } from "../../charts/api";
 import { groupIntoSections } from "../../charts/sections";
 import { useUnits } from "../../UnitsContext";
 import { chartUnitParam } from "../../units";
+
+// Metrics that exist per sport in Hybrid and are shown as one card with a Run/Ride toggle.
+const SPORT_TOGGLE_METRICS = new Set(["weekly_elevation", "climbing_ratio"]);
+
+type Item = { key: string; datasets: ChartDataset[] };
+
+function toItems(charts: ChartDataset[]): Item[] {
+  const items: Item[] = [];
+  const toggles = new Map<string, Item>();
+  for (const ds of charts) {
+    if (SPORT_TOGGLE_METRICS.has(ds.metric_key) && ds.sport) {
+      const existing = toggles.get(ds.metric_key);
+      if (existing) existing.datasets.push(ds);
+      else {
+        const item = { key: ds.metric_key, datasets: [ds] };
+        toggles.set(ds.metric_key, item);
+        items.push(item);
+      }
+    } else {
+      items.push({ key: ds.id, datasets: [ds] });
+    }
+  }
+  return items;
+}
 
 interface Props {
   mode: Mode;
@@ -47,8 +73,10 @@ export default function CardioCharts({ mode, theme }: Props) {
     [data, mode],
   );
   const currentSection = sections.find((s) => s.id === activeSectionId) ?? sections[0];
-  const unavailableCount = currentSection?.charts.filter((ds) => !ds.available).length ?? 0;
-  const visibleCharts = currentSection?.charts.filter((ds) => showUnavailable || ds.available) ?? [];
+  const items = toItems(currentSection?.charts ?? []);
+  const itemAvailable = (it: Item) => it.datasets.some((d) => d.available);
+  const unavailableCount = items.filter((it) => !itemAvailable(it)).length;
+  const visibleCharts = items.filter((it) => showUnavailable || itemAvailable(it));
   const invalidRange = !!(range.since && range.until && range.since > range.until);
   const sectionDescription = currentSection?.id === "load"
     ? "See how your weekly volume is changing. The current week is still in progress."
@@ -126,15 +154,25 @@ export default function CardioCharts({ mode, theme }: Props) {
               <p className="text-gray-400 py-10 text-center">
                 These charts need more recorded data. Select “Show charts needing more data” to see what is missing.
               </p>
-            ) : visibleCharts.map((ds) => (
-              <div key={ds.id}>
-                {renderChartDataset({
-                  dataset: ds,
-                  since: range.since,
-                  until: range.until,
-                  isAllTime,
-                  unit,
-                })}
+            ) : visibleCharts.map((it) => (
+              <div key={it.key}>
+                {it.datasets.length > 1 ? (
+                  <SportToggleCard
+                    datasets={it.datasets}
+                    since={range.since}
+                    until={range.until}
+                    isAllTime={isAllTime}
+                    unit={unit}
+                  />
+                ) : (
+                  renderChartDataset({
+                    dataset: it.datasets[0],
+                    since: range.since,
+                    until: range.until,
+                    isAllTime,
+                    unit,
+                  })
+                )}
               </div>
             ))}
           </>
