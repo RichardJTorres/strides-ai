@@ -66,6 +66,9 @@ HYBRID_CHARTS: list[ChartSpec] = [
         dataclasses.replace(spec, key=f"run_{spec.key}", sport_filter=is_run, sport="run")
         for spec in RUN_SPECIFIC
     ],
+    # Run has no standalone weekly-elevation chart in running mode; hybrid adds one so the
+    # frontend's Run/Ride toggle on "Weekly Climbing" has both sides.
+    ChartSpec("run_weekly_elevation", cardio.compute_weekly_elevation, is_run, "run"),
     *[
         dataclasses.replace(spec, key=f"ride_{spec.key}", sport_filter=is_ride, sport="ride")
         for spec in RIDE_SPECIFIC

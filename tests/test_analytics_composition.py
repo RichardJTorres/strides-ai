@@ -61,7 +61,7 @@ def test_hybrid_includes_sport_prefixed_variants_in_order():
     assert "ride_climbing_ratio" in keys
     # cycling-only/running-only metrics must not leak into the wrong sport's hybrid half
     assert "ride_cadence_trend" not in keys
-    assert "run_weekly_elevation" not in keys
+    assert "run_weekly_elevation" in keys  # hybrid-only: backs the Run/Ride climbing toggle
 
 
 def test_hybrid_replace_does_not_mutate_base_lists():
@@ -102,8 +102,10 @@ def test_get_chart_datasets_hybrid_sport_filter_partitions_activities():
     allocation = next(d for d in datasets if d.id == "training_time_allocation")
     assert allocation.available is True  # combined chart sees both sports
 
-    run_elevation_leak = [d for d in datasets if d.id == "run_weekly_elevation"]
-    assert run_elevation_leak == []  # not part of the composition at all
+    run_elevation = next(d for d in datasets if d.id == "run_weekly_elevation")
+    ride_elevation = next(d for d in datasets if d.id == "ride_weekly_elevation")
+    assert run_elevation.sport == "run" and ride_elevation.sport == "ride"
+    assert run_elevation.qualifying_count == 1 and ride_elevation.qualifying_count == 1
 
 
 def test_get_chart_datasets_unknown_mode_falls_back_to_running():
