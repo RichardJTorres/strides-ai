@@ -16,4 +16,5 @@ def status(request: Request, backend=Depends(get_backend)):
         "memories": len(db.get_all_memories()),
         "mode": request.app.state.mode,
         "supports_attachments": backend.supports_attachments,
+        "last_sync_at": db.get_setting("last_sync_at"),
     }

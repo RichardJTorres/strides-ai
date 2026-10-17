@@ -130,6 +130,7 @@ export default function App() {
   const [modeLoaded, setModeLoaded] = useState(false);
   const [supportsAttachments, setSupportsAttachments] = useState(false);
   const [modeMeta, setModeMeta] = useState<Record<string, ModeMeta>>({});
+  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
 
   useEffect(() => {
     const onHashChange = () => setTab(tabFromHash());
@@ -154,8 +155,9 @@ export default function App() {
   function refreshStatus() {
     fetch("/api/status")
       .then((r) => r.json())
-      .then((data: { supports_attachments?: boolean }) => {
+      .then((data: { supports_attachments?: boolean; last_sync_at?: string | null }) => {
         setSupportsAttachments(data.supports_attachments ?? false);
+        setLastSyncAt(data.last_sync_at ?? null);
       })
       .catch(() => {});
   }
@@ -232,8 +234,19 @@ export default function App() {
 
       {/* Main content — shrinks on mobile to leave room for bottom nav */}
       <main className="flex-1 overflow-hidden pb-14 md:pb-0">
-        {tab === "chat" && <Chat key={mode} mode={mode} theme={theme} supportsAttachments={supportsAttachments} />}
-        {tab === "activities" && <Activities mode={mode} theme={theme} />}
+        {tab === "chat" && (
+          <Chat
+            key={mode}
+            mode={mode}
+            theme={theme}
+            supportsAttachments={supportsAttachments}
+            lastSyncAt={lastSyncAt}
+            onSynced={refreshStatus}
+          />
+        )}
+        {tab === "activities" && (
+          <Activities mode={mode} theme={theme} lastSyncAt={lastSyncAt} onSynced={refreshStatus} />
+        )}
         {tab === "charts" && (
           <Suspense fallback={<div role="status" className="p-6 text-gray-400">Loading charts…</div>}>
             <Charts mode={mode} theme={theme} />

@@ -1,5 +1,7 @@
 """Sync routes — unified and per-source."""
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, HTTPException, Request
 
 from ... import db
@@ -10,6 +12,10 @@ from ..deps import init_backend
 router = APIRouter()
 
 
+def _mark_synced() -> None:
+    db.set_setting("last_sync_at", datetime.now(timezone.utc).isoformat())
+
+
 @router.post("/sync")
 def sync_all(request: Request, full: bool = False):
     """Sync all configured data sources and return aggregated counts."""
@@ -18,6 +24,7 @@ def sync_all(request: Request, full: bool = False):
     total = sum(results.values())
     if total > 0:
         init_backend(request.app)
+    _mark_synced()
     return {"total": total, "sources": results}
 
 
@@ -28,6 +35,7 @@ def strava_sync(request: Request, full: bool = False):
     new_count = strava_source.sync(full=full)
     if new_count > 0:
         init_backend(request.app)
+    _mark_synced()
     return {"new_activities": new_count}
 
 
@@ -38,6 +46,7 @@ def hevy_sync(request: Request, full: bool = False):
     new_count = hevy_source.sync(full=full)
     if new_count > 0:
         init_backend(request.app)
+    _mark_synced()
     return {"new_workouts": new_count}
 
 
