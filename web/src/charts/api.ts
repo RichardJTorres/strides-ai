@@ -110,3 +110,89 @@ export async function fetchCardioCharts(
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
+
+// ── Training insights (/api/charts/insights) ─────────────────────────────────────
+
+export type InsightStatus =
+  | "building" | "maintaining" | "peaking" | "overreaching"
+  | "recovering" | "detraining" | "insufficient_data";
+
+export interface DigestMetric {
+  id: string;
+  label: string;
+  group: string;
+  value: number;
+  formatted: string;
+  baseline: number | null;
+  baseline_formatted: string | null;
+  delta: number | null;
+  delta_pct: number | null;
+  direction: "up" | "down" | "flat" | null;
+}
+
+export interface DigestFlag {
+  id: string;
+  severity: "warning" | "info";
+  text: string;
+  metric_ids: string[];
+}
+
+export interface InsightsDigest {
+  mode: string;
+  as_of: string;
+  windows: { recent: [string, string]; baseline: [string, string] };
+  sufficient: boolean;
+  activity_count: number;
+  metrics: DigestMetric[];
+  flags: DigestFlag[];
+  missing: string[];
+  context: {
+    next_race: { name: string; date: string; days_out: number } | null;
+    compliance: {
+      window_days: number; scored: number; completed: number;
+      modified: number; missed: number; consistency_pct: number | null;
+    } | null;
+  };
+}
+
+export interface InsightsReport {
+  status: InsightStatus;
+  headline: string;
+  findings: { title: string; detail: string; tone: "positive" | "neutral" | "warning"; metric_ids: string[] }[];
+  recommendations: { action: string; why: string; metric_ids: string[] }[];
+}
+
+export interface InsightsPayload {
+  mode: string;
+  unit_system: string;
+  digest: InsightsDigest;
+  report: InsightsReport | null;
+  generated_at: string | null;
+  model: string | null;
+  stale: boolean;
+}
+
+async function insightsError(res: Response): Promise<Error> {
+  let detail = `HTTP ${res.status}`;
+  try {
+    const body = await res.json();
+    if (body?.detail) detail = String(body.detail);
+  } catch { /* keep status text */ }
+  return new Error(detail);
+}
+
+export async function fetchInsights(mode: string, signal: AbortSignal): Promise<InsightsPayload> {
+  const res = await fetch(`/api/charts/insights?mode=${mode}`, { signal });
+  if (!res.ok) throw await insightsError(res);
+  return res.json();
+}
+
+export async function generateInsights(
+  mode: string, force: boolean, signal: AbortSignal,
+): Promise<InsightsPayload> {
+  const res = await fetch(`/api/charts/insights?mode=${mode}&force=${force}`, {
+    method: "POST", signal,
+  });
+  if (!res.ok) throw await insightsError(res);
+  return res.json();
+}

@@ -5,6 +5,7 @@ import { getPresetRange, type DateRange, type FilterPreset } from "../../charts/
 import { useChartData } from "../../charts/useChartData";
 import { renderChartDataset } from "../../charts/cards/registry";
 import SportToggleCard from "../../charts/cards/SportToggleCard";
+import InsightsCard from "../../charts/InsightsCard";
 import type { ChartDataset } from "../../charts/api";
 import { groupIntoSections } from "../../charts/sections";
 import { useUnits } from "../../UnitsContext";
@@ -12,6 +13,10 @@ import { chartUnitParam } from "../../units";
 
 // Metrics that exist per sport in Hybrid and are shown as one card with a Run/Ride toggle.
 const SPORT_TOGGLE_METRICS = new Set(["weekly_elevation", "climbing_ratio"]);
+
+// Insights is a tab of its own: it uses a fixed 4-vs-8-week window, so the date filter and chart
+// cards don't apply to it.
+const INSIGHTS_SECTION = { id: "insights", label: "Insights" };
 
 type Item = { key: string; datasets: ChartDataset[] };
 
@@ -48,7 +53,7 @@ export default function CardioCharts({ mode, theme }: Props) {
   const [customSince, setCustomSince] = useState("");
   const [customUntil, setCustomUntil] = useState("");
   const [showUnavailable, setShowUnavailable] = useState(false);
-  const [activeSectionId, setActiveSectionId] = useState<string>("load");
+  const [activeSectionId, setActiveSectionId] = useState<string>(INSIGHTS_SECTION.id);
 
   const range = useMemo((): DateRange => {
     if (preset === "custom") return { since: customSince || null, until: customUntil || null };
@@ -72,7 +77,12 @@ export default function CardioCharts({ mode, theme }: Props) {
     () => (data ? groupIntoSections(data.charts, mode) : []),
     [data, mode],
   );
-  const currentSection = sections.find((s) => s.id === activeSectionId) ?? sections[0];
+  const tabs = [INSIGHTS_SECTION, ...sections];
+  const isInsights = activeSectionId === INSIGHTS_SECTION.id;
+  const currentSection = isInsights
+    ? undefined
+    : sections.find((s) => s.id === activeSectionId) ?? sections[0];
+  const currentTabId = isInsights ? INSIGHTS_SECTION.id : currentSection?.id;
   const items = toItems(currentSection?.charts ?? []);
   const itemAvailable = (it: Item) => it.datasets.some((d) => d.available);
   const unavailableCount = items.filter((it) => !itemAvailable(it)).length;
@@ -86,10 +96,10 @@ export default function CardioCharts({ mode, theme }: Props) {
     <div className="h-full overflow-y-auto">
       <div className="p-6 space-y-5 max-w-5xl mx-auto">
         <div className="flex flex-wrap gap-3 items-center justify-between">
-          <h2 className="text-xl font-bold text-gray-100">Training Charts</h2>
+          <h2 className="text-xl font-bold text-gray-100">Training Analytics</h2>
         </div>
 
-        <FilterBar
+        {!isInsights && <FilterBar
           preset={preset}
           customSince={customSince}
           customUntil={customUntil}
@@ -97,7 +107,7 @@ export default function CardioCharts({ mode, theme }: Props) {
           onCustomSince={setCustomSince}
           onCustomUntil={setCustomUntil}
           theme={theme}
-        />
+        />}
 
         {loading && (
           <div className="flex items-center justify-center py-24 text-gray-500">
@@ -117,29 +127,30 @@ export default function CardioCharts({ mode, theme }: Props) {
 
         {!loading && !error && data && !noActivitiesAtAll && sections.length > 0 && (
           <>
-            {sections.length > 1 && (
-              <div className="flex gap-1 overflow-x-auto border-b border-gray-800">
-                {sections.map((s) => (
+            <div className="flex gap-1 overflow-x-auto border-b border-gray-800">
+              {tabs.map((s) => (
                   <button
                     key={s.id}
                     onClick={() => setActiveSectionId(s.id)}
-                    aria-pressed={currentSection?.id === s.id}
+                    aria-pressed={currentTabId === s.id}
                     className={`whitespace-nowrap px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
-                      currentSection?.id === s.id
+                      currentTabId === s.id
                         ? `${theme.accentClass} border-current`
                         : "text-gray-400 border-transparent hover:text-gray-300"
                     }`}
                   >
                     {s.label}
                   </button>
-                ))}
-              </div>
-            )}
+              ))}
+            </div>
 
+            {isInsights ? (
+              <InsightsCard mode={mode} theme={theme} />
+            ) : (<>
             <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
-              <p className="text-gray-400">{sectionDescription}</p>
+              {sectionDescription && <p className="text-gray-400">{sectionDescription}</p>}
               {unavailableCount > 0 && (
-                <label className="flex items-center gap-2 text-gray-400 cursor-pointer">
+                <label className="flex items-center gap-2 text-gray-400 cursor-pointer ml-auto">
                   <input type="checkbox" checked={showUnavailable}
                     onChange={(e) => setShowUnavailable(e.target.checked)} />
                   Show {unavailableCount} charts needing more data
@@ -175,6 +186,7 @@ export default function CardioCharts({ mode, theme }: Props) {
                 )}
               </div>
             ))}
+            </>)}
           </>
         )}
       </div>

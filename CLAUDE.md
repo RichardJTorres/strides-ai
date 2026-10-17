@@ -111,6 +111,12 @@ The chat coach can also write to this calendar directly via the `update_training
 
 A planned workout can also have a route URL attached (`route_url`) — either a Strava or a RideWithGPS route, only shown/accepted for Running and Cycling workout types. `strides_ai/sources/routes.py` dispatches by domain to `sources/ridewithgps.py` (unauthenticated legacy `routes/{id}.json` endpoint, public routes only, no API key) or `sources/strava_routes.py` (authenticated with this app's existing Strava `read` scope — confirmed to work for *any* public route, not just the connected athlete's own; distinct from `sources/strava.py`, which handles activity sync/deep-dive). `POST /calendar/plan/{date}/analyze-route` fetches the route and asks the LLM (`strides_ai/route_analysis.py`) whether its distance/elevation/terrain actually fits the workout's stated goal, returning a `verdict`/`explanation`/`suggestion`. Cached in `route_analysis_json`; cleared whenever the workout is edited, same as `nutrition_json`; `?force=true` regenerates.
 
+### Charts insights (`strides_ai/insights.py`, `web/src/charts/InsightsCard.tsx`)
+
+The Analytics page (formerly Charts; legacy `#charts` hashes still resolve) has an "Insights" tab, shown first, holding an analytical "Training Insights" card (cardio modes only). `build_digest()` deterministically computes the metrics (last 4 full weeks vs the prior 8, in-progress week excluded, values formatted in the athlete's units), rule-based flags, next race and recent plan compliance — reusing `analytics.cardio` and `compliance`. The LLM (`stateless_turn`, user-selected backend) only interprets the digest into structured JSON (`status`, `headline`, `findings`, `recommendations`, each citing digest metric ids; unknown ids are dropped by `parse_insights_response`). The UI renders figures from the digest, never from model text.
+
+`GET /api/charts/insights` returns the live digest + cached report + `stale` (never calls the LLM); `POST` generates (`?force=true` to bypass a fresh cache). The cache lives in the `settings` table under `charts_insights:{mode}:{unit_system}` and is invalidated by `digest_fingerprint` (activity count/latest id/date, unit system, ISO week). ATL/CTL are distance-based, so the load flag uses the ATL/CTL ratio rather than a TSB threshold.
+
 ### Strava sync (`strides_ai/sync.py`)
 
 Incremental by default — stops at the first activity ID already in the DB. Full sync re-fetches all pages. Cadence is doubled (Strava sends half-cadence). Pace derived: `moving_time_s / (distance_m / 1000)`. OAuth2 in `auth.py` — tokens stored in `~/.strides_ai/token.json`, auto-refreshed.
@@ -133,6 +139,6 @@ Copy `.env.example` to `.env` to get started.
 
 ### Frontend (`web/`)
 
-React 18 + TypeScript + Tailwind CSS + Vite + recharts. Navigation uses `location.hash` (`#chat`, `#activities`, `#charts`, `#calendar`, `#profile`, `#settings`) — no router dependency. Vite HMR picks up React changes instantly; Python changes require a server restart.
+React 18 + TypeScript + Tailwind CSS + Vite + recharts. Navigation uses `location.hash` (`#chat`, `#activities`, `#analytics`, `#calendar`, `#profile`, `#settings`) — no router dependency. Vite HMR picks up React changes instantly; Python changes require a server restart.
 
 File attachments (images as base64, text as UTF-8) are uploaded to `~/.strides_ai/uploads/` and forwarded to `stream_turn` as `attachments`.

@@ -75,7 +75,7 @@ On first run, a browser window opens to Strava's authorization page — approve 
 | Profile | Structured editor for your athlete profile (per-mode) |
 | Settings | Switch between Running, Cycling, and Hybrid coaching modes; switch LLM provider |
 
-The URL uses hash-based navigation (`#chat`, `#activities`, `#charts`, `#calendar`, `#profile`, `#settings`), so refreshing the page keeps you on the same tab.
+The URL uses hash-based navigation (`#chat`, `#activities`, `#analytics`, `#calendar`, `#profile`, `#settings`), so refreshing the page keeps you on the same tab.
 
 To run only the backend: `make api`. To run only the frontend: `make web`.
 

@@ -10,7 +10,7 @@ import { DEFAULT_UNIT_SYSTEM, parseUnitSystem, type UnitSystem } from "./units";
 
 const Charts = lazy(() => import("./pages/Charts"));
 
-type Tab = "chat" | "activities" | "charts" | "calendar" | "profile" | "memories" | "settings";
+type Tab = "chat" | "activities" | "analytics" | "calendar" | "profile" | "memories" | "settings";
 export type Mode = "running" | "cycling" | "hybrid" | "lifting";
 
 export interface ThemeConfig {
@@ -74,7 +74,7 @@ const ICONS: Record<Tab, JSX.Element> = {
       <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
     </svg>
   ),
-  charts: (
+  analytics: (
     <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
     </svg>
@@ -111,7 +111,7 @@ const ICONS: Record<Tab, JSX.Element> = {
 const TABS: { id: Tab; label: string }[] = [
   { id: "chat", label: "Coach" },
   { id: "activities", label: "Activities" },
-  { id: "charts", label: "Charts" },
+  { id: "analytics", label: "Analytics" },
   { id: "calendar", label: "Calendar" },
   { id: "profile", label: "Profile" },
   { id: "memories", label: "Memories" },
@@ -120,7 +120,7 @@ const TABS: { id: Tab; label: string }[] = [
 const VALID_TABS = new Set<string>([...TABS.map((t) => t.id), "settings"]);
 
 function tabFromHash(): Tab {
-  const hash = location.hash.slice(1);
+  const hash = location.hash.slice(1) === "charts" ? "analytics" : location.hash.slice(1); // legacy #charts
   return VALID_TABS.has(hash) ? (hash as Tab) : "chat";
 }
 
@@ -252,8 +252,8 @@ export default function App() {
         {tab === "activities" && (
           <Activities mode={mode} theme={theme} lastSyncAt={lastSyncAt} onSynced={refreshStatus} />
         )}
-        {tab === "charts" && (
-          <Suspense fallback={<div role="status" className="p-6 text-gray-400">Loading charts…</div>}>
+        {tab === "analytics" && (
+          <Suspense fallback={<div role="status" className="p-6 text-gray-400">Loading analytics…</div>}>
             <Charts mode={mode} theme={theme} />
           </Suspense>
         )}

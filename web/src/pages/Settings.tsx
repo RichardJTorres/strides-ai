@@ -300,7 +300,7 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
               Units
             </h3>
             <p className="text-xs text-gray-600 mb-3">
-              Applies everywhere: activities, calendar, charts, and the coach. Your data is stored
+              Applies everywhere: activities, calendar, analytics, and the coach. Your data is stored
               once and converted for display, so switching never changes it. Past chat messages
               keep the units they were written in.
             </p>
