@@ -113,6 +113,61 @@ def compute_weekly_distance(
     )
 
 
+def compute_weekly_distance_by_sport(
+    activities: list[CardioAnalyticsActivity], unit: str, today: date
+) -> StackedBarDataset:
+    """Weekly distance stacked by Run / Ride (hybrid mode). Same metric_key as the combined chart."""
+    weekly_run: dict[date, float] = defaultdict(float)
+    weekly_ride: dict[date, float] = defaultdict(float)
+    weeks_seen: set[date] = set()
+    for a in activities:
+        week = monday_of(a.date)
+        if a.sport_type in RUN_TYPES:
+            weekly_run[week] += to_distance_unit(a.distance_m, unit)
+            weeks_seen.add(week)
+        elif a.sport_type in CYCLE_TYPES:
+            weekly_ride[week] += to_distance_unit(a.distance_m, unit)
+            weeks_seen.add(week)
+
+    base = dict(
+        id="weekly_distance",
+        metric_key="weekly_distance",
+        title="Weekly Distance",
+        unit=_unit_label(unit),
+        categories=["Run", "Ride"],
+    )
+    if not weeks_seen:
+        return StackedBarDataset(
+            **base,
+            available=False,
+            unavailable_reason=UnavailableReason.NO_ACTIVITIES,
+            qualifying_count=0,
+            total_count=0,
+            data=[],
+        )
+
+    current_week = monday_of(today)
+    weeks = week_range(min(weeks_seen), current_week)
+    data = [
+        StackedBarPoint(
+            week=w.isoformat(),
+            is_current=(w == current_week),
+            values={
+                "Run": round(weekly_run.get(w, 0.0), 2),
+                "Ride": round(weekly_ride.get(w, 0.0), 2),
+            },
+        )
+        for w in weeks
+    ]
+    return StackedBarDataset(
+        **base,
+        available=True,
+        qualifying_count=len(activities),
+        total_count=len(activities),
+        data=data,
+    )
+
+
 # ── ATL / CTL (ported from charts_data.compute_atl_ctl, unchanged math) ────────
 
 

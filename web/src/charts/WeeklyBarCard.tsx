@@ -92,7 +92,7 @@ export default function WeeklyBarCard({
             cursor={{ fill: "#374151", opacity: 0.4 }}
           />
           <Legend wrapperStyle={LEGEND_STYLE} />
-          <Bar dataKey="value" name={valueLabel} maxBarSize={18} radius={[2, 2, 0, 0]}>
+          <Bar dataKey="value" name={valueLabel} fill={barColor} maxBarSize={18} radius={[2, 2, 0, 0]}>
             {data.map((entry, i) => (
               <Cell key={i} fill={entry.is_current ? CURRENT_BAR : barColor} opacity={0.85} />
             ))}

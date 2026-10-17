@@ -151,6 +151,7 @@ export default function ScatterTrendCard({
 
           <Scatter
             data={rollingXY}
+            fill={rollingColor}
             line={{ stroke: rollingColor, strokeWidth: 2.5 }}
             shape={() => <></>}
             legendType="none"

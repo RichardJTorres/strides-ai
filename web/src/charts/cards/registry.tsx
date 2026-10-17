@@ -32,6 +32,16 @@ const ALLOCATION_COLORS: Record<string, string> = {
 export function renderChartDataset({ dataset, since, until, isAllTime, unit }: RenderProps) {
   switch (dataset.metric_key) {
     case "weekly_distance":
+      if (dataset.chart_type === "stacked_bar") {
+        return (
+          <StackedBarMetricCard
+            dataset={dataset}
+            since={since}
+            until={until}
+            categoryColors={ALLOCATION_COLORS}
+          />
+        );
+      }
       if (dataset.chart_type !== "weekly_bar") return null;
       return (
         <WeeklyBarMetricCard
@@ -63,7 +73,7 @@ export function renderChartDataset({ dataset, since, until, isAllTime, unit }: R
           until={until}
           isAllTime={isAllTime}
           valueLabel="Climbing Ratio"
-          barColor="#fb923c"
+          barColor="#f472b6"
         />
       );
     case "atl_ctl":
