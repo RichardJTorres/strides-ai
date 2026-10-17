@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Mode, ThemeConfig } from "../App";
+import { useUnits } from "../UnitsContext";
+import { CM_PER_INCH, feetInches, type Quantity, type UnitSystem } from "../units";
 
 interface Props {
   mode: Mode;
@@ -7,6 +9,166 @@ interface Props {
 }
 
 // ── Field components ──────────────────────────────────────────────────────────
+
+// Profile fields are free text the athlete writes, so they are never converted; only the
+// example placeholders follow the unit setting.
+const PLACEHOLDERS: Record<UnitSystem, Record<string, string>> = {
+  metric: {
+    injuries: "e.g. Left IT band niggle when mileage exceeds 60 km/week…",
+    gear: "e.g. Nike Vaporfly (~400 km), Garmin Forerunner 955…",
+    runVolume: "e.g. 50 km/week",
+    rideVolume: "e.g. 150 km/week",
+  },
+  imperial: {
+    injuries: "e.g. Left IT band niggle when mileage exceeds 40 mi/week…",
+    gear: "e.g. Nike Vaporfly (~250 mi), Garmin Forerunner 955…",
+    runVolume: "e.g. 30 mi/week",
+    rideVolume: "e.g. 90 mi/week",
+  },
+};
+
+const inputClass =
+  "rounded-md bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-100 placeholder-gray-600 focus:outline-none";
+
+/**
+ * Number input for a value stored in SI (personal.weight_kg, ...), shown in the athlete's units.
+ * The text the athlete types is kept as a draft and only written back when edited, so an
+ * untouched field never drifts through a round-trip conversion (77 kg -> 169.8 lb -> 77.02 kg).
+ */
+function MeasuredInput({
+  label,
+  value,
+  qty,
+  decimals,
+  placeholder,
+  onChange,
+  focusClass,
+}: {
+  label: string;
+  value: number | null | undefined;
+  qty: Quantity;
+  decimals: number;
+  placeholder?: string;
+  onChange: (si: number | null) => void;
+  focusClass: string;
+}) {
+  const units = useUnits();
+  const display = (si: number | null | undefined) =>
+    si == null ? "" : String(Number(units.convert(si, qty)!.toFixed(decimals)));
+  const [draft, setDraft] = useState(() => display(value));
+  const lastSI = useRef(value ?? null);
+
+  // Re-sync the draft when the value is replaced from outside (load, reset) or units change.
+  useEffect(() => {
+    if ((value ?? null) !== lastSI.current) {
+      lastSI.current = value ?? null;
+      setDraft(display(value));
+    }
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => setDraft(display(lastSI.current)), [units.system]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function handle(text: string) {
+    setDraft(text);
+    const n = parseFloat(text);
+    const si = text.trim() === "" || Number.isNaN(n) ? null : units.toSI(n, qty);
+    lastSI.current = si;
+    onChange(si);
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <label className="text-xs font-medium text-gray-400">
+        {label} ({units.label(qty)})
+      </label>
+      <input
+        type="number"
+        min="0"
+        step="any"
+        value={draft}
+        onChange={(e) => handle(e.target.value)}
+        placeholder={placeholder}
+        className={`${inputClass} ${focusClass}`}
+      />
+    </div>
+  );
+}
+
+/** Body height: one cm field in metric, feet + inches in imperial. Stored as personal.height_cm. */
+function HeightInput({
+  value,
+  onChange,
+  focusClass,
+}: {
+  value: number | null | undefined;
+  onChange: (cm: number | null) => void;
+  focusClass: string;
+}) {
+  const { system } = useUnits();
+  const split = (cm: number | null | undefined) => {
+    if (cm == null) return { ft: "", inch: "" };
+    const [ft, inch] = feetInches(cm);
+    return { ft: String(ft), inch: String(inch) };
+  };
+  const [draft, setDraft] = useState(() => split(value));
+  const lastCm = useRef(value ?? null);
+
+  useEffect(() => {
+    if ((value ?? null) !== lastCm.current) {
+      lastCm.current = value ?? null;
+      setDraft(split(value));
+    }
+  }, [value]);
+
+  if (system === "metric") {
+    return (
+      <MeasuredInput
+        label="Height"
+        value={value}
+        qty="height"
+        decimals={0}
+        placeholder="e.g. 175"
+        onChange={(cm) => {
+          lastCm.current = cm;
+          setDraft(split(cm));
+          onChange(cm);
+        }}
+        focusClass={focusClass}
+      />
+    );
+  }
+
+  function handle(next: { ft: string; inch: string }) {
+    setDraft(next);
+    const ft = parseFloat(next.ft);
+    const inch = parseFloat(next.inch);
+    const cm =
+      Number.isNaN(ft) && Number.isNaN(inch)
+        ? null
+        : ((Number.isNaN(ft) ? 0 : ft) * 12 + (Number.isNaN(inch) ? 0 : inch)) * CM_PER_INCH;
+    lastCm.current = cm;
+    onChange(cm);
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <label className="text-xs font-medium text-gray-400">Height (ft / in)</label>
+      <div className="flex gap-2">
+        <input
+          type="number" min="0" step="1" placeholder="5" aria-label="Height, feet"
+          value={draft.ft}
+          onChange={(e) => handle({ ...draft, ft: e.target.value })}
+          className={`${inputClass} ${focusClass} w-1/2`}
+        />
+        <input
+          type="number" min="0" max="11" step="1" placeholder="9" aria-label="Height, inches"
+          value={draft.inch}
+          onChange={(e) => handle({ ...draft, inch: e.target.value })}
+          className={`${inputClass} ${focusClass} w-1/2`}
+        />
+      </div>
+    </div>
+  );
+}
 
 function Field({
   label,
@@ -172,6 +334,7 @@ function CommonSections({
   setFieldsRaw: (key: string, val: any) => void;
   focusClass: string;
 }) {
+  const { system } = useUnits();
   return (
     <>
       <Section title="Goals">
@@ -189,7 +352,7 @@ function CommonSections({
           label="Current or recurring injuries, medical conditions"
           value={fields.injuries_and_health ?? ""}
           onChange={(v) => setFields("injuries_and_health", v)}
-          placeholder="e.g. Left IT band niggle when mileage exceeds 60 km/week…"
+          placeholder={PLACEHOLDERS[system].injuries}
           rows={3}
           focusClass={focusClass}
         />
@@ -199,7 +362,7 @@ function CommonSections({
           label="Shoes, watch, other kit"
           value={fields.gear ?? ""}
           onChange={(v) => setFields("gear", v)}
-          placeholder="e.g. Nike Vaporfly (~400 km), Garmin Forerunner 955…"
+          placeholder={PLACEHOLDERS[system].gear}
           rows={3}
           focusClass={focusClass}
         />
@@ -228,6 +391,7 @@ function CommonSections({
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function Profile({ mode, theme }: Props) {
+  const { system } = useUnits();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [fields, setFields] = useState<Record<string, any>>({});
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -280,7 +444,7 @@ export default function Profile({ mode, theme }: Props) {
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function setNested(section: string, key: string, val: string) {
+  function setNested(section: string, key: string, val: string | number | null) {
     setFields((f) => ({ ...f, [section]: { ...f[section], [key]: val } }));
   }
 
@@ -362,9 +526,14 @@ export default function Profile({ mode, theme }: Props) {
               <Field label="Name" value={fields.personal?.name ?? ""} onChange={(v) => setNested("personal", "name", v)} focusClass={focusClass} />
               <Field label="Gender" value={fields.personal?.gender ?? ""} onChange={(v) => setNested("personal", "gender", v)} focusClass={focusClass} />
               <Field label="Date of birth" value={fields.personal?.date_of_birth ?? ""} onChange={(v) => setNested("personal", "date_of_birth", v)} placeholder="e.g. 1990-05-15" focusClass={focusClass} />
-              <Field label="Height" value={fields.personal?.height ?? ""} onChange={(v) => setNested("personal", "height", v)} placeholder="e.g. 175 cm" focusClass={focusClass} />
-              <Field label="Weight" value={fields.personal?.weight ?? ""} onChange={(v) => setNested("personal", "weight", v)} placeholder="e.g. 70 kg" focusClass={focusClass} />
+              <HeightInput value={fields.personal?.height_cm} onChange={(cm) => setNested("personal", "height_cm", cm)} focusClass={focusClass} />
+              <MeasuredInput label="Weight" value={fields.personal?.weight_kg} qty="mass" decimals={1} placeholder={system === "imperial" ? "e.g. 155" : "e.g. 70"} onChange={(kg) => setNested("personal", "weight_kg", kg)} focusClass={focusClass} />
               <Field label="Max heart rate" value={fields.personal?.max_hr ?? ""} onChange={(v) => setNested("personal", "max_hr", v)} placeholder="e.g. 185" focusClass={focusClass} />
+              {fields.personal?.body_notes && (
+                <div className="col-span-2">
+                  <Field label="Body notes (couldn't be read as a height or weight — move the numbers above if you like)" value={fields.personal.body_notes} onChange={(v) => setNested("personal", "body_notes", v)} focusClass={focusClass} />
+                </div>
+              )}
             </div>
           </Section>
 
@@ -384,7 +553,7 @@ export default function Profile({ mode, theme }: Props) {
                     label="Typical weekly volume"
                     value={fields.running_background?.weekly_volume ?? fields.running_background?.weekly_run_volume ?? ""}
                     onChange={(v) => setNested("running_background", mode === "hybrid" ? "weekly_run_volume" : "weekly_volume", v)}
-                    placeholder="e.g. 50 km/week"
+                    placeholder={PLACEHOLDERS[system].runVolume}
                     focusClass={focusClass}
                   />
                   {mode === "running" && (
@@ -459,7 +628,7 @@ export default function Profile({ mode, theme }: Props) {
                     label="Typical weekly distance"
                     value={fields.cycling_background?.weekly_distance ?? fields.cycling_background?.weekly_ride_distance ?? ""}
                     onChange={(v) => setNested("cycling_background", mode === "hybrid" ? "weekly_ride_distance" : "weekly_distance", v)}
-                    placeholder="e.g. 150 km/week"
+                    placeholder={PLACEHOLDERS[system].rideVolume}
                     focusClass={focusClass}
                   />
                   {mode === "cycling" && (

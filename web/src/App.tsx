@@ -5,6 +5,8 @@ import Calendar from "./pages/Calendar";
 import Profile from "./pages/Profile";
 import Settings from "./pages/Settings";
 import Memories from "./pages/Memories";
+import { UnitsProvider } from "./UnitsContext";
+import { DEFAULT_UNIT_SYSTEM, parseUnitSystem, type UnitSystem } from "./units";
 
 const Charts = lazy(() => import("./pages/Charts"));
 
@@ -128,6 +130,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>(tabFromHash);
   const [mode, setMode] = useState<Mode>("running");
   const [modeLoaded, setModeLoaded] = useState(false);
+  const [initialUnits, setInitialUnits] = useState<UnitSystem>(DEFAULT_UNIT_SYSTEM);
   const [supportsAttachments, setSupportsAttachments] = useState(false);
   const [modeMeta, setModeMeta] = useState<Record<string, ModeMeta>>({});
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
@@ -144,8 +147,9 @@ export default function App() {
       fetch("/api/settings").then((r) => r.json()),
       fetch("/api/modes").then((r) => r.json()),
     ])
-      .then(([settings, modes]: [{ mode: Mode }, Record<string, ModeMeta>]) => {
+      .then(([settings, modes]: [{ mode: Mode; unit_system?: string }, Record<string, ModeMeta>]) => {
         if (settings.mode) setMode(settings.mode);
+        setInitialUnits(parseUnitSystem(settings.unit_system));
         setModeMeta(modes);
       })
       .catch(() => {})
@@ -193,6 +197,7 @@ export default function App() {
   const mobileNavTabs = allNavTabs.filter((t) => t.id !== "calendar" && t.id !== "memories");
 
   return (
+    <UnitsProvider initial={initialUnits}>
     <div className="flex h-dvh bg-gray-950 text-gray-100">
       {/* Sidebar — desktop only */}
       <nav className="hidden md:flex w-48 shrink-0 bg-gray-900 border-r border-gray-800 flex-col">
@@ -274,5 +279,6 @@ export default function App() {
         ))}
       </nav>
     </div>
+    </UnitsProvider>
   );
 }

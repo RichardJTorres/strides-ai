@@ -4,6 +4,10 @@ import remarkGfm from "remark-gfm";
 import type { Mode, ThemeConfig } from "../App";
 import { formatSyncFreshness } from "./syncFreshness";
 import { PENDING_CHAT_ACTIVITY_KEY } from "./chatActivityHandoff";
+import { useUnits } from "../UnitsContext";
+
+// Mirrors strides_ai/analysis.py: pace-fade threshold, stored in s/km (= 15 s/mi).
+const PACE_FADE_NOTABLE_S_PER_KM = 15 / 1.609344;
 
 interface Activity {
   id: number;
@@ -29,9 +33,9 @@ interface Activity {
   hr_zone_3_pct: number | null;
   hr_zone_4_pct: number | null;
   hr_zone_5_pct: number | null;
-  pace_fade_seconds: number | null;
+  pace_fade_s_per_km: number | null;
   cadence_std_dev: number | null;
-  elevation_per_mile: number | null;
+  climb_m_per_km: number | null;
   high_elevation_flag: number | null;
   suffer_score_mismatch_flag: number | null;
   deep_dive_report: string | null;
@@ -53,20 +57,8 @@ interface Props {
 
 type SortKey =
   | "date" | "name" | "distance_m" | "moving_time_s" | "avg_pace_s_per_km" | "avg_hr" | "elevation_gain_m"
-  | "elevation_per_mile" | "total_volume_kg" | "total_sets";
+  | "climb_m_per_km" | "total_volume_kg" | "total_sets";
 type SortDir = "asc" | "desc";
-
-function formatPace(s: number | null): string {
-  if (!s) return "—";
-  const mins = Math.floor(s / 60);
-  const secs = Math.floor(s % 60);
-  return `${mins}:${String(secs).padStart(2, "0")}/km`;
-}
-
-function formatSpeed(s: number | null): string {
-  if (!s || s <= 0) return "—";
-  return `${(3600 / s).toFixed(1)} km/h`;
-}
 
 function formatDuration(s: number): string {
   const h = Math.floor(s / 3600);
@@ -76,19 +68,19 @@ function formatDuration(s: number): string {
   return `${m}m${String(sec).padStart(2, "0")}s`;
 }
 
-function formatPaceFade(s: number | null): string {
-  if (s === null) return "—";
-  const abs = Math.round(Math.abs(s));
-  return s > 0 ? `+${abs}s/mi` : `−${abs}s/mi`;
-}
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function formatSet(s: any): string {
-  const weight = s.weight_kg != null ? `${s.weight_kg} kg` : "BW";
+function formatSet(s: any, units: ReturnType<typeof useUnits>): string {
+  const weight = s.weight_kg != null ? units.fmt(s.weight_kg, "mass", { decimals: 1 }) : "BW";
   if (s.reps != null) return `${weight} × ${s.reps}`;
   if (s.duration_seconds != null) return `${weight} × ${s.duration_seconds}s`;
-  if (s.distance_meters != null) return `${weight} × ${s.distance_meters}m`;
+  if (s.distance_meters != null) {
+    return `${weight} × ${units.fmt(s.distance_meters, "elevation")}`;
+  }
   return weight;
+}
+
+function isRide(sportType: string | null | undefined): boolean {
+  return sportType === "Ride" || sportType === "VirtualRide" || sportType === "GravelRide";
 }
 
 function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
@@ -178,6 +170,7 @@ function HrZonesBar({ a }: { a: Activity }) {
 
 /** Exercise breakdown panel section for lifting workouts. */
 function ExerciseBreakdown({ exercises_json }: { exercises_json: string }) {
+  const units = useUnits();
   const [showAll, setShowAll] = useState(false);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -214,11 +207,11 @@ function ExerciseBreakdown({ exercises_json }: { exercises_json: string }) {
               <div className="flex flex-wrap gap-x-3 gap-y-1">
                 {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                 {warmupSets.map((s: any, j: number) => (
-                  <span key={`w${j}`} className="text-xs text-gray-600 italic">{formatSet(s)}</span>
+                  <span key={`w${j}`} className="text-xs text-gray-600 italic">{formatSet(s, units)}</span>
                 ))}
                 {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                 {workingSets.map((s: any, j: number) => (
-                  <span key={j} className="text-xs text-gray-400">{formatSet(s)}</span>
+                  <span key={j} className="text-xs text-gray-400">{formatSet(s, units)}</span>
                 ))}
               </div>
             </div>
@@ -238,6 +231,7 @@ function ExerciseBreakdown({ exercises_json }: { exercises_json: string }) {
 }
 
 export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props) {
+  const units = useUnits();
   const [activities, setActivities] = useState<Activity[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -277,7 +271,8 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
       .then((r) => r.json())
       .then(setActivities)
       .finally(() => setLoading(false));
-  }, [mode, modeOnly]);
+    // units.system: analysis summaries are rendered server-side in the current units.
+  }, [mode, modeOnly, units.system]);
 
   // Reset sort key and modeOnly when switching modes
   useEffect(() => {
@@ -399,7 +394,8 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
     }
     if (dateFrom) rows = rows.filter((a) => a.date >= dateFrom);
     if (dateTo)   rows = rows.filter((a) => a.date <= dateTo);
-    if (modeOnly && !isLifting && minDist) rows = rows.filter((a) => (a.distance_m ?? 0) / 1000 >= parseFloat(minDist));
+    const minDistM = minDist ? units.toSI(parseFloat(minDist), "distance") : null;
+    if (modeOnly && !isLifting && minDistM != null) rows = rows.filter((a) => (a.distance_m ?? 0) >= minDistM);
 
     return [...rows].sort((a, b) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -410,7 +406,7 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
       if (av > bv) return sortDir === "asc" ? 1 : -1;
       return 0;
     });
-  }, [activities, search, dateFrom, dateTo, minDist, sortKey, sortDir, isLifting, modeOnly]);
+  }, [activities, search, dateFrom, dateTo, minDist, sortKey, sortDir, isLifting, modeOnly, units]);
 
   const paceLabel = mode === "cycling" ? "Speed" : mode === "hybrid" ? "Pace/Speed" : "Pace";
   const focusClass = "focus:outline-none focus:border-gray-500";
@@ -445,18 +441,17 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
     return "red";
   }
 
-  function paceLabel2(a: Activity): string {
-    const isCycle = a.sport_type === "Ride" || a.sport_type === "VirtualRide" || a.sport_type === "GravelRide";
-    if (mode === "cycling" || isCycle) return formatSpeed(a.avg_pace_s_per_km);
-    return formatPace(a.avg_pace_s_per_km);
+  function paceOrSpeed(a: Activity, forceSpeed = false): string {
+    if (forceSpeed || isRide(a.sport_type)) return units.fmtSpeed(a.avg_pace_s_per_km);
+    return a.avg_pace_s_per_km ? units.fmt(a.avg_pace_s_per_km, "pace") : "—";
   }
 
   const hasMetrics = selectedActivity && (
     selectedActivity.cardiac_decoupling_pct !== null ||
     selectedActivity.effort_efficiency_score !== null ||
-    selectedActivity.pace_fade_seconds !== null ||
+    selectedActivity.pace_fade_s_per_km !== null ||
     selectedActivity.avg_cadence !== null ||
-    selectedActivity.elevation_per_mile !== null ||
+    selectedActivity.climb_m_per_km !== null ||
     selectedActivity.hr_zone_1_pct !== null
   );
 
@@ -519,7 +514,7 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
         {modeOnly && !isLifting && (
           <input
             type="number"
-            placeholder="Min km"
+            placeholder={`Min ${units.label("distance")}`}
             value={minDist}
             onChange={(e) => setMinDist(e.target.value)}
             min="0"
@@ -562,19 +557,19 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
                     <Th label="Date"       col="date" />
                     <th className="px-4 py-2 font-medium whitespace-nowrap text-gray-400">Type</th>
                     <Th label="Name"       col="name" />
-                    <Th label="Dist (km)"  col="distance_m"       right />
+                    <Th label={`Dist (${units.label("distance")})`} col="distance_m" right />
                     <Th label="Time"       col="moving_time_s"     right />
                     <Th label="Pace/Speed" col="avg_pace_s_per_km" right />
                     <Th label="Avg HR"     col="avg_hr"            right />
-                    <Th label="Elev (m)"   col="elevation_gain_m"  right />
-                    <Th label="Climb (ft/mi)" col="elevation_per_mile" right />
+                    <Th label={`Elev (${units.label("elevation")})`} col="elevation_gain_m" right />
+                    <Th label={`Climb (${units.label("climb_rate")})`} col="climb_m_per_km" right />
                     <th className="px-4 py-2 font-medium whitespace-nowrap text-right"></th>
                   </>
                 ) : isLiftingView ? (
                   <>
                     <Th label="Date"        col="date" />
                     <Th label="Name"        col="name" />
-                    <Th label="Volume (kg)" col="total_volume_kg"  right />
+                    <Th label={`Volume (${units.label("mass")})`} col="total_volume_kg" right />
                     <Th label="Time"        col="moving_time_s"    right />
                     <Th label="Sets"        col="total_sets"       right />
                     <th className="px-4 py-2 font-medium whitespace-nowrap text-right text-gray-400">Exercises</th>
@@ -584,12 +579,12 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
                   <>
                     <Th label="Date"      col="date" />
                     <Th label="Name"      col="name" />
-                    <Th label="Dist (km)" col="distance_m"       right />
+                    <Th label={`Dist (${units.label("distance")})`} col="distance_m" right />
                     <Th label="Time"      col="moving_time_s"     right />
                     <Th label={paceLabel} col="avg_pace_s_per_km" right />
                     <Th label="Avg HR"    col="avg_hr"            right />
-                    <Th label="Elev (m)"  col="elevation_gain_m"  right />
-                    <Th label="Climb (ft/mi)" col="elevation_per_mile" right />
+                    <Th label={`Elev (${units.label("elevation")})`} col="elevation_gain_m" right />
+                    <Th label={`Climb (${units.label("climb_rate")})`} col="climb_m_per_km" right />
                     <th className="px-4 py-2 font-medium whitespace-nowrap text-right"></th>
                   </>
                 )}
@@ -628,7 +623,7 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
                     {isLiftingView ? (
                       <>
                         <td className="px-4 py-2 text-right text-gray-100">
-                          {a.total_volume_kg != null ? a.total_volume_kg.toFixed(0) : "—"}
+                          {units.fmt(a.total_volume_kg, "mass", { withLabel: false })}
                         </td>
                         <td className="px-4 py-2 text-right text-gray-400">
                           {formatDuration(a.moving_time_s)}
@@ -643,24 +638,22 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
                     ) : (
                       <>
                         <td className="px-4 py-2 text-right text-gray-100">
-                          {((a.distance_m || 0) / 1000).toFixed(2)}
+                          {units.fmt(a.distance_m || 0, "distance", { withLabel: false })}
                         </td>
                         <td className="px-4 py-2 text-right text-gray-400">
                           {formatDuration(a.moving_time_s)}
                         </td>
                         <td className="px-4 py-2 text-right text-gray-400">
-                          {(a.sport_type === "Ride" || a.sport_type === "VirtualRide" || a.sport_type === "GravelRide")
-                            ? formatSpeed(a.avg_pace_s_per_km)
-                            : formatPace(a.avg_pace_s_per_km)}
+                          {paceOrSpeed(a)}
                         </td>
                         <td className="px-4 py-2 text-right text-gray-400">
                           {a.avg_hr ?? "—"}
                         </td>
                         <td className="px-4 py-2 text-right text-gray-400">
-                          {a.elevation_gain_m != null ? Math.round(a.elevation_gain_m) : "—"}
+                          {units.fmt(a.elevation_gain_m, "elevation", { withLabel: false })}
                         </td>
                         <td className="px-4 py-2 text-right text-gray-400">
-                          {a.elevation_per_mile != null ? Math.round(a.elevation_per_mile) : "—"}
+                          {units.fmt(a.climb_m_per_km, "climb_rate", { withLabel: false })}
                         </td>
                       </>
                     )}
@@ -729,8 +722,8 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
               {isLiftingActivity ? (
                 <div className="grid grid-cols-4 gap-2">
                   <MetricTile
-                    label="Volume (kg)"
-                    value={selectedActivity.total_volume_kg != null ? selectedActivity.total_volume_kg.toFixed(0) : "—"}
+                    label={`Volume (${units.label("mass")})`}
+                    value={units.fmt(selectedActivity.total_volume_kg, "mass", { withLabel: false })}
                   />
                   <MetricTile
                     label="Time"
@@ -749,15 +742,15 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
                 <div className="grid grid-cols-4 gap-2">
                   <MetricTile
                     label="Distance"
-                    value={`${((selectedActivity.distance_m || 0) / 1000).toFixed(2)} km`}
+                    value={units.fmt(selectedActivity.distance_m || 0, "distance")}
                   />
                   <MetricTile
                     label="Time"
                     value={formatDuration(selectedActivity.moving_time_s)}
                   />
                   <MetricTile
-                    label={mode === "cycling" ? "Speed" : "Pace"}
-                    value={paceLabel2(selectedActivity)}
+                    label={mode === "cycling" || isRide(selectedActivity.sport_type) ? "Speed" : "Pace"}
+                    value={paceOrSpeed(selectedActivity, mode === "cycling")}
                   />
                   <MetricTile
                     label="Avg HR"
@@ -801,25 +794,25 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
                         color={effColor(selectedActivity.effort_efficiency_score)}
                       />
                     )}
-                    {selectedActivity.pace_fade_seconds !== null && (
+                    {selectedActivity.pace_fade_s_per_km !== null && (
                       <MetricTile
                         label="Pace Fade"
-                        value={formatPaceFade(selectedActivity.pace_fade_seconds)}
-                        sub={selectedActivity.pace_fade_seconds > 15 ? "Slowed in final third" : selectedActivity.pace_fade_seconds < -15 ? "Negative split" : "Even pacing"}
-                        color={selectedActivity.pace_fade_seconds > 15 ? "yellow" : selectedActivity.pace_fade_seconds < -15 ? "green" : "default"}
+                        value={units.fmt(selectedActivity.pace_fade_s_per_km, "pace_delta")}
+                        sub={selectedActivity.pace_fade_s_per_km > PACE_FADE_NOTABLE_S_PER_KM ? "Slowed in final third" : selectedActivity.pace_fade_s_per_km < -PACE_FADE_NOTABLE_S_PER_KM ? "Negative split" : "Even pacing"}
+                        color={selectedActivity.pace_fade_s_per_km > PACE_FADE_NOTABLE_S_PER_KM ? "yellow" : selectedActivity.pace_fade_s_per_km < -PACE_FADE_NOTABLE_S_PER_KM ? "green" : "default"}
                       />
                     )}
                     {selectedActivity.avg_cadence !== null && (
                       <MetricTile
-                        label={selectedActivity.sport_type && (selectedActivity.sport_type === "Ride" || selectedActivity.sport_type === "VirtualRide" || selectedActivity.sport_type === "GravelRide") ? "Cadence (rpm)" : "Cadence (spm)"}
+                        label={isRide(selectedActivity.sport_type) ? "Cadence (rpm)" : "Cadence (spm)"}
                         value={`${Math.round(selectedActivity.avg_cadence)}`}
                         sub={selectedActivity.cadence_std_dev !== null ? `±${selectedActivity.cadence_std_dev.toFixed(1)} std dev` : undefined}
                       />
                     )}
-                    {selectedActivity.elevation_per_mile !== null && (
+                    {selectedActivity.climb_m_per_km !== null && (
                       <MetricTile
                         label="Climbing Ratio"
-                        value={`${selectedActivity.elevation_per_mile.toFixed(0)} ft/mi`}
+                        value={units.fmt(selectedActivity.climb_m_per_km, "climb_rate")}
                         sub={selectedActivity.high_elevation_flag ? "Hilly course" : "Flat to moderate"}
                         color={selectedActivity.high_elevation_flag ? "yellow" : "default"}
                       />
