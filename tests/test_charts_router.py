@@ -77,3 +77,126 @@ def test_lifting_response_shape_is_unchanged(tmp_db):
 def test_cycling_datasets_identify_their_sport(tmp_db):
     result = _call(mode="cycling")
     assert all(c.sport == "ride" for c in result["charts"])
+
+
+# ── /charts/insights ─────────────────────────────────────────────────────────────
+
+import asyncio
+import json
+from datetime import date, timedelta
+
+from strides_ai.api.routers.charts import generate_insights, get_insights
+from strides_ai.units import UnitSystem
+
+_GOOD_REPORT = {
+    "status": "building",
+    "headline": "Volume is up.",
+    "findings": [{"title": "Volume up", "detail": "d", "tone": "positive", "metric_ids": []}],
+    "recommendations": [{"action": "Hold volume", "why": "consolidate", "metric_ids": []}],
+}
+
+
+class _StubBackend:
+    label = "stub-model"
+
+    def __init__(self, reply=None):
+        self.reply = json.dumps(_GOOD_REPORT) if reply is None else reply
+        self.calls = 0
+
+    def stateless_turn(self, system, user_input, on_token):
+        self.calls += 1
+        return self.reply
+
+
+def _seed_activities(start_id=1, weeks=6, last_day=None):
+    last_day = last_day or date.today() - timedelta(days=8)
+    d, i = last_day - timedelta(weeks=weeks), start_id
+    while d <= last_day:
+        db.upsert_activity(
+            {
+                "id": i,
+                "name": "Run",
+                "start_date_local": f"{d.isoformat()}T07:00:00Z",
+                "distance": 10_000.0,
+                "moving_time": 3600,
+                "elapsed_time": 3700,
+                "total_elevation_gain": 50.0,
+                "sport_type": "Run",
+            }
+        )
+        d += timedelta(days=2)
+        i += 1
+    return i
+
+
+def _get(mode="running"):
+    with Session(get_engine()) as session:
+        return get_insights(mode=mode, session=session, units=UnitSystem.METRIC)
+
+
+def _post(backend, mode="running", force=False):
+    with Session(get_engine()) as session:
+        return asyncio.run(
+            generate_insights(
+                mode=mode, force=force, session=session, backend=backend, units=UnitSystem.METRIC
+            )
+        )
+
+
+def test_insights_lifting_is_400(tmp_db):
+    with pytest.raises(HTTPException) as exc:
+        _get(mode="lifting")
+    assert exc.value.status_code == 400
+
+
+def test_insights_get_without_cache(tmp_db):
+    _seed_activities()
+    result = _get()
+    assert result["report"] is None and result["stale"] is False
+    assert result["digest"]["sufficient"] is True
+
+
+def test_insights_insufficient_data_skips_llm(tmp_db):
+    backend = _StubBackend()
+    result = _post(backend)
+    assert backend.calls == 0
+    assert result["report"] is None and result["digest"]["sufficient"] is False
+
+
+def test_insights_post_generates_caches_and_goes_stale(tmp_db):
+    next_id = _seed_activities()
+    backend = _StubBackend()
+    first = _post(backend)
+    assert first["report"]["status"] == "building" and first["model"] == "stub-model"
+    assert backend.calls == 1
+
+    _post(backend)  # fresh cache: no second LLM call
+    assert backend.calls == 1
+    assert _get()["stale"] is False
+
+    _post(backend, force=True)
+    assert backend.calls == 2
+
+    db.upsert_activity(
+        {
+            "id": next_id,
+            "name": "New",
+            "start_date_local": f"{date.today().isoformat()}T07:00:00Z",
+            "distance": 5000.0,
+            "moving_time": 1800,
+            "elapsed_time": 1800,
+            "total_elevation_gain": 10.0,
+            "sport_type": "Run",
+        }
+    )
+    stale = _get()
+    assert stale["stale"] is True and stale["report"] is not None
+    _post(backend)  # stale cache regenerates without force
+    assert backend.calls == 3
+
+
+def test_insights_bad_json_is_502(tmp_db):
+    _seed_activities()
+    with pytest.raises(HTTPException) as exc:
+        _post(_StubBackend(reply="not json"))
+    assert exc.value.status_code == 502

@@ -175,7 +175,7 @@ export default function LiftingCharts({ theme }: Props) {
     <div className="h-full overflow-y-auto">
       <div className="p-6 space-y-5 max-w-5xl mx-auto">
         <div className="flex items-center justify-between">
-          <h2 className="text-xl font-bold text-gray-100">Training Charts</h2>
+          <h2 className="text-xl font-bold text-gray-100">Training Analytics</h2>
         </div>
 
         <FilterBar
