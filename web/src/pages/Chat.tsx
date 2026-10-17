@@ -3,6 +3,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Mode, ThemeConfig } from "../App";
 import { handleChatAdmission } from "./chatAdmission";
+import { formatSyncFreshness } from "./syncFreshness";
+import { PENDING_CHAT_ACTIVITY_KEY } from "./chatActivityHandoff";
 
 interface Message {
   id?: number;
@@ -23,10 +25,27 @@ interface PlanChange {
   workout_type?: string;
 }
 
+interface PickerActivity {
+  id: number;
+  name: string | null;
+  date: string | null;
+  sport_type: string | null;
+  deep_dive_report: string | null;
+}
+
+interface AttachedActivity {
+  id: number;
+  name: string;
+  date: string;
+  hasDeepDive: boolean;
+}
+
 interface Props {
   mode: Mode;
   theme: ThemeConfig;
   supportsAttachments: boolean;
+  lastSyncAt: string | null;
+  onSynced: () => void;
 }
 
 const SCROLL_KEY = "chat_scroll";
@@ -225,7 +244,7 @@ function formatDate(created_at: string): string {
   }
 }
 
-export default function Chat({ mode, theme, supportsAttachments }: Props) {
+export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onSynced }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [oldestLoadedId, setOldestLoadedId] = useState<number | null>(null);
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
@@ -242,6 +261,13 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [attachedActivities, setAttachedActivities] = useState<AttachedActivity[]>([]);
+  const [activityPickerOpen, setActivityPickerOpen] = useState(false);
+  const [pickerActivities, setPickerActivities] = useState<PickerActivity[] | null>(null);
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const [pickerSyncing, setPickerSyncing] = useState(false);
+  const [pickerQuery, setPickerQuery] = useState("");
 
 
   const [searchOpen, setSearchOpen] = useState(false);
@@ -263,6 +289,22 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
       abortControllerRef.current?.abort();
       blobUrlsInMessagesRef.current.forEach((u) => URL.revokeObjectURL(u));
     };
+  }, []);
+
+  // Pick up a "Discuss in chat" handoff from the Activities panel, if any.
+  // Chat remounts on mode change (key={mode} in App.tsx), so this only needs
+  // to run once per mount — consume and clear immediately so it never re-fires.
+  useEffect(() => {
+    const pendingId = sessionStorage.getItem(PENDING_CHAT_ACTIVITY_KEY);
+    if (!pendingId) return;
+    sessionStorage.removeItem(PENDING_CHAT_ACTIVITY_KEY);
+    fetch("/api/activities")
+      .then((r) => r.json())
+      .then((rows: PickerActivity[]) => {
+        const match = rows.find((a) => a.id === Number(pendingId));
+        if (match) attachActivity(match);
+      })
+      .catch(() => {/* handoff is best-effort */});
   }, []);
 
   // Reset and reload history whenever mode changes
@@ -425,6 +467,56 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
     }, 50);
   }
 
+  function pickerFiltered(rows: PickerActivity[], query: string): PickerActivity[] {
+    const q = query.trim().toLowerCase();
+    const filtered = q
+      ? rows.filter((a) => (a.name || "").toLowerCase().includes(q) || (a.date || "").includes(q))
+      : rows;
+    return filtered.slice(0, 20);
+  }
+
+  function attachActivity(a: PickerActivity) {
+    setAttachedActivities((prev) =>
+      prev.some((x) => x.id === a.id)
+        ? prev
+        : [...prev, { id: a.id, name: a.name || "Untitled", date: a.date || "?", hasDeepDive: !!a.deep_dive_report }]
+    );
+    setActivityPickerOpen(false);
+  }
+
+  function removeAttachedActivity(id: number) {
+    setAttachedActivities((prev) => prev.filter((a) => a.id !== id));
+  }
+
+  function loadPickerActivities() {
+    setPickerLoading(true);
+    fetch(`/api/activities?mode=${mode}`)
+      .then((r) => r.json())
+      .then((rows: PickerActivity[]) => {
+        setPickerActivities([...rows].sort((a, b) => (b.date || "").localeCompare(a.date || "")));
+      })
+      .catch(() => setPickerActivities([]))
+      .finally(() => setPickerLoading(false));
+  }
+
+  function toggleActivityPicker() {
+    setActivityPickerOpen((open) => {
+      if (!open && !pickerActivities) loadPickerActivities();
+      return !open;
+    });
+  }
+
+  async function syncNowFromPicker() {
+    setPickerSyncing(true);
+    try {
+      await fetch("/api/sync", { method: "POST" });
+      onSynced();
+      loadPickerActivities();
+    } finally {
+      setPickerSyncing(false);
+    }
+  }
+
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const newFiles = Array.from(e.target.files ?? []);
     if (newFiles.length === 0) return;
@@ -465,19 +557,20 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
 
   async function send() {
     const text = input.trim();
-    if ((!text && attachedFiles.length === 0) || streamingIndex !== null) return;
+    if ((!text && attachedFiles.length === 0 && attachedActivities.length === 0) || streamingIndex !== null) return;
 
-    // Snapshot files before clearing state
+    // Snapshot files and activities before clearing state
     const filesToSend = attachedFiles;
     const snapshotUrls = previewUrls;
+    const activitiesToSend = attachedActivities;
 
     // Build the optimistic user message — use blob URLs for images so they
-    // render immediately; text files fall back to a paperclip note
-    const attachmentNote = filesToSend.length > 0
-      ? "\n\n" + filesToSend.map((f, i) =>
-          snapshotUrls[i] ? `![${f.name}](${snapshotUrls[i]})` : `📎 ${f.name}`
-        ).join("\n")
-      : "";
+    // render immediately; text files and activities fall back to a note line
+    const attachmentLines = [
+      ...filesToSend.map((f, i) => (snapshotUrls[i] ? `![${f.name}](${snapshotUrls[i]})` : `📎 ${f.name}`)),
+      ...activitiesToSend.map((a) => `📎 Activity: ${a.name} (${a.date})`),
+    ];
+    const attachmentNote = attachmentLines.length > 0 ? "\n\n" + attachmentLines.join("\n") : "";
     const optimisticContent = text + attachmentNote;
 
     // Track blob URLs embedded in the message; revoke on unmount
@@ -509,6 +602,9 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
       for (const file of filesToSend) {
         formData.append("files", file);
       }
+      for (const activity of activitiesToSend) {
+        formData.append("activity_ids", String(activity.id));
+      }
 
       const res = await fetch("/api/chat", {
         method: "POST",
@@ -520,6 +616,7 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
         setInput("");
         setAttachedFiles([]);
         setPreviewUrls([]);
+        setAttachedActivities([]);
         if (textareaRef.current) {
           textareaRef.current.style.height = "52px";
           textareaRef.current.style.overflowY = "hidden";
@@ -724,6 +821,81 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
       <div className="px-3 sm:px-4 pb-3 sm:pb-6 pt-3 sm:pt-5 border-t border-gray-800/60">
         <div className="max-w-3xl mx-auto">
           {sendError && <p role="alert" className="text-sm text-amber-300 mb-2">{sendError}</p>}
+
+          {/* Activity picker */}
+          {supportsAttachments && activityPickerOpen && (
+            <div className="mb-2 rounded-xl border border-gray-700/60 bg-gray-800 overflow-hidden">
+              <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-gray-700/60">
+                <span className="text-xs text-gray-500">{formatSyncFreshness(lastSyncAt)}</span>
+                <button
+                  onClick={syncNowFromPicker}
+                  disabled={pickerSyncing}
+                  className="text-xs text-gray-400 hover:text-gray-200 disabled:opacity-50 transition-colors"
+                >
+                  {pickerSyncing ? "Syncing…" : "Sync now"}
+                </button>
+              </div>
+              <div className="px-3 py-2 border-b border-gray-700/60">
+                <input
+                  type="text"
+                  value={pickerQuery}
+                  onChange={(e) => setPickerQuery(e.target.value)}
+                  placeholder="Search activities by name or date…"
+                  className="w-full bg-gray-900 border border-gray-700/60 rounded-lg px-3 py-1.5 text-sm text-gray-100 placeholder-gray-500 focus:outline-none"
+                />
+              </div>
+              <div className="max-h-56 overflow-y-auto">
+                {pickerLoading && (
+                  <p className="px-3 py-3 text-sm text-gray-500">Loading activities…</p>
+                )}
+                {!pickerLoading && pickerActivities && pickerActivities.length === 0 && (
+                  <p className="px-3 py-3 text-sm text-gray-500">No activities found. Try syncing.</p>
+                )}
+                {!pickerLoading && pickerActivities && pickerFiltered(pickerActivities, pickerQuery).map((a, i) => (
+                  <button
+                    key={a.id}
+                    onClick={() => attachActivity(a)}
+                    disabled={attachedActivities.some((x) => x.id === a.id)}
+                    className="w-full text-left px-3 py-2 hover:bg-gray-700/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-between gap-2"
+                  >
+                    <span className="text-sm text-gray-200 truncate">
+                      {i === 0 && !pickerQuery ? "Most recent: " : ""}
+                      {a.name || "Untitled"}
+                    </span>
+                    <span className="text-xs text-gray-500 shrink-0">
+                      {a.date || "?"}{a.deep_dive_report ? " · deep dive" : ""}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Attached activity chips */}
+          {attachedActivities.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-2">
+              {attachedActivities.map((a) => (
+                <div key={a.id} className="relative flex items-center gap-1.5 bg-gray-800 border border-gray-700/60 rounded-xl px-2.5 py-1.5 text-xs text-gray-300">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-gray-400 shrink-0">
+                    <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                  <span className="max-w-[160px] truncate">
+                    {a.name} ({a.date}){a.hasDeepDive ? " · deep dive included" : ""}
+                  </span>
+                  <button
+                    onClick={() => removeAttachedActivity(a.id)}
+                    className="ml-0.5 text-gray-500 hover:text-gray-200 transition-colors"
+                    aria-label="Remove attached activity"
+                  >
+                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                      <path d="M1 1l8 8M9 1L1 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                    </svg>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* File preview strip */}
           {attachedFiles.length > 0 && (
             <div className="flex flex-wrap gap-2 mb-2">
@@ -775,34 +947,50 @@ export default function Chat({ mode, theme, supportsAttachments }: Props) {
               onKeyDown={onKeyDown}
               placeholder="Message your coach…"
               disabled={streamingIndex !== null}
-              className={`w-full resize-none rounded-2xl bg-gray-800 border border-gray-700/60 py-3.5 pr-14 text-[15px] text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 ${theme.accentFocus} disabled:opacity-50 transition-colors leading-relaxed ${supportsAttachments ? "pl-10" : "px-4"}`}
+              className={`w-full resize-none rounded-2xl bg-gray-800 border border-gray-700/60 py-3.5 pr-14 text-[15px] text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-1 ${theme.accentFocus} disabled:opacity-50 transition-colors leading-relaxed ${supportsAttachments ? "pl-[5.5rem]" : "px-4"}`}
               style={{ minHeight: "52px", height: "52px", overflowY: "hidden" }}
             />
 
-            {/* Paperclip button */}
+            {/* Left-side attach buttons — grouped in a flex row so spacing stays
+                consistent regardless of how many buttons are in it. */}
             {supportsAttachments && (
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={streamingIndex !== null}
-                title="Attach image or file"
-                className="absolute left-2.5 bottom-2.5 w-8 h-8 rounded-xl text-gray-500 hover:text-gray-300 hover:bg-gray-700 flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed transition-all"
-              >
-                <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-                  <path
-                    d="M13.5 7.5 7.5 13.5A4.5 4.5 0 0 1 1 7L7.5 1A3 3 0 0 1 12 5.5L5.5 12A1.5 1.5 0 0 1 3.5 10L9 4.5"
-                    stroke="currentColor"
-                    strokeWidth="1.4"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </button>
+              <div className="absolute left-2.5 bottom-2.5 flex items-center gap-1">
+                <button
+                  onClick={toggleActivityPicker}
+                  disabled={streamingIndex !== null}
+                  title="Attach an activity's stats and analysis"
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed transition-all ${
+                    activityPickerOpen ? `${theme.accentBg} ${theme.accentClass}` : "text-gray-500 hover:text-gray-300 hover:bg-gray-700"
+                  }`}
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+                    <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </button>
+
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={streamingIndex !== null}
+                  title="Attach image or file"
+                  className="w-8 h-8 rounded-xl text-gray-500 hover:text-gray-300 hover:bg-gray-700 flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                >
+                  <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+                    <path
+                      d="M13.5 7.5 7.5 13.5A4.5 4.5 0 0 1 1 7L7.5 1A3 3 0 0 1 12 5.5L5.5 12A1.5 1.5 0 0 1 3.5 10L9 4.5"
+                      stroke="currentColor"
+                      strokeWidth="1.4"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+              </div>
             )}
 
             {/* Send button */}
             <button
               onClick={send}
-              disabled={streamingIndex !== null || (!input.trim() && attachedFiles.length === 0)}
+              disabled={streamingIndex !== null || (!input.trim() && attachedFiles.length === 0 && attachedActivities.length === 0)}
               className={`absolute right-2.5 bottom-2.5 w-8 h-8 rounded-xl ${theme.accentButton} text-white flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed transition-all`}
             >
               {streamingIndex !== null ? (

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Mode, ThemeConfig } from "../App";
+import { formatSyncFreshness } from "./syncFreshness";
+import { PENDING_CHAT_ACTIVITY_KEY } from "./chatActivityHandoff";
 
 interface Activity {
   id: number;
@@ -45,6 +47,8 @@ interface Activity {
 interface Props {
   mode: Mode;
   theme: ThemeConfig;
+  lastSyncAt: string | null;
+  onSynced: () => void;
 }
 
 type SortKey =
@@ -233,7 +237,7 @@ function ExerciseBreakdown({ exercises_json }: { exercises_json: string }) {
   );
 }
 
-export default function Activities({ mode, theme }: Props) {
+export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props) {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -312,11 +316,17 @@ export default function Activities({ mode, theme }: Props) {
       setSyncMsg(count > 0 ? `${count} new item${count === 1 ? "" : "s"} synced.` : "Already up to date.");
       const rows = await fetch(modeOnly ? `/api/activities?mode=${mode}` : "/api/activities").then((r) => r.json());
       setActivities(rows);
+      onSynced();
     } catch {
       setSyncMsg("Sync failed.");
     } finally {
       setSyncing(false);
     }
+  }
+
+  function discussInChat(activityId: number) {
+    sessionStorage.setItem(PENDING_CHAT_ACTIVITY_KEY, String(activityId));
+    location.hash = "chat";
   }
 
   async function runDeepDive(force = false) {
@@ -467,7 +477,11 @@ export default function Activities({ mode, theme }: Props) {
           </span>
         </h2>
         <div className="flex items-center gap-3">
-          {syncMsg && <span className={`text-sm ${theme.accentClass}`}>{syncMsg}</span>}
+          {syncMsg ? (
+            <span className={`text-sm ${theme.accentClass}`}>{syncMsg}</span>
+          ) : (
+            <span className="text-sm text-gray-500">{formatSyncFreshness(lastSyncAt)}</span>
+          )}
           <button
             onClick={handleSync}
             disabled={syncing}
@@ -861,14 +875,22 @@ export default function Activities({ mode, theme }: Props) {
               <section className="space-y-3">
                 <div className="flex items-center justify-between">
                   <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Deep Dive Analysis</h4>
-                  {(deepDiveReport || selectedActivity.deep_dive_report) && !deepDiveLoading && (
+                  <div className="flex items-center gap-3">
                     <button
-                      onClick={() => runDeepDive(true)}
-                      className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+                      onClick={() => discussInChat(selectedActivity.id)}
+                      className={`text-xs ${theme.accentClass} hover:underline transition-colors`}
                     >
-                      Regenerate
+                      Discuss in chat →
                     </button>
-                  )}
+                    {(deepDiveReport || selectedActivity.deep_dive_report) && !deepDiveLoading && (
+                      <button
+                        onClick={() => runDeepDive(true)}
+                        className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+                      >
+                        Regenerate
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {deepDiveLoading && (

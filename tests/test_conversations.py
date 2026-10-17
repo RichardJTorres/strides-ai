@@ -133,6 +133,70 @@ def test_http_rejection_precedes_attachments_and_persistence(
     assert db.get_recent_messages(mode="running") == []
 
 
+def test_chat_attaches_activity_card_and_persists_short_display(tmp_db, sample_activity):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from strides_ai.api.routers import chat
+
+    db.upsert_activity(sample_activity)
+    captured = {}
+    entered, finish = threading.Event(), threading.Event()
+
+    class CapturingBackend:
+        label = "fake"
+
+        def stream_turn(self, system, message, on_token, attachments=None):
+            captured["attachments"] = attachments
+            entered.set()
+            assert finish.wait(5)
+            on_token("ok")
+            return "ok", [], []
+
+    coordinator = ConversationCoordinator(lambda mode: CapturingBackend())
+    app = FastAPI()
+    app.state.conversations = coordinator
+    app.include_router(chat.router)
+    client = TestClient(app)
+
+    response = client.post(
+        "/chat",
+        data={"message": "how did this one go?", "mode": "running", "activity_ids": "1001"},
+    )
+    assert response.status_code == 200
+    assert entered.wait(2)
+    finish.set()
+
+    attachments = captured["attachments"]
+    assert len(attachments) == 1
+    assert attachments[0]["type"] == "text"
+    assert "## Attached Activity: Morning Run" in attachments[0]["text"]
+
+    saved = db.get_recent_messages(mode="running")
+    assert saved[0]["content"] == "how did this one go?\n\n📎 Activity: Morning Run (2025-06-15)"
+
+
+def test_chat_unknown_activity_id_rejects_before_persisting(tmp_db):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from strides_ai.api.routers import chat
+
+    factory_calls = []
+    coordinator = ConversationCoordinator(lambda mode: factory_calls.append(mode))
+    app = FastAPI()
+    app.state.conversations = coordinator
+    app.include_router(chat.router)
+    client = TestClient(app)
+
+    response = client.post(
+        "/chat",
+        data={"message": "hi", "mode": "running", "activity_ids": "999999"},
+    )
+    assert response.status_code == 404
+    assert db.get_recent_messages(mode="running") == []
+    # Turn was released despite the mid-handler rejection — a retry isn't blocked by a stale lock.
+    coordinator.release(coordinator.acquire("running"))
+
+
 def test_refresh_does_not_replace_coordinator_or_active_backend(tmp_db, monkeypatch):
     from types import SimpleNamespace
     from strides_ai.api import deps

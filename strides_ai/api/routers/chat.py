@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session
 
+from ...activity_context import build_activity_card
 from ...coach import build_system
 from ...config import MAX_FILE_BYTES, SUPPORTED_IMAGE_TYPES, UPLOADS_DIR
 from ...db import activities as act_crud
@@ -102,9 +103,10 @@ async def _sse_event_stream(
 @router.post("/chat")
 async def chat(
     request: Request,
-    message: str = Form(...),
+    message: str = Form(""),
     mode: str = Form("running"),
     files: list[UploadFile] = File(default=[]),
+    activity_ids: list[int] = Form(default=[]),
     session: Session = Depends(get_session),
 ) -> StreamingResponse:
     coordinator: ConversationCoordinator = request.app.state.conversations
@@ -117,6 +119,12 @@ async def chat(
             block, display = await _process_attachment(file)
             llm_blocks.append(block)
             db_parts.append(display)
+        for activity_id in activity_ids:
+            activity = act_crud.get(session, activity_id)
+            if activity is None:
+                raise HTTPException(status_code=404, detail=f"Activity {activity_id} not found")
+            llm_blocks.append({"type": "text", "text": build_activity_card(activity.model_dump())})
+            db_parts.append(f"📎 Activity: {activity.name or 'Untitled'} ({activity.date or '?'})")
 
         saved_message = message
         if db_parts:
