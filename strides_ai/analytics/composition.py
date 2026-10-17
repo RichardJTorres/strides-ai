@@ -61,7 +61,7 @@ RIDE_SPECIFIC = CYCLING_CHARTS[2:]
 
 HYBRID_CHARTS: list[ChartSpec] = [
     ChartSpec("atl_ctl", cardio.compute_atl_ctl),  # combined, unfiltered
-    ChartSpec("weekly_distance", cardio.compute_weekly_distance),  # combined, unfiltered
+    ChartSpec("weekly_distance", cardio.compute_weekly_distance_by_sport),  # stacked Run/Ride
     *[
         dataclasses.replace(spec, key=f"run_{spec.key}", sport_filter=is_run, sport="run")
         for spec in RUN_SPECIFIC

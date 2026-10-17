@@ -402,3 +402,15 @@ def test_training_time_allocation_empty_is_unavailable():
     ds = compute_training_time_allocation([], "miles", TODAY)
     assert ds.available is False
     assert ds.unavailable_reason == UnavailableReason.NO_ACTIVITIES
+
+
+def test_weekly_distance_by_sport_splits_run_and_ride():
+    from strides_ai.analytics.cardio import compute_weekly_distance_by_sport
+
+    acts = [
+        make_activity(PAST_MONDAY, distance_m=10_000, sport_type="Run"),
+        make_activity(PAST_MONDAY, distance_m=30_000, sport_type="Ride"),
+    ]
+    ds = compute_weekly_distance_by_sport(acts, "km", TODAY)
+    assert ds.categories == ["Run", "Ride"]
+    assert ds.data[0].values == {"Run": 10.0, "Ride": 30.0}
