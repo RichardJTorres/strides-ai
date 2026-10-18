@@ -290,7 +290,17 @@ def test_set_setting_overwrites(tmp_db):
     assert db.get_setting("mode") == "hybrid"
 
 
-# ── get_profile_fields / save_profile_fields ──────────────────────────────────
+# ── get_profile_fields / profile sections ─────────────────────────────────────
+
+
+def _save_section(section, data):
+    from sqlmodel import Session
+
+    from strides_ai.db import profiles as crud
+    from strides_ai.db.engine import get_engine
+
+    with Session(get_engine()) as s:
+        crud.save_section(s, section, data)
 
 
 def test_get_profile_fields_returns_none_when_not_saved(tmp_db):
@@ -298,28 +308,29 @@ def test_get_profile_fields_returns_none_when_not_saved(tmp_db):
 
 
 def test_save_and_get_profile_fields(tmp_db):
-    fields = {"personal": {"name": "Alice"}, "goals": "sub-3"}
-    db.save_profile_fields("running", fields)
+    _save_section("shared", {"personal": {"name": "Alice"}, "goals": "sub-3"})
     result = db.get_profile_fields("running")
     assert result["personal"]["name"] == "Alice"
     assert result["goals"] == "sub-3"
 
 
-def test_personal_section_shared_across_modes(tmp_db):
-    # personal is shared — last write wins regardless of mode
-    db.save_profile_fields("running", {"personal": {"name": "Runner"}, "goals": "sub-3"})
-    db.save_profile_fields("cycling", {"personal": {"name": "Cyclist"}, "goals": "century"})
-    assert db.get_profile_fields("running")["personal"]["name"] == "Cyclist"
-    assert db.get_profile_fields("cycling")["personal"]["name"] == "Cyclist"
-    # mode-specific fields remain isolated
-    assert db.get_profile_fields("running")["goals"] == "sub-3"
-    assert db.get_profile_fields("cycling")["goals"] == "century"
+def test_profile_is_the_same_document_in_every_mode(tmp_db):
+    _save_section("shared", {"personal": {"name": "Runner"}, "goals": "sub-3"})
+    _save_section("lifting", {"since": "2019"})
+    for mode in ("running", "cycling", "hybrid", "lifting"):
+        fields = db.get_profile_fields(mode)
+        assert fields["personal"]["name"] == "Runner"
+        assert fields["goals"] == "sub-3"
+        assert fields["lifting"]["since"] == "2019"
 
 
-def test_save_profile_fields_replaces_existing(tmp_db):
-    db.save_profile_fields("running", {"goals": "first"})
-    db.save_profile_fields("running", {"goals": "updated"})
-    assert db.get_profile_fields("running")["goals"] == "updated"
+def test_save_section_replaces_only_that_section(tmp_db):
+    _save_section("shared", {"goals": "first"})
+    _save_section("running", {"since": "2015"})
+    _save_section("shared", {"goals": "updated"})
+    fields = db.get_profile_fields("running")
+    assert fields["goals"] == "updated"
+    assert fields["running"]["since"] == "2015"
 
 
 # ── mode-scoped conversation history ─────────────────────────────────────────

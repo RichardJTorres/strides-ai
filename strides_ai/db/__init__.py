@@ -68,7 +68,7 @@ __all__ = [
     "get_activities_pending_analysis",
     "renormalize_effort_efficiency",
     "get_profile_fields",
-    "save_profile_fields",
+    "get_max_hr",
     "get_setting",
     "set_setting",
     "save_message",
@@ -186,14 +186,14 @@ def renormalize_effort_efficiency() -> None:
 # ── Profiles ──────────────────────────────────────────────────────────────────
 
 
-def get_profile_fields(mode: str) -> dict | None:
+def get_profile_fields(mode: str | None = None) -> dict | None:
     with _session() as s:
         return _prof.get_fields(s, mode)
 
 
-def save_profile_fields(mode: str, fields: dict) -> None:
+def get_max_hr(default: int = 190) -> int:
     with _session() as s:
-        _prof.save_fields(s, mode, fields)
+        return _prof.get_max_hr(s, default)
 
 
 # ── Settings ──────────────────────────────────────────────────────────────────

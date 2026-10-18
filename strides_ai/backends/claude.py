@@ -9,7 +9,10 @@ from .base import (
     SAVE_MEMORY_CATEGORIES,
     SAVE_MEMORY_TIMING_PROPERTIES,
     SAVE_MEMORY_DESCRIPTION,
+    UPDATE_PROFILE_DESCRIPTION,
+    UPDATE_PROFILE_OPS,
     UPDATE_TRAINING_PLAN_DESCRIPTION,
+    update_profile_fields,
     BaseBackend,
 )
 
@@ -54,6 +57,20 @@ _WORKOUT_ENTRY_SCHEMA = {
         "intensity": {"type": "string", "enum": ["easy", "moderate", "hard", "rest"]},
     },
     "required": ["date", "workout_type"],
+}
+
+UPDATE_PROFILE_TOOL = {
+    "name": "update_profile",
+    "description": UPDATE_PROFILE_DESCRIPTION,
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "field": {"type": "string", "enum": update_profile_fields()},
+            "value": {"type": "string"},
+            "op": {"type": "string", "enum": UPDATE_PROFILE_OPS},
+        },
+        "required": ["field", "value"],
+    },
 }
 
 UPDATE_TRAINING_PLAN_TOOL = {
@@ -153,7 +170,7 @@ class ClaudeBackend(BaseBackend):
                     max_tokens=self._budget.output_remaining,
                     system=system,
                     messages=self._history,
-                    tools=[SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL],
+                    tools=[SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL, UPDATE_PROFILE_TOOL],
                 )
             ) as stream:
                 for chunk in stream.text_stream:
@@ -184,6 +201,11 @@ class ClaudeBackend(BaseBackend):
                 if block.name == "save_memory":
                     result, category, content = self._execute_save_memory(block.input)
                     memories_saved.append((category, content))
+                    tool_results.append(
+                        {"type": "tool_result", "tool_use_id": block.id, "content": result}
+                    )
+                elif block.name == "update_profile":
+                    result = self._execute_update_profile(block.input)
                     tool_results.append(
                         {"type": "tool_result", "tool_use_id": block.id, "content": result}
                     )

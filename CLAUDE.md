@@ -69,13 +69,13 @@ At session start, `build_initial_history()` seeds the full activity log (all act
 
 - **Conversation history**: last 40 messages stored in SQLite, re-injected at session start.
 - **Memories**: structured facts (category + content) saved by LLM tool calls, always injected into system prompt.
-- **Profile**: JSON fields in `profiles` table, keyed by mode (`running`, `cycling`, `hybrid`, `personal`). `personal` fields are merged into every mode. Read fresh each request.
+- **Profile**: one unified athlete profile shared by every mode (`strides_ai/profile.py`), stored as one JSON row per section in the `profiles` table: `shared` (personal, goals, availability, injuries, nutrition, notes, `coach_voice`) plus `running` / `cycling` / `lifting` (since, volume, focus, background, bests, gear). A mode only picks which discipline sections the coach sees in full (`DISCIPLINES_BY_MODE`; hybrid = running + cycling); other disciplines are summarised under "Also trains". Edited per section via `PUT /api/profile/{section}` (merge, never whole-document overwrite). Max HR lives only in `personal.max_hr` (`db.get_max_hr()`). Races stay in `calendar_prefs`. The coach proposes edits with the `update_profile` tool; nothing is written until the athlete accepts the `[PROFILE_PROPOSAL]` card in chat. `alembic/versions/012` converts legacy per-mode rows (kept as `legacy:<name>`). Read fresh each request.
 
 All local data lives in `~/.strides_ai/` (`activities.db`, `token.json`, `uploads/`).
 
 ### Coaching modes
 
-Three separate system prompts and DB rows per mode. Activities filtered by `sport_type`: `RUN_TYPES = {"Run", "TrailRun", "VirtualRun"}`, `CYCLE_TYPES = {"Ride", "VirtualRide", "GravelRide"}`. Hybrid shows all. Conversation history and profile are also mode-scoped.
+Separate system prompts and conversation history per mode (the profile is shared). Activities filtered by `sport_type`: `RUN_TYPES = {"Run", "TrailRun", "VirtualRun"}`, `CYCLE_TYPES = {"Ride", "VirtualRide", "GravelRide"}`. Hybrid shows all. Conversation history is also mode-scoped; the profile is not.
 
 ### Web API (`strides_ai/api/app.py`)
 

@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import type { Mode, ThemeConfig } from "../App";
 import { handleChatAdmission } from "./chatAdmission";
 import { formatSyncFreshness } from "./syncFreshness";
+import ProposalCards, { type ProfileProposal } from "./profile/ProposalCards";
 import { PENDING_CHAT_ACTIVITY_KEY, PENDING_CHAT_DRAFT_KEY } from "./chatActivityHandoff";
 
 interface Message {
@@ -70,6 +71,7 @@ const MessageList = memo(function MessageList({
   messages,
   savedMemories,
   planChanges,
+  profileProposals,
   streamingIndex,
   highlightedId,
   hasOlderMessages,
@@ -83,6 +85,7 @@ const MessageList = memo(function MessageList({
   messages: Message[];
   savedMemories: Memory[];
   planChanges: PlanChange[];
+  profileProposals: ProfileProposal[];
   streamingIndex: number | null;
   highlightedId: number | null;
   hasOlderMessages: boolean;
@@ -215,6 +218,10 @@ const MessageList = memo(function MessageList({
           </div>
         )}
 
+        {profileProposals.length > 0 && (
+          <ProposalCards key={JSON.stringify(profileProposals)} proposals={profileProposals} theme={theme} />
+        )}
+
         <div ref={bottomRef} />
       </div>
     </div>
@@ -257,6 +264,7 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
   const [streamingIndex, setStreamingIndex] = useState<number | null>(null);
   const [savedMemories, setSavedMemories] = useState<Memory[]>([]);
   const [planChanges, setPlanChanges] = useState<PlanChange[]>([]);
+  const [profileProposals, setProfileProposals] = useState<ProfileProposal[]>([]);
 
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
@@ -324,6 +332,7 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
     setHasOlderMessages(false);
     setSavedMemories([]);
     setPlanChanges([]);
+    setProfileProposals([]);
     setSearchOpen(false);
     sessionStorage.removeItem(SCROLL_KEY);
 
@@ -589,6 +598,7 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
     setSendError("");
     setSavedMemories([]);
     setPlanChanges([]);
+    setProfileProposals([]);
 
     const assistantIndex = messages.length + 1;
 
@@ -676,6 +686,15 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
             try {
               const changes: PlanChange[] = JSON.parse(payload.slice(14));
               setPlanChanges(changes);
+            } catch {
+              // ignore
+            }
+            continue;
+          }
+
+          if (payload.startsWith("[PROFILE_PROPOSAL]")) {
+            try {
+              setProfileProposals(JSON.parse(payload.slice("[PROFILE_PROPOSAL]".length)));
             } catch {
               // ignore
             }
@@ -816,6 +835,7 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
         messages={messages}
         savedMemories={savedMemories}
         planChanges={planChanges}
+        profileProposals={profileProposals}
         streamingIndex={streamingIndex}
         highlightedId={highlightedId}
         hasOlderMessages={hasOlderMessages}

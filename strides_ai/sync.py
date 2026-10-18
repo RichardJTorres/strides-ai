@@ -92,7 +92,7 @@ def sync_activities(access_token: str, full: bool = False) -> int:
     instead of once per activity.
     """
     stored_ids = get_stored_ids()
-    max_hr = int(db.get_setting("max_hr", "190") or "190")
+    max_hr = db.get_max_hr()
     count = 0
 
     # Phase 1: collect activities to upsert and analyze
