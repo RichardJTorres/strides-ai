@@ -14,7 +14,10 @@ from .base import (
     SAVE_MEMORY_CATEGORIES,
     SAVE_MEMORY_TIMING_PROPERTIES,
     SAVE_MEMORY_DESCRIPTION,
+    UPDATE_PROFILE_DESCRIPTION,
+    UPDATE_PROFILE_OPS,
     UPDATE_TRAINING_PLAN_DESCRIPTION,
+    update_profile_fields,
     BaseBackend,
 )
 
@@ -54,6 +57,24 @@ SAVE_MEMORY_TOOL = types.Tool(
                     ),
                 },
                 required=["category", "content"],
+            ),
+        )
+    ]
+)
+
+UPDATE_PROFILE_TOOL = types.Tool(
+    function_declarations=[
+        types.FunctionDeclaration(
+            name="update_profile",
+            description=UPDATE_PROFILE_DESCRIPTION,
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "field": types.Schema(type=types.Type.STRING, enum=update_profile_fields()),
+                    "value": types.Schema(type=types.Type.STRING),
+                    "op": types.Schema(type=types.Type.STRING, enum=UPDATE_PROFILE_OPS),
+                },
+                required=["field", "value"],
             ),
         )
     ]
@@ -214,7 +235,7 @@ class GeminiBackend(BaseBackend):
 
         config = types.GenerateContentConfig(
             system_instruction=system,
-            tools=[SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL],
+            tools=[SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL, UPDATE_PROFILE_TOOL],
         )
 
         response_text = ""
@@ -327,6 +348,14 @@ class GeminiBackend(BaseBackend):
                     tool_response_parts.append(
                         types.Part.from_function_response(
                             name="save_memory",
+                            response={"result": result},
+                        )
+                    )
+                elif fc.name == "update_profile":
+                    result = self._execute_update_profile(dict(fc.args))
+                    tool_response_parts.append(
+                        types.Part.from_function_response(
+                            name="update_profile",
                             response={"result": result},
                         )
                     )

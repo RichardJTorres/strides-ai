@@ -63,6 +63,7 @@ class TurnBudget:
         self.rounds = self.tools = self.generated = self.input_size = 0
         self.memories = []
         self.changes = []
+        self.profile_proposals = []
         self.text = []
         self.stop_reason = "complete"
         self.count_kind = "estimated"

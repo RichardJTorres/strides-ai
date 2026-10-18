@@ -113,21 +113,20 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
     }
   }
 
+  // The coach voice is part of the shared profile, so it is the same in every mode.
   useEffect(() => {
     const modes: Mode[] = ["running", "cycling", "hybrid", "lifting"];
-    Promise.all(
-      modes.map((m) =>
-        fetch(`/api/profile?mode=${m}`)
-          .then((r) => r.json())
-          .then(({ fields }) => [m, (fields?.coach_voice as string) ?? ""] as [string, string])
-          .catch(() => [m, ""] as [string, string])
-      )
-    ).then((entries) => {
-      setVoiceByMode(Object.fromEntries(entries));
-      const customEntries = entries.filter(([, v]) => v && !PRESET_VOICE_VALUES.has(v));
-      setCustomText(Object.fromEntries(customEntries.map(([m, v]) => [m, v])));
-      setCustomSelected(Object.fromEntries(customEntries.map(([m]) => [m, true])));
-    });
+    fetch("/api/profile")
+      .then((r) => r.json())
+      .then(({ fields }) => {
+        const voice = (fields?.coach_voice as string) ?? "";
+        setVoiceByMode(Object.fromEntries(modes.map((m) => [m, voice])));
+        if (voice && !PRESET_VOICE_VALUES.has(voice)) {
+          setCustomText(Object.fromEntries(modes.map((m) => [m, voice])));
+          setCustomSelected(Object.fromEntries(modes.map((m) => [m, true])));
+        }
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -150,15 +149,16 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
       .catch(() => {});
   }, []);
 
-  async function handleVoiceChange(targetMode: Mode, voice: string) {
+  async function handleVoiceChange(_targetMode: Mode, voice: string) {
     setVoiceSaving(true);
-    setVoiceByMode((prev) => ({ ...prev, [targetMode]: voice }));
+    const modes: Mode[] = ["running", "cycling", "hybrid", "lifting"];
+    setVoiceByMode(Object.fromEntries(modes.map((m) => [m, voice])));
     try {
-      const { fields } = await fetch(`/api/profile?mode=${targetMode}`).then((r) => r.json());
-      await fetch(`/api/profile?mode=${targetMode}`, {
+      // Only the voice is sent; the server merges it so other profile fields are untouched.
+      await fetch("/api/profile/shared", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fields: { ...fields, coach_voice: voice } }),
+        body: JSON.stringify({ fields: { coach_voice: voice } }),
       });
     } finally {
       setVoiceSaving(false);
@@ -341,7 +341,7 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
               Coach Voice
             </h3>
             <p className="text-xs text-gray-600 mb-3">
-              Adjust how your coach communicates. Each mode can have a different voice.
+              Adjust how your coach communicates. This applies to every mode.
             </p>
             {(() => {
               const card = MODE_CARDS.find((c) => c.id === mode)!;
@@ -358,9 +358,9 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
                     value={selectValue}
                     onChange={(e) => {
                       if (e.target.value === "custom") {
-                        setCustomSelected((prev) => ({ ...prev, [card.id]: true }));
+                        setCustomSelected(Object.fromEntries((["running", "cycling", "hybrid", "lifting"] as Mode[]).map((m) => [m, true])));
                       } else {
-                        setCustomSelected((prev) => ({ ...prev, [card.id]: false }));
+                        setCustomSelected(Object.fromEntries((["running", "cycling", "hybrid", "lifting"] as Mode[]).map((m) => [m, false])));
                         handleVoiceChange(card.id, e.target.value);
                       }
                     }}
@@ -377,7 +377,7 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
                     <textarea
                       value={customText[card.id] ?? ""}
                       onChange={(e) =>
-                        setCustomText((prev) => ({ ...prev, [card.id]: e.target.value }))
+                        setCustomText(Object.fromEntries((["running", "cycling", "hybrid", "lifting"] as Mode[]).map((m) => [m, e.target.value])))
                       }
                       onBlur={() => handleVoiceChange(card.id, customText[card.id] ?? "")}
                       disabled={voiceSaving}

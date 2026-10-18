@@ -67,14 +67,14 @@ def test_normalize_is_idempotent_and_prefers_structured_values():
 
 
 def test_defaults_use_structured_fields():
-    personal = get_default_fields("running")["personal"]
+    personal = get_default_fields()["personal"]
     assert personal["height_cm"] is None and personal["weight_kg"] is None
     assert "height" not in personal and "weight" not in personal
 
 
 def test_get_fields_normalizes_legacy_profile(tmp_db):
     with Session(get_engine()) as s:
-        crud.save_fields(s, "running", {"personal": {"height": "5'10\"", "weight": "170 lb"}})
+        crud.save_section(s, "shared", {"personal": {"height": "5'10\"", "weight": "170 lb"}})
         personal = crud.get_fields(s, "running")["personal"]
     assert personal["height_cm"] == pytest.approx(177.8)
     assert personal["weight_kg"] == pytest.approx(77.1)

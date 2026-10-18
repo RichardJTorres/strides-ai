@@ -10,7 +10,10 @@ from .base import (
     SAVE_MEMORY_CATEGORIES,
     SAVE_MEMORY_TIMING_PROPERTIES,
     SAVE_MEMORY_DESCRIPTION,
+    UPDATE_PROFILE_DESCRIPTION,
+    UPDATE_PROFILE_OPS,
     UPDATE_TRAINING_PLAN_DESCRIPTION,
+    update_profile_fields,
     BaseBackend,
 )
 
@@ -37,6 +40,23 @@ SAVE_MEMORY_TOOL = {
                 },
             },
             "required": ["category", "content"],
+        },
+    },
+}
+
+UPDATE_PROFILE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "update_profile",
+        "description": UPDATE_PROFILE_DESCRIPTION,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "field": {"type": "string", "enum": update_profile_fields()},
+                "value": {"type": "string"},
+                "op": {"type": "string", "enum": UPDATE_PROFILE_OPS},
+            },
+            "required": ["field", "value"],
         },
     },
 }
@@ -163,7 +183,7 @@ class OllamaBackend(BaseBackend):
                 },
             }
             if self._supports_tools is not False:
-                body["tools"] = [SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL]
+                body["tools"] = [SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL, UPDATE_PROFILE_TOOL]
 
             provider_output = None
             retry_without_tools = False
@@ -223,6 +243,9 @@ class OllamaBackend(BaseBackend):
                 if fn.get("name") == "save_memory":
                     result, category, content = self._execute_save_memory(fn.get("arguments", {}))
                     memories_saved.append((category, content))
+                    self._history.append({"role": "tool", "content": result})
+                elif fn.get("name") == "update_profile":
+                    result = self._execute_update_profile(fn.get("arguments", {}))
                     self._history.append({"role": "tool", "content": result})
                 elif fn.get("name") == "update_training_plan":
                     result, changes = self._execute_update_training_plan(fn.get("arguments", {}))

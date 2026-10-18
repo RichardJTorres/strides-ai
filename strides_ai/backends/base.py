@@ -43,6 +43,24 @@ SAVE_MEMORY_DESCRIPTION += (
     "Never infer a past fact's effective date from its save timestamp."
 )
 
+UPDATE_PROFILE_DESCRIPTION = (
+    "Propose a change to the athlete's saved profile. Use it for stable facts that belong on "
+    "their profile page (goals, injuries, weekly availability, max heart rate, training "
+    "background, personal bests, gear); use save_memory for temporary or time-bound facts. "
+    "The change is NOT applied: the athlete sees it and accepts or dismisses it, so tell them "
+    "what you proposed. Only propose what the athlete actually stated, one field per call. "
+    "`value` is plain text: a number for sessions_per_week and max_hr, comma-separated weekdays "
+    "(mon, wed) for preferred_days, a focus key for focus. Use op=append to add to existing text."
+)
+UPDATE_PROFILE_OPS = ["set", "append"]
+
+
+def update_profile_fields() -> list[str]:
+    from ..profile import profile_update_fields
+
+    return sorted(profile_update_fields())
+
+
 SAVE_MEMORY_CATEGORIES: list[str] = ["goal", "race", "injury", "preference", "training", "other"]
 
 UPDATE_TRAINING_PLAN_DESCRIPTION = (
@@ -355,7 +373,7 @@ class BaseBackend(ABC):
         module = sys.modules[self.__class__.__module__]
         return [
             getattr(module, n)
-            for n in ("SAVE_MEMORY_TOOL", "UPDATE_TRAINING_PLAN_TOOL")
+            for n in ("SAVE_MEMORY_TOOL", "UPDATE_TRAINING_PLAN_TOOL", "UPDATE_PROFILE_TOOL")
             if hasattr(module, n)
         ]
 
@@ -425,6 +443,31 @@ class BaseBackend(ABC):
         if not result.startswith("Error:"):
             self._budget.memories.append((category, content))
         return result, category, content
+
+    def _execute_update_profile(self, args: dict) -> str:
+        """
+        Validate an update_profile tool call and record it as a pending proposal.
+
+        Nothing is written: the proposal is surfaced to the athlete, whose acceptance applies it
+        through the profile API. Returns the tool_result string for the model.
+        """
+        from ..profile import build_profile_proposal
+
+        self._check_cancelled()
+        self._budget.tool(args)
+        try:
+            proposal = build_profile_proposal(args, db.get_profile_fields(None))
+        except ValueError as exc:
+            return f"Rejected, nothing proposed. {exc}"
+        self._budget.profile_proposals.append(proposal)
+        return (
+            f"Proposed {proposal['op']} for '{proposal['label']}': {proposal['proposed']}. "
+            "Not saved yet; the athlete must accept it."
+        )
+
+    def take_profile_proposals(self) -> list[dict]:
+        """Proposals recorded by the last turn (empty if none)."""
+        return list(getattr(getattr(self, "_budget", None), "profile_proposals", []) or [])
 
     def _execute_update_training_plan(self, args: dict) -> tuple[str, list[dict]]:
         """

@@ -116,6 +116,9 @@ class ConversationCoordinator:
                         )
                     if changes:
                         turn.tokens.put("[PLAN_UPDATED]" + json.dumps(changes))
+                    proposals = getattr(turn.backend, "take_profile_proposals", list)()
+                    if proposals:
+                        turn.tokens.put("[PROFILE_PROPOSAL]" + json.dumps(proposals))
                 except Exception as exc:
                     session.rollback()
                     marker = (

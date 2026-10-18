@@ -52,7 +52,9 @@ Do not claim access to individual excluded workouts.
 
 **Memory:** Use the save_memory tool proactively whenever the athlete mentions \
 goals, upcoming races, injuries, preferences, or any key context that should \
-persist across sessions.\
+persist across sessions. For stable facts that belong on the athlete's profile \
+page (goals, injuries, availability, max heart rate, personal bests, gear), use \
+update_profile instead: it asks the athlete to confirm the change.\
 """
 
 CYCLING_SYSTEM_PROMPT = """\
@@ -79,7 +81,9 @@ Do not claim access to individual excluded workouts.
 
 **Memory:** Use the save_memory tool proactively whenever the athlete mentions \
 goals, upcoming events, injuries, preferences, or any key context that should \
-persist across sessions.\
+persist across sessions. For stable facts that belong on the athlete's profile \
+page (goals, injuries, availability, max heart rate, personal bests, gear), use \
+update_profile instead: it asks the athlete to confirm the change.\
 """
 
 HYBRID_SYSTEM_PROMPT = """\
@@ -102,7 +106,9 @@ Do not claim access to individual excluded workouts.
 
 **Memory:** Use the save_memory tool proactively whenever the athlete mentions \
 goals, upcoming events, injuries, preferences, or any key context that should \
-persist across sessions.\
+persist across sessions. For stable facts that belong on the athlete's profile \
+page (goals, injuries, availability, max heart rate, personal bests, gear), use \
+update_profile instead: it asks the athlete to confirm the change.\
 """
 
 LIFTING_SYSTEM_PROMPT = """\
@@ -127,7 +133,9 @@ Do not claim access to individual excluded workouts.
 
 **Memory:** Use the save_memory tool proactively whenever the athlete mentions \
 goals, upcoming competitions, injuries, preferences, or any key context that should \
-persist across sessions.\
+persist across sessions. For stable facts that belong on the athlete's profile \
+page (goals, injuries, availability, max heart rate, personal bests, gear), use \
+update_profile instead: it asks the athlete to confirm the change.\
 """
 
 
@@ -276,7 +284,6 @@ class ModeConfig:
     log_sep_len: int  # length of the separator line
     format_log_row: Callable[[dict, UnitSystem], str]
     format_log_total: Callable[[list[dict], UnitSystem], str]
-    profile_section_keys: list[str]  # ordered section keys for profile_to_text
 
     def log_header(self, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
         return self.log_header_template.format(
@@ -301,16 +308,6 @@ MODES: dict[str, ModeConfig] = {
         log_sep_len=200,
         format_log_row=_running_log_row,
         format_log_total=_make_cardio_total("runs"),
-        profile_section_keys=[
-            "personal",
-            "running_background",
-            "personal_bests",
-            "goals",
-            "injuries_and_health",
-            "gear",
-            "nutrition_snacks",
-            "other_notes",
-        ],
     ),
     "cycling": ModeConfig(
         name="cycling",
@@ -326,16 +323,6 @@ MODES: dict[str, ModeConfig] = {
         log_sep_len=200,
         format_log_row=_cycling_log_row,
         format_log_total=_make_cardio_total("rides"),
-        profile_section_keys=[
-            "personal",
-            "cycling_background",
-            "cycling_bests",
-            "goals",
-            "injuries_and_health",
-            "gear",
-            "nutrition_snacks",
-            "other_notes",
-        ],
     ),
     "hybrid": ModeConfig(
         name="hybrid",
@@ -351,18 +338,6 @@ MODES: dict[str, ModeConfig] = {
         log_sep_len=215,
         format_log_row=_hybrid_log_row,
         format_log_total=_make_cardio_total("activities"),
-        profile_section_keys=[
-            "personal",
-            "running_background",
-            "running_bests",
-            "cycling_background",
-            "cycling_bests",
-            "goals",
-            "injuries_and_health",
-            "gear",
-            "nutrition_snacks",
-            "other_notes",
-        ],
     ),
     "lifting": ModeConfig(
         name="lifting",
@@ -377,15 +352,5 @@ MODES: dict[str, ModeConfig] = {
         log_sep_len=140,
         format_log_row=_lifting_log_row,
         format_log_total=_lifting_log_total,
-        profile_section_keys=[
-            "personal",
-            "lifting_background",
-            "lifting_bests",
-            "goals",
-            "injuries_and_health",
-            "equipment",
-            "nutrition_snacks",
-            "other_notes",
-        ],
     ),
 }

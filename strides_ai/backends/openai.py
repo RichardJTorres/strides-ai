@@ -10,7 +10,10 @@ from .base import (
     SAVE_MEMORY_CATEGORIES,
     SAVE_MEMORY_TIMING_PROPERTIES,
     SAVE_MEMORY_DESCRIPTION,
+    UPDATE_PROFILE_DESCRIPTION,
+    UPDATE_PROFILE_OPS,
     UPDATE_TRAINING_PLAN_DESCRIPTION,
+    update_profile_fields,
     BaseBackend,
 )
 
@@ -37,6 +40,23 @@ SAVE_MEMORY_TOOL = {
                 },
             },
             "required": ["category", "content"],
+        },
+    },
+}
+
+UPDATE_PROFILE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "update_profile",
+        "description": UPDATE_PROFILE_DESCRIPTION,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "field": {"type": "string", "enum": update_profile_fields()},
+                "value": {"type": "string"},
+                "op": {"type": "string", "enum": UPDATE_PROFILE_OPS},
+            },
+            "required": ["field", "value"],
         },
     },
 }
@@ -158,7 +178,7 @@ class OpenAIBackend(BaseBackend):
                 lambda: self._client.chat.completions.create(
                     model=self._model,
                     messages=messages,
-                    tools=[SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL],
+                    tools=[SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL, UPDATE_PROFILE_TOOL],
                     tool_choice="auto",
                     stream=True,
                     max_completion_tokens=self._budget.output_remaining,
@@ -234,6 +254,11 @@ class OpenAIBackend(BaseBackend):
                 if tc["name"] == "save_memory":
                     result, category, content = self._execute_save_memory(args)
                     memories_saved.append((category, content))
+                    self._history.append(
+                        {"role": "tool", "tool_call_id": tc["id"], "content": result}
+                    )
+                elif tc["name"] == "update_profile":
+                    result = self._execute_update_profile(args)
                     self._history.append(
                         {"role": "tool", "tool_call_id": tc["id"], "content": result}
                     )

@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import Chat from "./pages/Chat";
 import Activities from "./pages/Activities";
 import Calendar from "./pages/Calendar";
-import Profile from "./pages/Profile";
+import Profile from "./pages/profile/ProfilePage";
 import Settings from "./pages/Settings";
 import Memories from "./pages/Memories";
 import { UnitsProvider } from "./UnitsContext";
