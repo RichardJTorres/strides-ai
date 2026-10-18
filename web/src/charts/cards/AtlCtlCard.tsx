@@ -1,3 +1,4 @@
+import { useState } from "react";
 import TimeSeriesLineCard from "../TimeSeriesLineCard";
 import ChartCard from "../ChartCard";
 import { filterDatasetByRange } from "../dateFilter";
@@ -71,6 +72,7 @@ function ATLTooltip({
 }
 
 export default function AtlCtlCard({ dataset, since, until, isAllTime, unit, loadContext }: Props) {
+  const [showPlanned, setShowPlanned] = useState(false);
   if (!dataset.available) {
     return (
       <ChartCard title={dataset.title}>
@@ -99,7 +101,8 @@ export default function AtlCtlCard({ dataset, since, until, isAllTime, unit, loa
   // `data` is already range-filtered, so compare the range end with the unfiltered series end
   // (today): a past-only range such as "Last Month" must not get a projection tacked on.
   const seriesEnd = dataset.data[dataset.data.length - 1].date;
-  const showProjection = projection.length > 0 && (until === null || until >= seriesEnd);
+  const hasProjection = projection.length > 0 && (until === null || until >= seriesEnd);
+  const showProjection = showPlanned && hasProjection;
   const lastActual = data[data.length - 1];
   const chartData: Record<string, unknown>[] = data.map((d) =>
     showProjection && d === lastActual
@@ -147,6 +150,16 @@ export default function AtlCtlCard({ dataset, since, until, isAllTime, unit, loa
             {latestZone.label}
           </div>
         </div>
+      )}
+      {hasProjection && (
+        <label className="ml-auto flex items-center gap-1.5 self-start text-xs text-gray-400 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={showPlanned}
+            onChange={(e) => setShowPlanned(e.target.checked)}
+          />
+          Show planned
+        </label>
       )}
     </div>
   );
