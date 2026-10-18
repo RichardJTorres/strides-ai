@@ -111,6 +111,13 @@ def init_backend(app: FastAPI, mode: str | None = None, provider: str | None = N
 
 def build_backend(app: FastAPI, mode: str):
     """Create a private history and capture configuration before any provider discovery."""
+    backend = _new_backend(app, mode)
+    # update_training_plan validates edits against this mode's activities and load.
+    backend.mode = mode
+    return backend
+
+
+def _new_backend(app: FastAPI, mode: str):
     settings = get_settings()
     current_provider = (getattr(app.state, "provider", None) or settings.provider).lower()
     model = _stored_model(current_provider)

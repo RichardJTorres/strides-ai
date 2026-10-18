@@ -641,7 +641,7 @@ def digest_fingerprint(
     plan_rows: Optional[list[dict]] = None,
     prefs: Optional[dict] = None,
 ) -> str:
-    """Changes when activities are added, the athlete's units change, the ISO week rolls over, or
+    """Changes when activities are added, the athlete's units change, the day rolls over, or
     the calendar (planned workouts, races, blocked days) is edited."""
     ids = [r.get("id") or 0 for r in rows]
     dates = [r.get("date") or "" for r in rows]
@@ -654,6 +654,8 @@ def digest_fingerprint(
         max(dates, default=""),
         iso[0],
         iso[1],
+        # Reports carry day-specific calendar advice (upcoming sessions, countdowns).
+        today.isoformat(),
         sorted(
             [p.get("date"), p.get("workout_type"), p.get("distance_km"), p.get("intensity")]
             for p in (plan_rows or [])
