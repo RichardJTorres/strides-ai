@@ -496,7 +496,10 @@ def _process_streams(activity: dict, streams: dict, max_hr: int = 190) -> str:
         return "skipped"
 
     try:
-        metrics = compute_metrics(streams, activity, max_hr=max_hr)
+        # Sync hands us the raw Strava payload (distance, total_elevation_gain); metrics read the
+        # normalized, SI-based columns (distance_m, elevation_gain_m, avg_hr, ...) from the DB.
+        stored = db.get_activity(activity_id) or {}
+        metrics = compute_metrics(streams, {**activity, **stored}, max_hr=max_hr)
         summary = build_analysis_summary(metrics)
         metrics["analysis_summary"] = summary
         metrics["analysis_status"] = "done"
