@@ -229,7 +229,9 @@ def build_training_state(
     # the plan, future weeks are planned only.
     cm = monday_of(today)
     horizon_end = today + timedelta(days=horizon_days)
-    first_week = cm - timedelta(weeks=RAMP_BASELINE_WEEKS)
+    # Look back far enough to give the earliest kept week a ramp baseline AND to let a rising
+    # streak that began in actual history be detected; only weeks from the current one are returned.
+    first_week = cm - timedelta(weeks=RAMP_BASELINE_WEEKS + RECOVERY_RUN_WEEKS)
     week_starts: list[date] = []
     w = first_week
     while w <= horizon_end:

@@ -123,19 +123,27 @@ def _normalized_plan_changes(args: dict) -> dict:
     return {"set": sets, "delete": list(args.get("delete", []) or [])}
 
 
-def _check_proposed_changes(changes: dict) -> list:
+def _check_proposed_changes(changes: dict, mode: str | None = None) -> list:
     """Guardrail violations for a proposed plan edit. Never raises: a failure here must not stop
     the coach from editing the calendar."""
     try:
         from datetime import date as date_cls
 
         from .. import training_state
+        from ..modes import MODES
 
+        # Same mode scoping as the coach prompt, Calendar and Analytics, so all agree on load.
+        sport_types = MODES[mode].sport_types if mode in MODES else None
+        rows = [
+            a
+            for a in db.get_all_activities()
+            if sport_types is None or a.get("sport_type") in sport_types
+        ]
         return training_state.check_plan_changes(
-            db.get_all_activities(),
+            rows,
             db.get_training_plan(),
             db.get_calendar_prefs(),
-            None,
+            mode,
             db.get_unit_system(),
             date_cls.today(),
             changes,
@@ -482,7 +490,7 @@ class BaseBackend(ABC):
         change_start = len(self._budget.changes)
         set_summaries: list[str] = []
         proposed = _normalized_plan_changes(args)
-        violations = _check_proposed_changes(proposed)
+        violations = _check_proposed_changes(proposed, getattr(self, "mode", None))
         hard = [v for v in violations if v.hard]
         if hard:
             # Nothing is saved: the model gets the reasons and can resubmit a corrected call.

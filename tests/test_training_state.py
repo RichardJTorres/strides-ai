@@ -226,3 +226,45 @@ def test_tool_saves_but_warns_on_overload(mocker):
     )
     assert summary.startswith("Scheduled 1 workout")
     save.assert_called_once()
+
+
+def test_recovery_streak_spanning_history_into_plan_is_flagged():
+    # Three rising actual weeks before this one, then a higher planned current week.
+    rows, i = [], 1
+    monday = TODAY - timedelta(days=TODAY.weekday())
+    for w, km in ((4, 10), (3, 15), (2, 20), (1, 25)):
+        rows.append(run_row(i, monday - timedelta(weeks=w) + timedelta(days=1), km))
+        i += 1
+    rows += [r for r in steady_rows() if r["date"] < (monday - timedelta(weeks=5)).isoformat()]
+    plan_rows = [plan(monday + timedelta(days=4), 40.0)]
+    current = state(rows=rows, plan_rows=plan_rows).weeks[0]
+    assert current["is_current"] and "no_recovery_week" in current["flags"]
+
+
+def test_tool_validation_is_scoped_to_the_active_mode(mocker):
+    from types import SimpleNamespace
+
+    from strides_ai.backends.base import BaseBackend
+
+    ride = {**run_row(1, TODAY - timedelta(days=40), 200.0), "sport_type": "Ride"}
+    for name, ret in (
+        ("get_all_activities", [ride]),
+        ("get_training_plan", []),
+        ("get_calendar_prefs", {}),
+        ("get_unit_system", UnitSystem.METRIC),
+    ):
+        mocker.patch(f"strides_ai.backends.base.db.{name}", return_value=ret)
+    seen = {}
+    mocker.patch(
+        "strides_ai.training_state.check_plan_changes",
+        side_effect=lambda rows, *a: seen.update(rows=rows, mode=a[2]) or [],
+    )
+    BaseBackend._execute_update_training_plan(
+        SimpleNamespace(
+            mode="running",
+            _check_cancelled=lambda: None,
+            _budget=SimpleNamespace(tool=lambda a: None, changes=[]),
+        ),
+        {"delete": ["2099-01-01"]},
+    )
+    assert seen == {"rows": [], "mode": "running"}  # the ride never reaches running load
