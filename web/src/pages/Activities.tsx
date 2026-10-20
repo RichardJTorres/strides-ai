@@ -278,6 +278,7 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [minDist, setMinDist] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
 
   // Slide-out panel state
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -413,8 +414,15 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
     }
   }
 
+  const activityTypes = useMemo(
+    () => [...new Set(activities.map((a) => a.sport_type).filter((t): t is string => !!t))].sort(),
+    [activities],
+  );
+  const activeType = activityTypes.includes(typeFilter) ? typeFilter : "";
+
   const filtered = useMemo(() => {
     let rows = activities;
+    if (activeType) rows = rows.filter((a) => a.sport_type === activeType);
     if (search.trim()) {
       const q = search.toLowerCase();
       rows = rows.filter((a) => (a.name ?? "").toLowerCase().includes(q));
@@ -433,7 +441,7 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
       if (av > bv) return sortDir === "asc" ? 1 : -1;
       return 0;
     });
-  }, [activities, search, dateFrom, dateTo, minDist, sortKey, sortDir, isLifting, modeOnly, units]);
+  }, [activities, activeType, search, dateFrom, dateTo, minDist, sortKey, sortDir, isLifting, modeOnly, units]);
 
   const baselines = useMemo(() => buildBaselines(activities), [activities]);
   const labelsOf = (a: Activity): ActivityLabels => labelsFor(a, baselines);
@@ -454,7 +462,7 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
     );
   }
 
-  const filtersActive = search || dateFrom || dateTo || (modeOnly && !isLifting && minDist);
+  const filtersActive = activeType || search || dateFrom || dateTo || (modeOnly && !isLifting && minDist);
 
   // ── Panel helpers ────────────────────────────────────────────────────────
 
@@ -527,6 +535,25 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
           onChange={(e) => setSearch(e.target.value)}
           className={`rounded-md bg-gray-900 border border-gray-700 px-3 py-1.5 text-sm text-gray-100 placeholder-gray-500 ${focusClass} w-48`}
         />
+        <div className="relative">
+          <select
+            value={activeType}
+            onChange={(e) => setTypeFilter(e.target.value)}
+            title="Activity type"
+            className={`appearance-none rounded-md bg-gray-900 border border-gray-700 pl-3 pr-8 py-1.5 text-sm text-gray-100 ${focusClass}`}
+          >
+            <option value="">All types</option>
+            {activityTypes.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+          <svg
+            className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400"
+            viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+          >
+            <path d="M5 8l5 5 5-5" />
+          </svg>
+        </div>
         <input
           type="date"
           value={dateFrom}
@@ -567,7 +594,7 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
         )}
         {filtersActive && (
           <button
-            onClick={() => { setSearch(""); setDateFrom(""); setDateTo(""); setMinDist(""); }}
+            onClick={() => { setSearch(""); setTypeFilter(""); setDateFrom(""); setDateTo(""); setMinDist(""); }}
             className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
           >
             Clear
@@ -688,7 +715,6 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
                         </td>
                         <td className="px-4 py-2 text-right text-gray-400">
                           {units.fmt(a.elevation_gain_m, "elevation", { withLabel: false })}
-                          <LabelChip label={lbl.elevation} />
                         </td>
                         <td className="px-4 py-2 text-right text-gray-400">
                           {units.fmt(a.climb_m_per_km, "climb_rate", { withLabel: false })}
