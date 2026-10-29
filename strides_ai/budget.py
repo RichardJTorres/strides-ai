@@ -1,7 +1,8 @@
-"""Shared turn limits. Fallback counts use UTF-8 bytes + 10% and framing overhead.
+"""Shared turn limits. Input fallback counts use UTF-8 bytes + 10% and framing overhead.
 
-One byte per token deliberately overestimates ordinary text, including non-ASCII.
-Binary image payloads are charged at their encoded size rather than silently omitted.
+One byte per token deliberately overestimates input, including non-ASCII. Streamed output
+is estimated at ~4 bytes per token until the provider reports real usage, which replaces
+the estimate. Binary image payloads are charged at their encoded size rather than silently omitted.
 """
 
 import json
@@ -96,7 +97,7 @@ class TurnBudget:
 
     def output(self, value):
         # Charge every emitted chunk, including tool arguments, conservatively.
-        amount = max(1, len(str(value).encode("utf-8")) * 11 // 10)
+        amount = max(1, (len(str(value).encode("utf-8")) + 3) // 4)
         self.generated += amount
         self.round_generated += amount
         if self.round_generated > self.limits.output_tokens:
@@ -105,8 +106,8 @@ class TurnBudget:
             raise BudgetExceeded("Total generated output limit reached.")
 
     def usage(self, measured):
-        """Account for provider-reported generation, including hidden reasoning."""
-        if type(measured) is int and measured > self.round_generated:
+        """Replace the streamed estimate with provider-reported generation (incl. reasoning)."""
+        if type(measured) is int and measured >= 0:
             self.generated += measured - self.round_generated
             self.round_generated = measured
         if self.round_generated > self.limits.output_tokens:

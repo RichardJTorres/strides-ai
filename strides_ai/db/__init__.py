@@ -282,6 +282,7 @@ def save_planned_workout(
     duration_min: int | None,
     intensity: str | None,
     route_url: str | None = None,
+    structure: dict | None = None,
 ) -> None:
     with _session() as s:
         _cal.save_planned_workout(
@@ -294,6 +295,7 @@ def save_planned_workout(
             duration_min,
             intensity,
             route_url,
+            structure,
         )
 
 

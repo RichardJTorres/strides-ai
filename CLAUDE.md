@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Working Style
+
+- **Work from a queue.** Treat all work as a queue of todos. When I propose tweaks, changes or corrections, append them to the queue — do not break the queue to suddenly prioritize my correction. Only stop when 100% of the queue is truly clear.
+- **Mistakes are not your fault; don't apologize.** You are an LLM. A mistake always means a gap or issue in the instruction files. Describe which problem in the instruction files caused the mistake and suggest the fix. Be solution oriented.
+- **YAGNI.** Don't overengineer. Never expand scope without permission, but do suggest possible scope improvements when they make sense. All work must be justifiable. Assess where the project sits on the scale from "quick and dirty" to "production grade" and scale the amount of engineering to match.
+- **Fresh-eyes review.** Always spin up a sub agent with minimal context, using a cheap model, whose job is to review your changes and sus out possible problems.
+
 ## Commands
 
 ```bash
@@ -108,6 +115,8 @@ Sync backfills up to 10 pending/unanalyzed activities per cycle. Strava 429 resp
 Planned workouts stored in `training_plan` table (date PK, type, distance, duration, intensity, notes), shared across all coaching modes. Frontend overlays actual Strava activities alongside plans. Nutrition advice is generated per-workout by a separate `stateless_turn` call (Claude Haiku by default via `schedule.py`), returning structured JSON (calories pre/during/post, hydration, notes). Results are cached; can be regenerated.
 
 The chat coach can also write to this calendar directly via the `update_training_plan` tool (see "LLM backends" above) — generating a training block, adjusting individual days, or regenerating part of a block (e.g. after a missed workout or new conflict) by combining `delete` and `set` in one call. Writes are surfaced to the frontend as a `[PLAN_UPDATED]` SSE sentinel, shown as a "Calendar updated" confirmation in the chat UI.
+
+Cycling workouts can also carry a structured (ERG-style) workout in `training_plan.structure_json`, defined and validated only in `strides_ai/workout_structure.py` (`normalize_structure`; intensities are fractions of FTP, so no FTP is needed). A valid structure is authoritative for `duration_min`; it is discarded on non-cycling types and cleared by any save that omits it, so every writer (edit form, drag-to-move, bulk accept, `update_training_plan`) must pass it through. `GET /calendar/plan/{date}/zwo` exports it as a Zwift `.zwo`. Indoor Rides are prompted to carry distance + elevation (Zwift simulated climbing); the UI derives the climb ratio on read (`plannedClimbRate`), never stored.
 
 A planned workout can also have a route URL attached (`route_url`) — either a Strava or a RideWithGPS route, only shown/accepted for Running and Cycling workout types. `strides_ai/sources/routes.py` dispatches by domain to `sources/ridewithgps.py` (unauthenticated legacy `routes/{id}.json` endpoint, public routes only, no API key) or `sources/strava_routes.py` (authenticated with this app's existing Strava `read` scope — confirmed to work for *any* public route, not just the connected athlete's own; distinct from `sources/strava.py`, which handles activity sync/deep-dive). `POST /calendar/plan/{date}/analyze-route` fetches the route and asks the LLM (`strides_ai/route_analysis.py`) whether its distance/elevation/terrain actually fits the workout's stated goal, returning a `verdict`/`explanation`/`suggestion`. Cached in `route_analysis_json`; cleared whenever the workout is edited, same as `nutrition_json`; `?force=true` regenerates.
 

@@ -6,6 +6,7 @@ from typing import Callable
 from .. import db
 from ..budget import Limits, TurnBudget, bounded_turn, BudgetExceeded, estimate
 from ..units import Quantity, UnitSystem, to_si
+from ..workout_structure import INDOOR_RIDE_GUIDANCE, WORKOUT_STRUCTURE_SCHEMA
 
 SAVE_MEMORY_DESCRIPTION = (
     "Save an important fact about the athlete to persistent memory. "
@@ -75,7 +76,8 @@ UPDATE_TRAINING_PLAN_DESCRIPTION = (
     "a conflict shows up on a date you'd otherwise use, delete or move that day rather than "
     "double-booking it. When regenerating a whole block, combine `delete` for the days that need "
     "to change with `set` for their replacements in the same call. Give `distance` and "
-    "`elevation` in the athlete's units and say which with `distance_unit` / `elevation_unit`."
+    "`elevation` in the athlete's units and say which with `distance_unit` / `elevation_unit`. "
+    + INDOOR_RIDE_GUIDANCE
 )
 
 # Measurement fields of an update_training_plan workout entry, as JSON Schema (Claude, OpenAI and
@@ -88,6 +90,7 @@ WORKOUT_MEASUREMENT_PROPERTIES = {
     "distance_unit": {"type": "string", "enum": list(DISTANCE_UNITS)},
     "elevation": {"type": "number", "description": "Planned elevation gain, in elevation_unit"},
     "elevation_unit": {"type": "string", "enum": list(ELEVATION_UNITS)},
+    "structure": WORKOUT_STRUCTURE_SCHEMA,
 }
 
 
@@ -514,6 +517,7 @@ class BaseBackend(ABC):
                 elevation_m,
                 workout.get("duration_min"),
                 workout.get("intensity"),
+                structure=workout.get("structure"),
             )
             self._budget.changes.append(
                 {"action": "set", "date": date, "workout_type": workout_type}

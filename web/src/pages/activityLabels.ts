@@ -60,6 +60,15 @@ export function climbRate(a: LabelableActivity): number | null {
   return null;
 }
 
+/** Climb rate (m/km) for a planned workout, or null without both a distance and a gain. */
+export function plannedClimbRate(
+  distanceKm: number | null | undefined,
+  elevationM: number | null | undefined,
+): number | null {
+  if (!distanceKm || distanceKm <= 0 || !elevationM || elevationM <= 0) return null;
+  return elevationM / distanceKm;
+}
+
 export function climbLabel(rate: number | null | undefined, group: SportGroup): FieldLabel | null {
   if (rate == null || !Number.isFinite(rate) || group === "other") return null;
   const tiers = CLIMB_TIERS[group];
