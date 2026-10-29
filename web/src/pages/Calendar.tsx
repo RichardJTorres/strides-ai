@@ -223,6 +223,7 @@ const EMPTY_FORM = {
   duration_min: "",
   intensity: "easy",
   route_url: "",
+  clear_structure: false,
 };
 
 const VERDICT_STYLES: Record<string, { cls: string; label: string }> = {
@@ -284,6 +285,7 @@ export default function Calendar() {
       duration_min: w?.duration_min?.toString() || "",
       intensity: w?.intensity || "easy",
       route_url: w?.route_url || "",
+      clear_structure: false,
     };
   };
   const kmFromInput = (value: string): number | null => {
@@ -495,8 +497,8 @@ export default function Calendar() {
       duration_min: form.duration_min ? parseInt(form.duration_min) : null,
       intensity: form.intensity,
       route_url: !noRoute && form.route_url ? form.route_url : null,
-      // The edit form has no structure editor: carry it through so saving doesn't wipe it.
-      structure: keepsStructure(form.workout_type) ? selectedWorkout?.structure ?? null : null,
+      // Preserve the structure unless the athlete explicitly removes it.
+      structure: keepsStructure(form.workout_type) && !form.clear_structure ? selectedWorkout?.structure ?? null : null,
     };
     const res = await fetch(`/api/calendar/plan/${selectedDate}`, {
       method: "PUT",
@@ -701,10 +703,12 @@ export default function Calendar() {
   // upsert both days (no deletes needed); optimistic, reverted if the save fails.
   const [dragFrom, setDragFrom] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
+  const movePending = useRef(false);
 
   const moveWorkout = async (from: string, to: string) => {
     const moving = plan[from];
-    if (!moving || from === to) return;
+    if (!moving || from === to || movePending.current) return;
+    movePending.current = true;
     const displaced = plan[to];
     const entry = (w: Workout, date: string) => ({
       date,
@@ -718,14 +722,25 @@ export default function Calendar() {
       structure: w.structure ?? null,
     });
     const set = [entry(moving, to), ...(displaced ? [entry(displaced, from)] : [])];
-    const before = plan;
+    const moved = { ...moving, date: to, nutrition_json: null, route_analysis_json: null };
+    const swapped = displaced
+      ? { ...displaced, date: from, nutrition_json: null, route_analysis_json: null }
+      : undefined;
+    const rollback = () => setPlan(prev => {
+      const next = { ...prev };
+      // Keep any edits made while the move was saving, including on unrelated days.
+      if (prev[from] === swapped) next[from] = moving;
+      if (prev[to] === moved) {
+        if (displaced) next[to] = displaced;
+        else delete next[to];
+      }
+      return next;
+    });
     setPlan(prev => {
       const next = { ...prev };
       delete next[from];
-      next[to] = { ...moving, date: to, nutrition_json: null, route_analysis_json: null };
-      if (displaced) {
-        next[from] = { ...displaced, date: from, nutrition_json: null, route_analysis_json: null };
-      }
+      next[to] = moved;
+      if (swapped) next[from] = swapped;
       return next;
     });
     if (selectedDate === from || selectedDate === to) {
@@ -738,9 +753,11 @@ export default function Calendar() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ set, delete: displaced ? [] : [from] }),
       });
-      if (!res.ok) setPlan(before);
+      if (!res.ok) rollback();
     } catch {
-      setPlan(before);
+      rollback();
+    } finally {
+      movePending.current = false;
     }
   };
 
@@ -800,6 +817,7 @@ export default function Calendar() {
   const raceOnDate = (dateStr: string) => prefs.races.find(r => r.date === dateStr);
 
   const selectedWorkout = selectedDate ? plan[selectedDate] : null;
+  const hasFormStructure = !!selectedWorkout?.structure && keepsStructure(form.workout_type) && !form.clear_structure;
   const selectedActivities = selectedDate ? (activities[selectedDate] ?? []) : [];
   const selectedNutrition: NutritionData | null = selectedWorkout?.nutrition_json
     ? JSON.parse(selectedWorkout.nutrition_json)
@@ -1076,6 +1094,7 @@ export default function Calendar() {
                           <div
                             draggable
                             onDragStart={e => {
+                              if (movePending.current) { e.preventDefault(); return; }
                               e.dataTransfer.effectAllowed = "move";
                               e.dataTransfer.setData("text/plain", dateStr);
                               setDragFrom(dateStr);
@@ -1231,7 +1250,9 @@ export default function Calendar() {
                         {(() => {
                           const rate = plannedClimbRate(selectedWorkout.distance_km, selectedWorkout.elevation_m);
                           if (rate == null) return null;
-                          const terrain = climbLabel(rate, "ride");
+                          const group = WORKOUT_TYPE_GROUPS[0].types.includes(selectedWorkout.workout_type)
+                            ? "run" : keepsStructure(selectedWorkout.workout_type) ? "ride" : "other";
+                          const terrain = climbLabel(rate, group);
                           return (
                             <div className="bg-zinc-800 rounded p-2 text-xs" title={terrain?.detail}>
                               <div className="text-zinc-500">Climb ratio</div>
@@ -1361,6 +1382,16 @@ export default function Calendar() {
                         ))}
                       </select>
                     </div>
+                    {selectedWorkout?.structure && keepsStructure(form.workout_type) && (
+                      <label className="flex items-center gap-2 text-xs text-zinc-400">
+                        <input
+                          type="checkbox"
+                          checked={form.clear_structure}
+                          onChange={e => setForm(f => ({ ...f, clear_structure: e.target.checked }))}
+                        />
+                        Remove structured workout
+                      </label>
+                    )}
                     <div className="grid grid-cols-2 gap-2">
                       {!NO_DISTANCE_WORKOUT_TYPES.has(form.workout_type) && (
                       <div>
@@ -1388,10 +1419,17 @@ export default function Calendar() {
                         <label className="text-xs text-zinc-500 mb-1 block">Duration (min)</label>
                         <input
                           type="number" placeholder="—"
-                          value={form.duration_min}
+                          value={hasFormStructure ? selectedWorkout?.duration_min?.toString() ?? "" : form.duration_min}
+                          disabled={hasFormStructure}
+                          aria-describedby={hasFormStructure ? "structured-duration-help" : undefined}
                           onChange={e => setForm(f => ({ ...f, duration_min: e.target.value }))}
-                          className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
+                          className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200 disabled:opacity-50"
                         />
+                        {hasFormStructure && (
+                          <p id="structured-duration-help" className="mt-1 text-xs text-zinc-500">
+                            Duration comes from the structure. Remove it to edit duration.
+                          </p>
+                        )}
                       </div>
                       <div>
                         <label className="text-xs text-zinc-500 mb-1 block">Intensity</label>
