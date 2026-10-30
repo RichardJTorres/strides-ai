@@ -818,7 +818,49 @@ export default function Calendar() {
 
   const selectedWorkout = selectedDate ? plan[selectedDate] : null;
   const hasFormStructure = !!selectedWorkout?.structure && keepsStructure(form.workout_type) && !form.clear_structure;
-  const selectedActivities = selectedDate ? (activities[selectedDate] ?? []) : [];
+  // Split a day's activities into the one matched to its planned workout (merged into the
+  // workout in the UI) and the rest. Without a plan nothing is matched.
+  const splitActivities = (dateStr: string) => {
+    const all = activities[dateStr] ?? [];
+    const matchedId = plan[dateStr] ? compliance[dateStr]?.matched_activity_id : null;
+    const matched = matchedId != null ? all.find(a => a.id === matchedId) : undefined;
+    return { matched, others: matched ? all.filter(a => a !== matched) : all };
+  };
+  const renderActivityCard = (a: Activity) => {
+    const isRun = RUN_TYPES.has(a.sport_type);
+    return (
+      <div key={a.id} className="bg-zinc-800/60 rounded p-2 border border-zinc-700/50 space-y-1">
+        <div className="text-xs font-medium text-zinc-200 truncate">{a.name}</div>
+        <div className="text-xs text-zinc-500">{a.sport_type}</div>
+        <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs">
+          <span className="text-zinc-500">Distance</span>
+          <span className="text-zinc-300">{units.fmt(a.distance_m ?? 0, "distance")}</span>
+          <span className="text-zinc-500">Duration</span>
+          <span className="text-zinc-300">{fmtDuration(a.moving_time_s)}</span>
+          {isRun && a.avg_pace_s_per_km && (
+            <>
+              <span className="text-zinc-500">Pace</span>
+              <span className="text-zinc-300">{units.fmt(a.avg_pace_s_per_km, "pace")}</span>
+            </>
+          )}
+          {a.avg_hr && (
+            <>
+              <span className="text-zinc-500">Avg HR</span>
+              <span className="text-zinc-300">{Math.round(a.avg_hr)} bpm</span>
+            </>
+          )}
+          {a.elevation_gain_m != null && (
+            <>
+              <span className="text-zinc-500">Elevation</span>
+              <span className="text-zinc-300">{units.fmt(a.elevation_gain_m, "elevation")}</span>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+  const selectedSplit = selectedDate ? splitActivities(selectedDate) : { matched: undefined, others: [] };
+  const selectedActivities = selectedSplit.others;
   const selectedNutrition: NutritionData | null = selectedWorkout?.nutrition_json
     ? JSON.parse(selectedWorkout.nutrition_json)
     : null;
@@ -1031,7 +1073,7 @@ export default function Calendar() {
                   {weekCells.map(cell => {
                     const dateStr = cell.dateStr;
                     const workout = plan[dateStr];
-                    const dayActivities = activities[dateStr] ?? [];
+                    const { matched: matchedActivity, others: dayActivities } = splitActivities(dateStr);
                     const isToday = dateStr === todayStr;
                     const isSelected = selectedDate === dateStr;
                     const inRange = !!range && dateStr >= range.start && dateStr <= range.end;
@@ -1101,9 +1143,19 @@ export default function Calendar() {
                             }}
                             onDragEnd={() => { setDragFrom(null); setDragOver(null); }}
                             className={`text-xs px-1 py-0.5 rounded border truncate mb-0.5 cursor-grab active:cursor-grabbing ${dragFrom === dateStr ? "opacity-40" : ""} ${WORKOUT_COLORS[workout.workout_type] ?? "bg-zinc-700/50 text-zinc-400 border-zinc-600/30"}`}>
+                            {matchedActivity && "✓ "}
                             {workout.workout_type}
-                            {workout.distance_km && (
-                              <span className="ml-1 opacity-70">{fmtKm(workout.distance_km)}</span>
+                            {matchedActivity ? (
+                              <span className="ml-1 opacity-90">
+                                {units.fmt(matchedActivity.distance_m ?? 0, "distance", { decimals: 1 })}
+                                {workout.distance_km ? (
+                                  <span className="opacity-60"> / {fmtKm(workout.distance_km)}</span>
+                                ) : null}
+                              </span>
+                            ) : (
+                              workout.distance_km && (
+                                <span className="ml-1 opacity-70">{fmtKm(workout.distance_km)}</span>
+                              )
                             )}
                           </div>
                         )}
@@ -1267,6 +1319,12 @@ export default function Calendar() {
                     )}
                     {selectedWorkout.description && (
                       <p className="text-xs text-zinc-400 leading-relaxed">{selectedWorkout.description}</p>
+                    )}
+                    {selectedSplit.matched && (
+                      <div className="space-y-2">
+                        <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Actual (Strava)</h4>
+                        {renderActivityCard(selectedSplit.matched)}
+                      </div>
                     )}
                     {selectedWorkout.structure_text && (
                       <div className="bg-zinc-800/60 rounded p-2 text-xs space-y-1.5">
@@ -1490,39 +1548,7 @@ export default function Calendar() {
               {selectedActivities.length > 0 && (
                 <div className="space-y-2">
                   <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Strava</h4>
-                  {selectedActivities.map(a => {
-                    const isRun = RUN_TYPES.has(a.sport_type);
-                    return (
-                      <div key={a.id} className="bg-zinc-800/60 rounded p-2 border border-zinc-700/50 space-y-1">
-                        <div className="text-xs font-medium text-zinc-200 truncate">{a.name}</div>
-                        <div className="text-xs text-zinc-500">{a.sport_type}</div>
-                        <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs">
-                          <span className="text-zinc-500">Distance</span>
-                          <span className="text-zinc-300">{units.fmt(a.distance_m ?? 0, "distance")}</span>
-                          <span className="text-zinc-500">Duration</span>
-                          <span className="text-zinc-300">{fmtDuration(a.moving_time_s)}</span>
-                          {isRun && a.avg_pace_s_per_km && (
-                            <>
-                              <span className="text-zinc-500">Pace</span>
-                              <span className="text-zinc-300">{units.fmt(a.avg_pace_s_per_km, "pace")}</span>
-                            </>
-                          )}
-                          {a.avg_hr && (
-                            <>
-                              <span className="text-zinc-500">Avg HR</span>
-                              <span className="text-zinc-300">{Math.round(a.avg_hr)} bpm</span>
-                            </>
-                          )}
-                          {a.elevation_gain_m != null && (
-                            <>
-                              <span className="text-zinc-500">Elevation</span>
-                              <span className="text-zinc-300">{units.fmt(a.elevation_gain_m, "elevation")}</span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
+                  {selectedActivities.map(renderActivityCard)}
                 </div>
               )}
 
@@ -1774,7 +1800,7 @@ export default function Calendar() {
                     {selectedWeek.cells.map(cell => {
                       const dateStr = cell.dateStr;
                       const workout = plan[dateStr];
-                      const dayActivities = activities[dateStr] ?? [];
+                      const { matched: matchedActivity, others: dayActivities } = splitActivities(dateStr);
                       const complianceDay = compliance[dateStr];
                       return (
                         <div
@@ -1794,7 +1820,9 @@ export default function Calendar() {
                                 className={`inline-block text-xs px-1.5 py-0.5 rounded border ${WORKOUT_COLORS[workout.workout_type] ?? "bg-zinc-700/50 text-zinc-400 border-zinc-600/30"}`}
                               >
                                 {workout.workout_type}
-                                {workout.distance_km ? ` · ${fmtKm(workout.distance_km)}` : ""}
+                                {matchedActivity
+                                  ? ` · ✓ ${units.fmt(matchedActivity.distance_m ?? 0, "distance", { decimals: 1 })}${workout.distance_km ? ` / ${fmtKm(workout.distance_km)}` : ""}`
+                                  : workout.distance_km ? ` · ${fmtKm(workout.distance_km)}` : ""}
                               </div>
                             ) : (
                               <div className="text-xs text-zinc-600 italic">No planned workout</div>
