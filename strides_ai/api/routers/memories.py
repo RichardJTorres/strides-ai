@@ -50,7 +50,17 @@ def _parse_review_json(text: str) -> list[dict]:
     """Extract and parse a JSON array from the model's response."""
     # Strip any accidental markdown fences
     text = re.sub(r"```[a-z]*\n?", "", text).strip()
-    return json.loads(text)
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        # Model wrapped the array in prose; take the outermost [...] span
+        start, end = text.find("["), text.rfind("]")
+        if start == -1 or end <= start:
+            raise
+        parsed = json.loads(text[start : end + 1])
+    if not isinstance(parsed, list):
+        raise ValueError("expected a JSON array")
+    return [i for i in parsed if isinstance(i, dict)]
 
 
 class MemoryUpdate(MemoryTiming):
