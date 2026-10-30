@@ -182,7 +182,9 @@ def test_parse_returns_workouts_and_summary():
         }
     )
     result = parse_plan_generation_response(raw, "2026-10-01", "2026-10-14")
-    assert result["workouts"] == [{"date": "2026-10-02", "workout_type": "Easy Ride"}]
+    assert result["workouts"] == [
+        {"date": "2026-10-02", "workout_type": "Easy Ride", "structure": None}
+    ]
     assert result["summary"] == "A light week to start."
 
 
@@ -217,10 +219,82 @@ def test_parse_drops_entries_outside_requested_range():
         }
     )
     result = parse_plan_generation_response(raw, "2026-10-01", "2026-10-14")
-    assert result["workouts"] == [{"date": "2026-10-05", "workout_type": "Long Ride"}]
+    assert result["workouts"] == [
+        {"date": "2026-10-05", "workout_type": "Long Ride", "structure": None}
+    ]
 
 
 def test_parse_defaults_summary_to_empty_string():
     raw = json.dumps({"workouts": []})
     result = parse_plan_generation_response(raw, "2026-10-01", "2026-10-14")
     assert result["summary"] == ""
+
+
+INDOOR_STRUCTURE = {
+    "blocks": [
+        {"kind": "warmup", "duration_s": 600, "from_pct": 0.5, "to_pct": 0.75},
+        {
+            "kind": "intervals",
+            "repeat": 4,
+            "on_s": 240,
+            "on_pct": 1.05,
+            "off_s": 180,
+            "off_pct": 0.55,
+        },
+        {"kind": "cooldown", "duration_s": 300, "from_pct": 0.7, "to_pct": 0.45},
+    ]
+}
+
+
+def test_parse_keeps_valid_structure_and_derives_duration():
+    raw = json.dumps(
+        {
+            "workouts": [
+                {
+                    "date": "2026-10-02",
+                    "workout_type": "Indoor Ride",
+                    "distance": 30,
+                    "elevation": 450,
+                    "duration_min": 999,
+                    "structure": INDOOR_STRUCTURE,
+                }
+            ]
+        }
+    )
+    w = parse_plan_generation_response(raw, "2026-10-01", "2026-10-14")["workouts"][0]
+    assert w["structure"] == INDOOR_STRUCTURE
+    assert w["duration_min"] == 10 + 28 + 5  # 600s + 4*(240+180)s + 300s = 2580s = 43 min
+    assert w["distance_km"] == 30 and w["elevation_m"] == 450
+
+
+def test_parse_strips_structure_from_non_cycling_types():
+    raw = json.dumps(
+        {
+            "workouts": [
+                {"date": "2026-10-02", "workout_type": "Easy Run", "structure": INDOOR_STRUCTURE}
+            ]
+        }
+    )
+    w = parse_plan_generation_response(raw, "2026-10-01", "2026-10-14")["workouts"][0]
+    assert w["structure"] is None
+
+
+def test_plan_table_shows_elevation_and_structure():
+    from strides_ai.plan_generation import _plan_table
+    from strides_ai.workout_structure import structure_to_json
+
+    table = _plan_table(
+        [
+            {
+                "date": "2026-10-02",
+                "workout_type": "Indoor Ride",
+                "distance_km": 30,
+                "elevation_m": 450,
+                "duration_min": 43,
+                "intensity": "hard",
+                "structure_json": structure_to_json(INDOOR_STRUCTURE),
+            }
+        ]
+    )
+    assert "450 m" in table
+    assert "4×(4:00 @ 105%, 3:00 @ 55%)" in table

@@ -286,7 +286,7 @@ def test_retries_do_not_replay_completed_writes(adapter, mocker, monkeypatch):
 
 
 def test_output_and_tool_arguments_share_turn_budget(adapter, mocker, monkeypatch):
-    monkeypatch.setattr(BaseBackend, "limits", property(lambda _: Limits(total_output_tokens=60)))
+    monkeypatch.setattr(BaseBackend, "limits", property(lambda _: Limits(total_output_tokens=12)))
     write = mocker.patch("strides_ai.backends.base.db.save_memory", return_value="saved")
     backend, requests = adapter()
     text, memories, _ = backend.stream_turn("mandatory", "hello", lambda _: None)
@@ -306,7 +306,7 @@ def test_measurement_includes_reasoning():
     assert budget.output_remaining == 1100
     budget.request("sys", [], [])
     with pytest.raises(BudgetExceeded):
-        budget.output("x" * 1200)
+        budget.output("x" * 4800)
 
 
 def test_summary_distinguishes_sports_and_dates():

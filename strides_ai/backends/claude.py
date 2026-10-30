@@ -224,7 +224,11 @@ class ClaudeBackend(BaseBackend):
         response_text = ""
         with self._client.messages.stream(
             model=self._model,
-            max_tokens=8192,
+            # Newer models think by default and thinking tokens count against max_tokens; a long
+            # structured answer (e.g. a training block) can be starved to nothing. These one-shot
+            # calls want the answer, not reasoning, so skip it and leave headroom.
+            max_tokens=16000,
+            thinking={"type": "disabled"},
             system=system,
             messages=[{"role": "user", "content": user_input}],
         ) as stream:

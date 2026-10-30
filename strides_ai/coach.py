@@ -8,6 +8,7 @@ from .db.models import TrainingPlan
 from .memory_context import memories_section
 from .modes import MODES
 from .training_state import build_training_state, render_for_prompt
+from .workout_structure import render_text, structure_from_json
 from .units import (
     DEFAULT_UNIT_SYSTEM,
     Quantity,
@@ -188,16 +189,23 @@ def _upcoming_workouts_section(units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
     upcoming = db.get_upcoming_planned_workouts(days=PLANNED_WORKOUTS_WINDOW_DAYS)
     if not upcoming:
         return ""
-    header = "Date       | Type             | Distance  | Duration | Intensity"
-    sep = "-" * 66
+    header = "Date       | Type             | Distance  | Elevation | Duration | Intensity"
+    sep = "-" * 78
     rows = []
     for w in upcoming:
         m = TrainingPlan.measure_field(w, "distance_km", units) if w.get("distance_km") else None
         dist = m.formatted if m else "—"
+        e = TrainingPlan.measure_field(w, "elevation_m", units) if w.get("elevation_m") else None
+        elev = e.formatted if e else "—"
         dur = f"{w['duration_min']} min" if w.get("duration_min") else "—"
-        rows.append(
-            f"{w['date']:10s} | {(w['workout_type'] or '')[:16]:16s} | {dist:9s} | {dur:8s} | {w.get('intensity') or '—'}"
+        row = (
+            f"{w['date']:10s} | {(w['workout_type'] or '')[:16]:16s} | {dist:9s} | {elev:9s} | "
+            f"{dur:8s} | {w.get('intensity') or '—'}"
         )
+        structure = structure_from_json(w.get("structure_json"))
+        if structure:
+            row += f"\n{'':10s}   structure: {render_text(structure)}"
+        rows.append(row)
     return (
         f"## Upcoming Planned Workouts (next {PLANNED_WORKOUTS_WINDOW_DAYS} days)\n"
         + header

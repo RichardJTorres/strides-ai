@@ -7,6 +7,7 @@ from google.genai import types
 from google.genai.errors import ClientError
 
 from ..budget import BudgetExceeded
+from ..workout_structure import WORKOUT_STRUCTURE_SCHEMA
 
 from .base import (
     DISTANCE_UNITS,
@@ -25,6 +26,40 @@ DEFAULT_MODEL = "gemini-2.5-flash"
 
 _MAX_RETRIES = 3
 _RETRY_DELAY_S = 10  # seconds to wait after a 429
+
+
+def _gemini_structure_schema() -> "types.Schema":
+    """Gemini mirror of workout_structure.WORKOUT_STRUCTURE_SCHEMA."""
+    number, integer = types.Type.NUMBER, types.Type.INTEGER
+    fields = {
+        "duration_s": integer,
+        "from_pct": number,
+        "to_pct": number,
+        "pct": number,
+        "repeat": integer,
+        "on_s": integer,
+        "on_pct": number,
+        "off_s": integer,
+        "off_pct": number,
+    }
+    block = types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "kind": types.Schema(
+                type=types.Type.STRING,
+                enum=["warmup", "cooldown", "ramp", "steady", "intervals", "freeride"],
+            ),
+            **{name: types.Schema(type=t) for name, t in fields.items()},
+        },
+        required=["kind"],
+    )
+    return types.Schema(
+        type=types.Type.OBJECT,
+        description=WORKOUT_STRUCTURE_SCHEMA["description"],
+        properties={"blocks": types.Schema(type=types.Type.ARRAY, items=block)},
+        required=["blocks"],
+    )
+
 
 SAVE_MEMORY_TOOL = types.Tool(
     function_declarations=[
@@ -119,6 +154,7 @@ UPDATE_TRAINING_PLAN_TOOL = types.Tool(
                                     type=types.Type.STRING,
                                     enum=["easy", "moderate", "hard", "rest"],
                                 ),
+                                "structure": _gemini_structure_schema(),
                             },
                             required=["date", "workout_type"],
                         ),

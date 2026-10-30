@@ -185,3 +185,36 @@ def test_get_upcoming_planned_workouts_respects_window(tmp_db):
 
 def test_get_upcoming_planned_workouts_empty(tmp_db):
     assert db.get_upcoming_planned_workouts() == []
+
+
+STRUCT = {
+    "blocks": [
+        {"kind": "warmup", "duration_s": 600, "from_pct": 0.5, "to_pct": 0.75},
+        {"kind": "steady", "duration_s": 1800, "pct": 0.85},
+    ]
+}
+
+
+def test_structure_round_trip_and_duration_override(tmp_db):
+    db.save_planned_workout(
+        "2026-10-02", "Indoor Ride", None, 30, 450, 999, "hard", structure=STRUCT
+    )
+    row = db.get_training_plan()[0]
+    assert row["duration_min"] == 40
+    assert json.loads(row["structure_json"]) == STRUCT
+
+
+def test_saving_without_structure_clears_it(tmp_db):
+    db.save_planned_workout(
+        "2026-10-02", "Indoor Ride", None, 30, 450, 40, "hard", structure=STRUCT
+    )
+    db.save_planned_workout("2026-10-02", "Indoor Ride", "edited", 30, 450, 55, "hard")
+    row = db.get_training_plan()[0]
+    assert row["structure_json"] is None
+    assert row["duration_min"] == 55  # untouched when there is no structure
+
+
+def test_structure_discarded_for_non_cycling_types(tmp_db):
+    db.save_planned_workout("2026-10-02", "Easy Run", None, 5, None, 30, "easy", structure=STRUCT)
+    row = db.get_training_plan()[0]
+    assert row["structure_json"] is None and row["duration_min"] == 30

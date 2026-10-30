@@ -10,6 +10,14 @@ from .coach import build_training_log, units_section
 from .db.models import TrainingPlan
 from .modes import MODES
 from .units import DEFAULT_UNIT_SYSTEM, Quantity, UnitSystem, to_si, unit_label
+from .workout_structure import (
+    INDOOR_RIDE_GUIDANCE,
+    STRUCTURE_PROMPT,
+    render_text,
+    structure_for_type,
+    structure_from_json,
+    total_seconds,
+)
 
 # How far before/after the requested range to pull existing plan entries as
 # context (ramp-up / taper continuity), without letting the model touch them.
@@ -30,6 +38,7 @@ The object must have exactly these keys:
       "elevation"     (number, optional, elevation gain in {elevation_unit})
       "duration_min"  (integer, optional)
       "intensity"     (one of "easy", "moderate", "hard", "rest", optional)
+      {structure_contract}
   "summary" — a short (2-4 sentence) explanation of the block's structure and why it fits the \
 athlete right now
 
@@ -37,7 +46,9 @@ Only include days you want to schedule something for — you do not need an entr
 the range. Do not schedule on blocked-out days or on top of races. Use the surrounding training \
 context and the Training State section (current load, weekly ramp, guardrails) to keep load \
 progression and taper sensible; do not propose changes outside the requested \
-date range — that context is read-only.\
+date range — that context is read-only.
+
+{indoor_guidance}\
 """
 
 
@@ -45,6 +56,8 @@ def plan_generation_system_prompt(units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> st
     return _PLAN_GENERATION_SYSTEM_PROMPT_TEMPLATE.format(
         distance_unit=unit_label(Quantity.DISTANCE, units),
         elevation_unit=unit_label(Quantity.ELEVATION, units),
+        structure_contract=STRUCTURE_PROMPT,
+        indoor_guidance=INDOOR_RIDE_GUIDANCE,
     )
 
 
@@ -59,6 +72,21 @@ def _strip_json_fences(text: str) -> str:
     return text
 
 
+def _extract_json_object(text: str) -> dict:
+    """Parse the first JSON object in the text, tolerating prose or fences around it."""
+    cleaned = _strip_json_fences(text)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = cleaned.find("{")
+        if start == -1:
+            raise
+        obj, _ = json.JSONDecoder().raw_decode(cleaned[start:])
+        if not isinstance(obj, dict):
+            raise TypeError("expected a JSON object")
+        return obj
+
+
 def _current_date_section() -> str:
     today = date_cls.today()
     return (
@@ -71,17 +99,23 @@ def _current_date_section() -> str:
 
 
 def _plan_table(rows: list[dict], units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
-    header = "Date       | Type             | Distance | Duration | Intensity"
-    sep = "-" * 65
+    header = "Date       | Type             | Distance | Elevation | Duration | Intensity"
+    sep = "-" * 76
     lines = []
     for w in rows:
         m = TrainingPlan.measure_field(w, "distance_km", units) if w.get("distance_km") else None
         dist = m.formatted if m else "—"
+        e = TrainingPlan.measure_field(w, "elevation_m", units) if w.get("elevation_m") else None
+        elev = e.formatted if e else "—"
         dur = f"{w['duration_min']} min" if w.get("duration_min") else "—"
-        lines.append(
+        line = (
             f"{w['date']:10s} | {(w['workout_type'] or '')[:16]:16s} | "
-            f"{dist:8s} | {dur:8s} | {w.get('intensity') or '—'}"
+            f"{dist:8s} | {elev:9s} | {dur:8s} | {w.get('intensity') or '—'}"
         )
+        structure = structure_from_json(w.get("structure_json"))
+        if structure:
+            line += f"\n{'':10s}   structure: {render_text(structure)}"
+        lines.append(line)
     return header + "\n" + sep + "\n" + "\n".join(lines)
 
 
@@ -172,14 +206,23 @@ def _as_float(value) -> float | None:
         return None
 
 
+def _with_structure(w: dict) -> dict:
+    """Validate the model's structure; a valid one is authoritative for duration_min."""
+    structure = structure_for_type(w.get("workout_type"), w.get("structure"))
+    w["structure"] = structure
+    if structure:
+        w["duration_min"] = round(total_seconds(structure) / 60)
+    return w
+
+
 def parse_plan_generation_response(
     text: str, start_date: str, end_date: str, units: UnitSystem = DEFAULT_UNIT_SYSTEM
 ) -> dict:
     """Parse the LLM's JSON response, dropping malformed or out-of-range entries."""
-    parsed = json.loads(_strip_json_fences(text))
+    parsed = _extract_json_object(text)
     raw_workouts = parsed.get("workouts", [])
     workouts = [
-        _normalize_workout_units(w, units)
+        _with_structure(_normalize_workout_units(w, units))
         for w in raw_workouts
         if w.get("date") and w.get("workout_type") and start_date <= w["date"] <= end_date
     ]

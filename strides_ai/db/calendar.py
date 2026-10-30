@@ -7,6 +7,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlmodel import Session, select
 
+from ..workout_structure import structure_for_type, structure_to_json, total_seconds
 from .models import CalendarPref, TrainingPlan
 
 
@@ -58,8 +59,17 @@ def save_planned_workout(
     duration_min: int | None,
     intensity: str | None,
     route_url: str | None = None,
+    structure: dict | None = None,
 ) -> None:
-    """Upsert a user-entered planned workout."""
+    """Upsert a user-entered planned workout.
+
+    ``structure`` (cycling types only) is validated here, so every write path gets the same
+    rules; a valid one is authoritative for ``duration_min``. Omitting it clears any structure.
+    """
+    structure = structure_for_type(workout_type, structure)
+    if structure:
+        duration_min = round(total_seconds(structure) / 60)
+    structure_json = structure_to_json(structure)
     stmt = sqlite_insert(TrainingPlan).values(
         date=date,
         workout_type=workout_type,
@@ -69,6 +79,7 @@ def save_planned_workout(
         duration_min=duration_min,
         intensity=intensity,
         route_url=route_url,
+        structure_json=structure_json,
     )
     stmt = stmt.on_conflict_do_update(
         index_elements=["date"],
@@ -80,6 +91,7 @@ def save_planned_workout(
             "duration_min": duration_min,
             "intensity": intensity,
             "route_url": route_url,
+            "structure_json": structure_json,
             "nutrition_json": None,
             "route_analysis_json": None,
             "route_analyzed_at": None,

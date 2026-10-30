@@ -2,9 +2,10 @@
 
 import asyncio
 import json
+import logging
 from datetime import date as date_cls, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlmodel import Session
 
@@ -16,6 +17,7 @@ from ...db import calendar as crud
 from ...db import memories as mem_crud
 from ...db import profiles as prof_crud
 from ...db.engine import get_session
+from ...db.models import TrainingPlan
 from ...plan_generation import (
     SURROUNDING_WINDOW_DAYS,
     build_plan_generation_prompt,
@@ -34,7 +36,10 @@ from ...sources.ridewithgps import condense_elevation_profile
 from ...sources.routes import fetch_route_detail, fetch_route_summary
 from ...training_state import build_training_state, check_plan_changes, render_for_prompt
 from ...units import UnitSystem
+from ...workout_structure import render_text, structure_from_json, to_zwo, zwo_filename
 from ..deps import get_backend, get_units
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -52,6 +57,7 @@ class WorkoutBody(BaseModel):
     duration_min: int | None = None
     intensity: str | None = None
     route_url: str | None = None
+    structure: dict | None = None
 
 
 class BulkWorkoutEntry(WorkoutBody):
@@ -77,6 +83,8 @@ class GeneratedWorkout(BaseModel):
     elevation_m: float | None = None
     duration_min: int | None = None
     intensity: str | None = None
+    structure: dict | None = None
+    structure_text: str | None = None
 
 
 class GeneratePlanResponse(BaseModel):
@@ -114,9 +122,18 @@ def get_training_state(
     ).to_dict()
 
 
+def _plan_row(row) -> dict:
+    """A plan row for the API: the stored structure_json is exposed parsed as ``structure``."""
+    data = row.model_dump()
+    structure = structure_from_json(data.pop("structure_json", None))
+    data["structure"] = structure
+    data["structure_text"] = render_text(structure) if structure else None
+    return data
+
+
 @router.get("/calendar/plan")
 def get_calendar_plan(session: Session = Depends(get_session)):
-    return [r.model_dump() for r in crud.get_plan(session)]
+    return [_plan_row(r) for r in crud.get_plan(session)]
 
 
 @router.get("/calendar/compliance")
@@ -187,8 +204,26 @@ def put_planned_workout(date: str, body: WorkoutBody, session: Session = Depends
         body.duration_min,
         body.intensity,
         body.route_url,
+        body.structure,
     )
-    return {"status": "ok", "date": date}
+    # The server may adjust what was sent (duration derives from a structure), so return the row.
+    saved = session.get(TrainingPlan, date)
+    return {"status": "ok", "date": date, "workout": _plan_row(saved) if saved else None}
+
+
+@router.get("/calendar/plan/{date}/zwo")
+def download_zwo(date: str, session: Session = Depends(get_session)):
+    """Zwift workout file for a planned workout that has a structure."""
+    row = session.get(TrainingPlan, date)
+    structure = structure_from_json(row.structure_json) if row else None
+    if not structure:
+        raise HTTPException(status_code=404, detail="No structured workout on this date")
+    name = f"{row.workout_type} {date}"
+    return Response(
+        content=to_zwo(structure, name, row.description),
+        media_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="{zwo_filename(date, name)}"'},
+    )
 
 
 @router.delete("/calendar/plan/{date}")
@@ -211,6 +246,7 @@ def bulk_update_plan(body: BulkPlanBody, session: Session = Depends(get_session)
             w.duration_min,
             w.intensity,
             w.route_url,
+            w.structure,
         )
     for date in body.delete:
         crud.delete_planned_workout(session, date)
@@ -294,12 +330,28 @@ async def generate_plan(
             plan_generation_system_prompt(units), prompt, on_token=lambda _: None
         )
 
+    text = ""
     try:
         text = await asyncio.get_event_loop().run_in_executor(None, _run_llm)
         result = parse_plan_generation_response(text, body.start_date, body.end_date, units)
-        return _apply_guardrails(result, mode_rows, all_plan, prefs, mode, units, today)
+        result = _apply_guardrails(result, mode_rows, all_plan, prefs, mode, units, today)
+        for w in result["workouts"]:
+            w["structure_text"] = render_text(w["structure"]) if w.get("structure") else None
+        return result
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to parse generated plan: {exc}")
+        logger.error(
+            "Plan generation parse failure (%s); raw response (%d chars): %r",
+            exc,
+            len(text),
+            text[:2000],
+        )
+        if not text.strip():
+            detail = "The model returned an empty response. Please try again."
+        else:
+            detail = (
+                f"Failed to parse generated plan: {exc}. Response began: {text.strip()[:200]!r}"
+            )
+        raise HTTPException(status_code=502, detail=detail)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Plan generation failed: {exc}")
 

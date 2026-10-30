@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useUnits } from "../UnitsContext";
+import { climbLabel, plannedClimbRate } from "./activityLabels";
 
 const DAYS_OF_WEEK = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -24,6 +25,9 @@ const ROUTE_CAPABLE_WORKOUT_TYPES = new Set([
 // Distance/elevation don't apply to these. Mirrored as UNSCORED_WORKOUT_TYPES in
 // strides_ai/compliance.py — these are excluded from compliance scoring entirely.
 const NO_DISTANCE_WORKOUT_TYPES = new Set(["Yoga", "Rest"]);
+// Structured workouts are cycling-only. Mirrored by RIDE_WORKOUT_TYPES in strides_ai/compliance.py,
+// which the server enforces.
+const keepsStructure = (workoutType: string) => WORKOUT_TYPE_GROUPS[1].types.includes(workoutType);
 
 const COMPLIANCE_DOT_COLORS: Record<string, string> = {
   completed: "bg-green-400",
@@ -72,6 +76,9 @@ interface Workout {
   route_url?: string | null;
   route_analysis_json?: string | null;
   route_analyzed_at?: string | null;
+  // Structured (Zwift-style) workout, cycling types only; structure_text is the server's rendering.
+  structure?: Record<string, unknown> | null;
+  structure_text?: string | null;
 }
 
 interface RouteAnalysis {
@@ -137,6 +144,39 @@ interface GeneratedWorkout {
   elevation_m?: number | null;
   duration_min?: number | null;
   intensity?: string | null;
+  structure?: Record<string, unknown> | null;
+  structure_text?: string | null;
+}
+
+const GEN_STAGES: { after: number; text: string }[] = [
+  { after: 0, text: "Reviewing your profile, recent training and calendar…" },
+  { after: 6, text: "Drafting the training block…" },
+  { after: 20, text: "Balancing load, rest days and race constraints…" },
+  { after: 40, text: "Finalizing workouts…" },
+  { after: 70, text: "Still working — longer blocks can take a minute or two…" },
+];
+
+// Generation is one non-streaming request, so this shows liveness (spinner + elapsed time) and
+// time-based stage hints rather than real server progress.
+function GeneratingProgress() {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const t0 = Date.now();
+    const id = window.setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  const stage = [...GEN_STAGES].reverse().find(s => elapsed >= s.after) ?? GEN_STAGES[0];
+  return (
+    <div role="status" aria-live="polite" className="flex items-center gap-3 rounded border border-zinc-700 bg-zinc-800/60 px-3 py-3">
+      <span className="h-4 w-4 shrink-0 rounded-full border-2 border-zinc-600 border-t-green-400 animate-spin" />
+      <div className="min-w-0 flex-1">
+        <div className="text-sm text-zinc-200">{stage.text}</div>
+        <div className="text-xs text-zinc-500">
+          {elapsed}s elapsed · usually 15–45 seconds · keep this window open
+        </div>
+      </div>
+    </div>
+  );
 }
 
 interface GeneratePlanResult {
@@ -183,6 +223,7 @@ const EMPTY_FORM = {
   duration_min: "",
   intensity: "easy",
   route_url: "",
+  clear_structure: false,
 };
 
 const VERDICT_STYLES: Record<string, { cls: string; label: string }> = {
@@ -244,6 +285,7 @@ export default function Calendar() {
       duration_min: w?.duration_min?.toString() || "",
       intensity: w?.intensity || "easy",
       route_url: w?.route_url || "",
+      clear_structure: false,
     };
   };
   const kmFromInput = (value: string): number | null => {
@@ -455,6 +497,8 @@ export default function Calendar() {
       duration_min: form.duration_min ? parseInt(form.duration_min) : null,
       intensity: form.intensity,
       route_url: !noRoute && form.route_url ? form.route_url : null,
+      // Preserve the structure unless the athlete explicitly removes it.
+      structure: keepsStructure(form.workout_type) && !form.clear_structure ? selectedWorkout?.structure ?? null : null,
     };
     const res = await fetch(`/api/calendar/plan/${selectedDate}`, {
       method: "PUT",
@@ -462,7 +506,8 @@ export default function Calendar() {
       body: JSON.stringify(body),
     });
     if (res.ok) {
-      setPlan(prev => ({ ...prev, [selectedDate]: { date: selectedDate, ...body } }));
+      const saved = (await res.json().catch(() => null))?.workout;
+      setPlan(prev => ({ ...prev, [selectedDate]: saved ?? { date: selectedDate, ...body } }));
       setEditMode(false);
     }
   };
@@ -550,6 +595,7 @@ export default function Calendar() {
         duration_min: selectedWorkout.duration_min ?? null,
         intensity: selectedWorkout.intensity ?? null,
         route_url: url || null,
+        structure: selectedWorkout.structure ?? null,
       };
       const res = await fetch(`/api/calendar/plan/${selectedDate}`, {
         method: "PUT",
@@ -557,7 +603,8 @@ export default function Calendar() {
         body: JSON.stringify(body),
       });
       if (res.ok) {
-        setPlan(prev => ({ ...prev, [selectedDate]: { date: selectedDate, ...body } }));
+        const saved = (await res.json().catch(() => null))?.workout;
+        setPlan(prev => ({ ...prev, [selectedDate]: saved ?? { date: selectedDate, ...body } }));
         setShowRouteForm(false);
       }
     } finally {
@@ -652,6 +699,68 @@ export default function Calendar() {
     openDay(date);
   };
 
+  // Drag a planned workout onto another day. An occupied target swaps the two workouts. Bulk
+  // upsert both days (no deletes needed); optimistic, reverted if the save fails.
+  const [dragFrom, setDragFrom] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState<string | null>(null);
+  const movePending = useRef(false);
+
+  const moveWorkout = async (from: string, to: string) => {
+    const moving = plan[from];
+    if (!moving || from === to || movePending.current) return;
+    movePending.current = true;
+    const displaced = plan[to];
+    const entry = (w: Workout, date: string) => ({
+      date,
+      workout_type: w.workout_type,
+      description: w.description ?? null,
+      distance_km: w.distance_km ?? null,
+      elevation_m: w.elevation_m ?? null,
+      duration_min: w.duration_min ?? null,
+      intensity: w.intensity ?? null,
+      route_url: w.route_url ?? null,
+      structure: w.structure ?? null,
+    });
+    const set = [entry(moving, to), ...(displaced ? [entry(displaced, from)] : [])];
+    const moved = { ...moving, date: to, nutrition_json: null, route_analysis_json: null };
+    const swapped = displaced
+      ? { ...displaced, date: from, nutrition_json: null, route_analysis_json: null }
+      : undefined;
+    const rollback = () => setPlan(prev => {
+      const next = { ...prev };
+      // Keep any edits made while the move was saving, including on unrelated days.
+      if (prev[from] === swapped) next[from] = moving;
+      if (prev[to] === moved) {
+        if (displaced) next[to] = displaced;
+        else delete next[to];
+      }
+      return next;
+    });
+    setPlan(prev => {
+      const next = { ...prev };
+      delete next[from];
+      next[to] = moved;
+      if (swapped) next[from] = swapped;
+      return next;
+    });
+    if (selectedDate === from || selectedDate === to) {
+      setSelectedDate(null);
+      setEditMode(false);
+    }
+    try {
+      const res = await fetch("/api/calendar/plan/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ set, delete: displaced ? [] : [from] }),
+      });
+      if (!res.ok) rollback();
+    } catch {
+      rollback();
+    } finally {
+      movePending.current = false;
+    }
+  };
+
   const openDay = (date: string) => {
     if (selectedDate === date) {
       setSelectedDate(null);
@@ -708,6 +817,7 @@ export default function Calendar() {
   const raceOnDate = (dateStr: string) => prefs.races.find(r => r.date === dateStr);
 
   const selectedWorkout = selectedDate ? plan[selectedDate] : null;
+  const hasFormStructure = !!selectedWorkout?.structure && keepsStructure(form.workout_type) && !form.clear_structure;
   const selectedActivities = selectedDate ? (activities[selectedDate] ?? []) : [];
   const selectedNutrition: NutritionData | null = selectedWorkout?.nutrition_json
     ? JSON.parse(selectedWorkout.nutrition_json)
@@ -936,7 +1046,22 @@ export default function Calendar() {
                         key={dateStr}
                         onClick={e => handleDayClick(e, dateStr)}
                         onMouseDown={e => { if (e.shiftKey) e.preventDefault(); }}
+                        onDragOver={e => {
+                          if (!dragFrom || dragFrom === dateStr) return;
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = "move";
+                          if (dragOver !== dateStr) setDragOver(dateStr);
+                        }}
+                        onDragLeave={() => { if (dragOver === dateStr) setDragOver(null); }}
+                        onDrop={e => {
+                          e.preventDefault();
+                          const from = dragFrom;
+                          setDragFrom(null);
+                          setDragOver(null);
+                          if (from) moveWorkout(from, dateStr);
+                        }}
                         className={[
+                          dragOver === dateStr ? "ring-2 ring-inset ring-sky-400/80" : "",
                           "flex-1 min-w-0 min-h-16 p-1.5 rounded cursor-pointer border transition-colors select-none",
                           inRange ? "border-green-500/70 bg-green-500/10" : isSelected ? "border-zinc-400 bg-zinc-700/60" : "border-zinc-800 hover:border-zinc-600",
                           isToday ? "ring-2 ring-inset ring-green-400/80 border-green-400/60" : "",
@@ -966,7 +1091,16 @@ export default function Calendar() {
                           </div>
                         )}
                         {workout && (
-                          <div className={`text-xs px-1 py-0.5 rounded border truncate mb-0.5 ${WORKOUT_COLORS[workout.workout_type] ?? "bg-zinc-700/50 text-zinc-400 border-zinc-600/30"}`}>
+                          <div
+                            draggable
+                            onDragStart={e => {
+                              if (movePending.current) { e.preventDefault(); return; }
+                              e.dataTransfer.effectAllowed = "move";
+                              e.dataTransfer.setData("text/plain", dateStr);
+                              setDragFrom(dateStr);
+                            }}
+                            onDragEnd={() => { setDragFrom(null); setDragOver(null); }}
+                            className={`text-xs px-1 py-0.5 rounded border truncate mb-0.5 cursor-grab active:cursor-grabbing ${dragFrom === dateStr ? "opacity-40" : ""} ${WORKOUT_COLORS[workout.workout_type] ?? "bg-zinc-700/50 text-zinc-400 border-zinc-600/30"}`}>
                             {workout.workout_type}
                             {workout.distance_km && (
                               <span className="ml-1 opacity-70">{fmtKm(workout.distance_km)}</span>
@@ -1113,10 +1247,39 @@ export default function Calendar() {
                             <div className="text-zinc-200 font-medium">{units.fmt(selectedWorkout.elevation_m, "elevation")}</div>
                           </div>
                         )}
+                        {(() => {
+                          const rate = plannedClimbRate(selectedWorkout.distance_km, selectedWorkout.elevation_m);
+                          if (rate == null) return null;
+                          const group = WORKOUT_TYPE_GROUPS[0].types.includes(selectedWorkout.workout_type)
+                            ? "run" : keepsStructure(selectedWorkout.workout_type) ? "ride" : "other";
+                          const terrain = climbLabel(rate, group);
+                          return (
+                            <div className="bg-zinc-800 rounded p-2 text-xs" title={terrain?.detail}>
+                              <div className="text-zinc-500">Climb ratio</div>
+                              <div className="text-zinc-200 font-medium">
+                                {units.fmt(rate, "climb_rate")}
+                                {terrain && <span className="ml-1 text-zinc-400 font-normal">{terrain.text}</span>}
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
                     )}
                     {selectedWorkout.description && (
                       <p className="text-xs text-zinc-400 leading-relaxed">{selectedWorkout.description}</p>
+                    )}
+                    {selectedWorkout.structure_text && (
+                      <div className="bg-zinc-800/60 rounded p-2 text-xs space-y-1.5">
+                        <div className="text-zinc-500">Structured workout (% FTP)</div>
+                        <div className="text-zinc-300 leading-relaxed">{selectedWorkout.structure_text}</div>
+                        <a
+                          href={`/api/calendar/plan/${selectedWorkout.date}/zwo`}
+                          download
+                          className="inline-block text-sky-400 hover:text-sky-300"
+                        >
+                          Download .zwo for Zwift
+                        </a>
+                      </div>
                     )}
                     {ROUTE_CAPABLE_WORKOUT_TYPES.has(selectedWorkout.workout_type) && (
                       showRouteForm ? (
@@ -1219,6 +1382,16 @@ export default function Calendar() {
                         ))}
                       </select>
                     </div>
+                    {selectedWorkout?.structure && keepsStructure(form.workout_type) && (
+                      <label className="flex items-center gap-2 text-xs text-zinc-400">
+                        <input
+                          type="checkbox"
+                          checked={form.clear_structure}
+                          onChange={e => setForm(f => ({ ...f, clear_structure: e.target.checked }))}
+                        />
+                        Remove structured workout
+                      </label>
+                    )}
                     <div className="grid grid-cols-2 gap-2">
                       {!NO_DISTANCE_WORKOUT_TYPES.has(form.workout_type) && (
                       <div>
@@ -1246,10 +1419,17 @@ export default function Calendar() {
                         <label className="text-xs text-zinc-500 mb-1 block">Duration (min)</label>
                         <input
                           type="number" placeholder="—"
-                          value={form.duration_min}
+                          value={hasFormStructure ? selectedWorkout?.duration_min?.toString() ?? "" : form.duration_min}
+                          disabled={hasFormStructure}
+                          aria-describedby={hasFormStructure ? "structured-duration-help" : undefined}
                           onChange={e => setForm(f => ({ ...f, duration_min: e.target.value }))}
-                          className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
+                          className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200 disabled:opacity-50"
                         />
+                        {hasFormStructure && (
+                          <p id="structured-duration-help" className="mt-1 text-xs text-zinc-500">
+                            Duration comes from the structure. Remove it to edit duration.
+                          </p>
+                        )}
                       </div>
                       <div>
                         <label className="text-xs text-zinc-500 mb-1 block">Intensity</label>
@@ -1449,6 +1629,7 @@ export default function Calendar() {
                         className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200 resize-none"
                       />
                     </div>
+                    {genLoading && <GeneratingProgress />}
                     {genError && <p className="text-xs text-red-400">{genError}</p>}
                     <button
                       onClick={generatePlan}
@@ -1485,6 +1666,16 @@ export default function Calendar() {
                                 ].filter(Boolean).join(" · ")}
                               </span>
                             </div>
+                            {(w.elevation_m || w.structure_text) && (
+                              <div className="text-xs opacity-80 mt-0.5">
+                                {w.elevation_m ? `${units.fmt(w.elevation_m, "elevation")} gain` : null}
+                                {(() => {
+                                  const rate = plannedClimbRate(w.distance_km, w.elevation_m);
+                                  return rate == null ? null : ` · ${units.fmt(rate, "climb_rate")}`;
+                                })()}
+                                {w.structure_text && <div className="font-mono opacity-90">{w.structure_text}</div>}
+                              </div>
+                            )}
                             {w.description && (
                               <div className="text-xs opacity-80 mt-0.5">{w.description}</div>
                             )}
@@ -1497,6 +1688,7 @@ export default function Calendar() {
                         ))}
                       </div>
                     )}
+                    {genLoading && <GeneratingProgress />}
                     {genError && <p className="text-xs text-red-400">{genError}</p>}
                     <div className="flex gap-2 pt-1">
                       <button

@@ -148,3 +148,18 @@ test('pace / HR labels are null without data, baseline or cardio sport', () => {
   assert.equal(L.spreadLabel(140, b.avg_hr, 'other', L.HR_WORDS), null);
   assert.equal(L.labelsFor(act(0, { avg_hr: null }), L.buildBaselines(paceHr)).hr, null);
 });
+
+test('plannedClimbRate needs both a positive distance and gain', () => {
+  assert.equal(L.plannedClimbRate(30, 450), 15);
+  for (const [d, e] of [[null, 450], [30, null], [0, 450], [30, 0], [undefined, undefined]]) {
+    assert.equal(L.plannedClimbRate(d, e), null);
+  }
+});
+
+test('plannedClimbRate feeds the ride terrain tiers at their boundaries', () => {
+  const tier = (rate) => L.climbLabel(rate, 'ride').text;
+  assert.equal(tier(L.plannedClimbRate(10, 49)), 'Flat');
+  assert.equal(tier(L.plannedClimbRate(10, 50)), 'Rolling');
+  assert.equal(tier(L.plannedClimbRate(10, 120)), 'Hilly');
+  assert.equal(tier(L.plannedClimbRate(10, 250)), 'Mountainous');
+});
