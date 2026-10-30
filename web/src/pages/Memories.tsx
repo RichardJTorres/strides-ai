@@ -133,13 +133,16 @@ export default function Memories({ theme }: Props) {
     setSelected(new Set());
     try {
       const res = await fetch("/api/memories/review", { method: "POST" });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? `HTTP ${res.status}`);
+      }
       const data: FlaggedMemory[] = await res.json();
       setFlagged(data);
       // Pre-select all flagged memories
       setSelected(new Set(data.map((m) => m.id)));
     } catch (e) {
-      setReviewError("Review failed. Please try again.");
+      setReviewError(`Review failed: ${e instanceof Error ? e.message : "unknown error"}`);
     } finally {
       setReviewing(false);
     }
