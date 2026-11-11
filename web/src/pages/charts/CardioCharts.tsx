@@ -132,11 +132,8 @@ export default function CardioCharts({ mode, theme, routeParam }: Props) {
           </div>
         )}
 
-        {!loading && !error && noActivitiesAtAll && (
-          <div className="text-center py-16 text-gray-500">No activities yet.</div>
-        )}
-
-        {!loading && !error && data && !noActivitiesAtAll && sections.length > 0 && (
+        {/* The tabs always show: Progress needs only the plan, so it works before any activity. */}
+        {!loading && !error && data && (
           <>
             <div className="flex gap-1 overflow-x-auto border-b border-gray-800">
               {tabs.map((s) => (
@@ -159,6 +156,8 @@ export default function CardioCharts({ mode, theme, routeParam }: Props) {
               <InsightsCard mode={mode} theme={theme} />
             ) : isProgress ? (
               <ProgressCard mode={mode} />
+            ) : noActivitiesAtAll ? (
+              <div className="text-center py-16 text-gray-500">No activities yet.</div>
             ) : (<>
             <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
               {sectionDescription && <p className="text-gray-400">{sectionDescription}</p>}

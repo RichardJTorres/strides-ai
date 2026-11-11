@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Mode, ThemeConfig } from "../App";
@@ -94,12 +94,13 @@ const PLAN_STATUS: Record<ComplianceDay["status"], { text: string; tone: "succes
 /** What was planned for the activity's day and how it compared: the link back to the Calendar. */
 function PlannedBlock({ date, activityId }: { date: string; activityId: number }) {
   const units = useUnits();
+  // HEVY sessions can have no date; there is nothing to look up for those.
   const { data } = useApi<{ days: ComplianceDay[] }>(
-    `/api/calendar/compliance?start_date=${date}&end_date=${date}`,
+    date ? `/api/calendar/compliance?start_date=${date}&end_date=${date}` : null,
   );
   const day = data?.days[0];
   if (!day) return null; // nothing planned that day (or still loading): no block
-  const status = PLAN_STATUS[day.status];
+  const status = PLAN_STATUS[day.status] ?? { text: day.status, tone: "neutral" as const };
   const km = (v: number | null) => (v == null ? null : units.fmt(v * 1000, "distance", { decimals: 1 }));
   const planned = km(day.planned_distance_km);
   const actual = km(day.actual_distance_km);
@@ -366,6 +367,7 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced, routePar
   const [notes, setNotes] = useState<string>("");
   const [notesSaving, setNotesSaving] = useState(false);
   const [notesSaved, setNotesSaved] = useState(false);
+  const [notesError, setNotesError] = useState(false);
 
   const selectedActivity = activities.find((a) => a.id === selectedId) ?? null;
   const isLiftingActivity = selectedActivity?.sport_type === "WeightTraining";
@@ -386,7 +388,8 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced, routePar
   // Fill the panel's working state when an activity is opened — from a row click or a link —
   // once, so a later refresh of the list does not overwrite notes being typed.
   const panelFor = useRef<number | null>(null);
-  useEffect(() => {
+  // Layout effect: the panel must never paint one activity's notes under another's header.
+  useLayoutEffect(() => {
     if (selectedId === null) {
       panelFor.current = null;
       return;
@@ -399,6 +402,7 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced, routePar
     setDeepDiveLoading(false);
     setNotes(selectedActivity.user_notes ?? "");
     setNotesSaved(false);
+    setNotesError(false);
   }, [selectedId, selectedActivity]);
 
   // Reset sort key and modeOnly when switching modes
@@ -424,8 +428,10 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced, routePar
       const data = await fetch("/api/sync", { method: "POST" }).then((r) => r.json());
       const count = data.total ?? 0;
       setSyncMsg(count > 0 ? `${count} new item${count === 1 ? "" : "s"} synced.` : "Already up to date.");
-      const rows = await fetch(modeOnly ? `/api/activities?mode=${mode}` : "/api/activities").then((r) => r.json());
-      setActivities(rows);
+      setActivities(
+        await fetchJson<Activity[]>(modeOnly ? `/api/activities?mode=${mode}` : "/api/activities"),
+      );
+      setLoadError(null);
       onSynced();
     } catch {
       setSyncMsg("Sync failed.");
@@ -441,6 +447,9 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced, routePar
 
   async function runDeepDive(force = false) {
     if (selectedId === null) return;
+    // The panel may show another activity by the time this returns: the saved report always
+    // goes on its own row, but the panel is only touched while it still shows this activity.
+    const stillOpen = () => panelFor.current === selectedId;
     setDeepDiveError("");
     setDeepDiveLoading(true);
     if (!force && selectedActivity?.deep_dive_report) {
@@ -453,12 +462,14 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced, routePar
       const res = await fetch(url, { method: "POST" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: "Request failed" }));
-        setDeepDiveError(err.detail || "Deep dive failed.");
+        if (stillOpen()) setDeepDiveError(typeof err.detail === "string" ? err.detail : "Deep dive failed.");
         return;
       }
       const data = await res.json();
-      setDeepDiveReport(data.report);
-      setDeepDiveModel(data.model ?? "");
+      if (stillOpen()) {
+        setDeepDiveReport(data.report);
+        setDeepDiveModel(data.model ?? "");
+      }
       setActivities((prev) =>
         prev.map((a) =>
           a.id === selectedId
@@ -467,9 +478,9 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced, routePar
         )
       );
     } catch {
-      setDeepDiveError("Network error — could not complete deep dive.");
+      if (stillOpen()) setDeepDiveError("Network error — could not complete deep dive.");
     } finally {
-      setDeepDiveLoading(false);
+      if (stillOpen()) setDeepDiveLoading(false);
     }
   }
 
@@ -477,16 +488,21 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced, routePar
     if (selectedId === null) return;
     setNotesSaving(true);
     setNotesSaved(false);
+    setNotesError(false);
     try {
-      await fetch(`/api/activities/${selectedId}/notes`, {
+      const res = await fetch(`/api/activities/${selectedId}/notes`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ notes }),
       });
+      if (!res.ok) throw new Error();
       setActivities((prev) =>
         prev.map((a) => (a.id === selectedId ? { ...a, user_notes: notes } : a))
       );
-      setNotesSaved(true);
+      if (panelFor.current === selectedId) setNotesSaved(true);
+    } catch {
+      // The text stays in the box, so nothing typed is lost.
+      if (panelFor.current === selectedId) setNotesError(true);
     } finally {
       setNotesSaving(false);
     }
@@ -1046,6 +1062,7 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced, routePar
                     {notesSaving ? "Saving…" : "Save Notes"}
                   </button>
                   {notesSaved && <span className="text-xs text-green-400">Saved</span>}
+                  {notesError && <span role="alert" className="text-xs text-red-400">Couldn't save your notes. Try again.</span>}
                 </div>
               </section>
 
