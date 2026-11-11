@@ -1,3 +1,5 @@
+import { hrefFor } from "../../nav";
+import ProgressCard from "../../progress/ProgressCard";
 import { useEffect, useMemo, useState } from "react";
 import type { ThemeConfig } from "../../App";
 import FilterBar from "../../charts/FilterBar";
@@ -202,9 +204,13 @@ export default function LiftingCharts({ theme }: Props) {
 
         {empty && (
           <div className="text-center py-16 text-gray-500">
-            No lifting sessions in this date range. Sync HEVY from the Settings tab.
+            No lifting sessions in this date range.{" "}
+            <a href={hrefFor("settings")} className="underline hover:text-gray-300">Sync HEVY in Settings</a>.
           </div>
         )}
+
+        {/* Records are lifetime bests, so they sit outside the date filter above. */}
+        <ProgressCard mode="lifting" />
 
         {filtered && !loading && !empty && (
           <>

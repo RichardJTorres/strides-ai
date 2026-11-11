@@ -6,6 +6,8 @@ import { useChartData } from "../../charts/useChartData";
 import { renderChartDataset } from "../../charts/cards/registry";
 import SportToggleCard from "../../charts/cards/SportToggleCard";
 import InsightsCard from "../../charts/InsightsCard";
+import { navigate } from "../../nav";
+import ProgressCard from "../../progress/ProgressCard";
 import type { ChartDataset } from "../../charts/api";
 import { groupIntoSections } from "../../charts/sections";
 import { useUnits } from "../../UnitsContext";
@@ -17,6 +19,8 @@ const SPORT_TOGGLE_METRICS = new Set(["weekly_elevation", "climbing_ratio"]);
 // Insights is a tab of its own: it uses a fixed 4-vs-8-week window, so the date filter and chart
 // cards don't apply to it.
 const INSIGHTS_SECTION = { id: "insights", label: "Insights" };
+// Streak and records: computed from the plan and all activities, so no date filter either.
+const PROGRESS_SECTION = { id: "progress", label: "Progress" };
 
 type Item = { key: string; datasets: ChartDataset[] };
 
@@ -42,9 +46,10 @@ function toItems(charts: ChartDataset[]): Item[] {
 interface Props {
   mode: Mode;
   theme: ThemeConfig;
+  routeParam?: string | null;
 }
 
-export default function CardioCharts({ mode, theme }: Props) {
+export default function CardioCharts({ mode, theme, routeParam }: Props) {
   // Units follow the app-wide setting (Settings → Units); the charts API still speaks "miles"/"km".
   const unit = chartUnitParam(useUnits().system);
   const { data, loading, error } = useChartData(mode, unit);
@@ -53,7 +58,10 @@ export default function CardioCharts({ mode, theme }: Props) {
   const [customSince, setCustomSince] = useState("");
   const [customUntil, setCustomUntil] = useState("");
   const [showUnavailable, setShowUnavailable] = useState(false);
-  const [activeSectionId, setActiveSectionId] = useState<string>(INSIGHTS_SECTION.id);
+  // The open tab is the URL (#analytics/<id>), so a tab can be linked to. Switching tabs
+  // replaces the history entry rather than stacking one per click.
+  const activeSectionId = routeParam ?? INSIGHTS_SECTION.id;
+  const setActiveSectionId = (id: string) => navigate("analytics", id, { replace: true });
 
   const range = useMemo((): DateRange => {
     if (preset === "custom") return { since: customSince || null, until: customUntil || null };
@@ -77,12 +85,15 @@ export default function CardioCharts({ mode, theme }: Props) {
     () => (data ? groupIntoSections(data.charts, mode) : []),
     [data, mode],
   );
-  const tabs = [INSIGHTS_SECTION, ...sections];
+  const tabs = [INSIGHTS_SECTION, PROGRESS_SECTION, ...sections];
   const isInsights = activeSectionId === INSIGHTS_SECTION.id;
-  const currentSection = isInsights
+  const isProgress = activeSectionId === PROGRESS_SECTION.id;
+  // Insights and Progress need no chart data, so they are not "chart sections".
+  const isStandalone = isInsights || isProgress;
+  const currentSection = isStandalone
     ? undefined
     : sections.find((s) => s.id === activeSectionId) ?? sections[0];
-  const currentTabId = isInsights ? INSIGHTS_SECTION.id : currentSection?.id;
+  const currentTabId = isStandalone ? activeSectionId : currentSection?.id;
   const items = toItems(currentSection?.charts ?? []);
   const itemAvailable = (it: Item) => it.datasets.some((d) => d.available);
   const unavailableCount = items.filter((it) => !itemAvailable(it)).length;
@@ -99,7 +110,7 @@ export default function CardioCharts({ mode, theme }: Props) {
           <h2 className="text-xl font-bold text-gray-100">Training Analytics</h2>
         </div>
 
-        {!isInsights && <FilterBar
+        {!isStandalone && <FilterBar
           preset={preset}
           customSince={customSince}
           customUntil={customUntil}
@@ -146,6 +157,8 @@ export default function CardioCharts({ mode, theme }: Props) {
 
             {isInsights ? (
               <InsightsCard mode={mode} theme={theme} />
+            ) : isProgress ? (
+              <ProgressCard mode={mode} />
             ) : (<>
             <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
               {sectionDescription && <p className="text-gray-400">{sectionDescription}</p>}

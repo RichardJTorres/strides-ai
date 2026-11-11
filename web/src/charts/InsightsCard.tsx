@@ -2,6 +2,7 @@ import type { ThemeConfig } from "../App";
 import { PENDING_CHAT_DRAFT_KEY } from "../pages/chatActivityHandoff";
 import type { DigestMetric, InsightStatus, InsightsDigest } from "./api";
 import { useInsights } from "./useInsights";
+import { Notice } from "../ui/states";
 import { useUnits } from "../UnitsContext";
 
 const STATUS_STYLE: Record<InsightStatus, { label: string; cls: string }> = {
@@ -120,6 +121,12 @@ export default function InsightsCard({ mode, theme }: Props) {
           {loading && <p className="text-gray-500 text-sm animate-pulse">Loading insights…</p>}
 
           {digest && <StatStrip digest={digest} />}
+
+          {/* Rule-based flags from the digest itself: shown whether or not a readout was generated. */}
+          {/* Hybrid repeats a flag id once per sport, so the id alone is not a unique key. */}
+          {digest && digest.flags.map((f, i) => (
+            <Notice key={`${f.id}:${i}`} tone={f.severity === "warning" ? "warning" : "info"}>{f.text}</Notice>
+          ))}
 
           {digest && !digest.sufficient && (
             <p className="text-gray-400 text-sm">

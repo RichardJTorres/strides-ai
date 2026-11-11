@@ -1,9 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Mode, ThemeConfig } from "../App";
 import { formatSyncFreshness } from "./syncFreshness";
-import { PENDING_CHAT_ACTIVITY_KEY } from "./chatActivityHandoff";
+import { handOffActivity } from "./chatActivityHandoff";
+import { hrefFor, navigate } from "../nav";
+import { useProgress, type ProgressRecord } from "../progress/api";
+import { fetchJson, useApi } from "../ui/api";
+import Badge from "../ui/Badge";
+import Button from "../ui/Button";
+import { HR_ZONE_COLORS } from "../ui/colors";
+import { formatDate, formatDuration } from "../ui/format";
+import { ErrorState, LoadingState } from "../ui/states";
 import { useUnits } from "../UnitsContext";
 import {
   buildBaselines,
@@ -61,20 +69,71 @@ interface Props {
   theme: ThemeConfig;
   lastSyncAt: string | null;
   onSynced: () => void;
+  /** The open activity's id from the URL (`#activities/123`), or null. */
+  routeParam?: string | null;
+}
+
+// GET /api/calendar/compliance — the planned workout for a day and how it was scored.
+interface ComplianceDay {
+  workout_type: string;
+  status: "completed" | "modified" | "missed" | "upcoming" | "unscored";
+  planned_distance_km: number | null;
+  actual_distance_km: number | null;
+  matched_activity_id: number | null;
+  note: string;
+}
+
+const PLAN_STATUS: Record<ComplianceDay["status"], { text: string; tone: "success" | "warning" | "danger" | "neutral" }> = {
+  completed: { text: "Completed as planned", tone: "success" },
+  modified: { text: "Shortened", tone: "warning" },
+  missed: { text: "Missed", tone: "danger" },
+  upcoming: { text: "Upcoming", tone: "neutral" },
+  unscored: { text: "Not scored", tone: "neutral" },
+};
+
+/** What was planned for the activity's day and how it compared: the link back to the Calendar. */
+function PlannedBlock({ date, activityId }: { date: string; activityId: number }) {
+  const units = useUnits();
+  const { data } = useApi<{ days: ComplianceDay[] }>(
+    `/api/calendar/compliance?start_date=${date}&end_date=${date}`,
+  );
+  const day = data?.days[0];
+  if (!day) return null; // nothing planned that day (or still loading): no block
+  const status = PLAN_STATUS[day.status];
+  const km = (v: number | null) => (v == null ? null : units.fmt(v * 1000, "distance", { decimals: 1 }));
+  const planned = km(day.planned_distance_km);
+  const actual = km(day.actual_distance_km);
+  return (
+    <section className="space-y-2">
+      <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Planned</h4>
+      <a
+        href={hrefFor("calendar", date)}
+        className="block rounded-lg border border-gray-800 bg-gray-900 px-3 py-2.5 hover:border-gray-600"
+      >
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm font-medium text-gray-100">{day.workout_type}</span>
+          <Badge tone={status.tone}>{status.text}</Badge>
+          {day.matched_activity_id != null && day.matched_activity_id !== activityId && (
+            <span className="text-xs text-gray-500">matched to another activity that day</span>
+          )}
+          <span className="ml-auto text-xs text-gray-500">Open in Calendar →</span>
+        </div>
+        {(planned || actual) && (
+          <p className="text-xs text-gray-400 mt-1">
+            {planned ? `${planned} planned` : "No distance target"}
+            {actual ? ` · ${actual} done` : ""}
+          </p>
+        )}
+        <p className="text-xs text-gray-500 mt-0.5">{day.note}</p>
+      </a>
+    </section>
+  );
 }
 
 type SortKey =
   | "date" | "name" | "distance_m" | "moving_time_s" | "avg_pace_s_per_km" | "avg_hr" | "elevation_gain_m"
   | "climb_m_per_km" | "total_volume_kg" | "total_sets";
 type SortDir = "asc" | "desc";
-
-function formatDuration(s: number): string {
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  if (h) return `${h}h${String(m).padStart(2, "0")}m`;
-  return `${m}m${String(sec).padStart(2, "0")}s`;
-}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function formatSet(s: any, units: ReturnType<typeof useUnits>): string {
@@ -170,23 +229,28 @@ function HrZonesBar({ a }: { a: Activity }) {
   const z4 = a.hr_zone_4_pct ?? 0;
   const z5 = a.hr_zone_5_pct ?? 0;
   if (!a.hr_zone_1_pct && !a.hr_zone_2_pct) return null;
+  const zones: [string, number][] = [["Z1", z1], ["Z2", z2], ["Z3", z3], ["Z4", z4], ["Z5", z5]];
 
   return (
     <div>
       <p className="text-xs text-gray-500 mb-1.5">HR Zone Distribution</p>
       <div className="flex h-5 rounded overflow-hidden gap-px">
-        {z1 > 0 && <div style={{ width: `${z1}%` }} className="bg-gray-500" title={`Z1 ${z1.toFixed(0)}%`} />}
-        {z2 > 0 && <div style={{ width: `${z2}%` }} className="bg-blue-600" title={`Z2 ${z2.toFixed(0)}%`} />}
-        {z3 > 0 && <div style={{ width: `${z3}%` }} className="bg-yellow-500" title={`Z3 ${z3.toFixed(0)}%`} />}
-        {z4 > 0 && <div style={{ width: `${z4}%` }} className="bg-orange-500" title={`Z4 ${z4.toFixed(0)}%`} />}
-        {z5 > 0 && <div style={{ width: `${z5}%` }} className="bg-red-500"    title={`Z5 ${z5.toFixed(0)}%`} />}
+        {zones.map(([label, pct]) =>
+          pct > 0 ? (
+            <div
+              key={label}
+              style={{ width: `${pct}%`, backgroundColor: HR_ZONE_COLORS[label] }}
+              title={`${label} ${pct.toFixed(0)}%`}
+            />
+          ) : null
+        )}
       </div>
       <div className="flex gap-3 mt-1.5 flex-wrap">
-        {[["Z1", z1, "bg-gray-500"], ["Z2", z2, "bg-blue-600"], ["Z3", z3, "bg-yellow-500"], ["Z4", z4, "bg-orange-500"], ["Z5", z5, "bg-red-500"]].map(([label, pct, cls]) =>
-          (pct as number) > 0 ? (
-            <span key={label as string} className="flex items-center gap-1 text-xs text-gray-400">
-              <span className={`inline-block w-2 h-2 rounded-sm ${cls}`} />
-              {label} {(pct as number).toFixed(0)}%
+        {zones.map(([label, pct]) =>
+          pct > 0 ? (
+            <span key={label} className="flex items-center gap-1 text-xs text-gray-400">
+              <span className="inline-block w-2 h-2 rounded-sm" style={{ backgroundColor: HR_ZONE_COLORS[label] }} />
+              {label} {pct.toFixed(0)}%
             </span>
           ) : null
         )}
@@ -257,10 +321,22 @@ function ExerciseBreakdown({ exercises_json }: { exercises_json: string }) {
   );
 }
 
-export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props) {
+export default function Activities({ mode, theme, lastSyncAt, onSynced, routeParam }: Props) {
   const units = useUnits();
   const [activities, setActivities] = useState<Activity[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  // Which activities hold a personal record (refetched after a sync brings new ones in).
+  const progress = useProgress(lastSyncAt).data;
+  const recordsByActivity = useMemo(() => {
+    const map = new Map<number, ProgressRecord[]>();
+    for (const r of progress?.records ?? []) {
+      if (r.activity_id == null) continue;
+      map.set(r.activity_id, [...(map.get(r.activity_id) ?? []), r]);
+    }
+    return map;
+  }, [progress]);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState("");
 
@@ -281,7 +357,8 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
   const [typeFilter, setTypeFilter] = useState("");
 
   // Slide-out panel state
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  // The open activity is the URL (#activities/<id>), so it can be linked to and Back closes it.
+  const selectedId = routeParam ? Number(routeParam) : null;
   const [deepDiveReport, setDeepDiveReport] = useState<string>("");
   const [deepDiveModel, setDeepDiveModel] = useState<string>("");
   const [deepDiveLoading, setDeepDiveLoading] = useState(false);
@@ -294,13 +371,35 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
   const isLiftingActivity = selectedActivity?.sport_type === "WeightTraining";
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
-    fetch(modeOnly ? `/api/activities?mode=${mode}` : "/api/activities")
-      .then((r) => r.json())
-      .then(setActivities)
-      .finally(() => setLoading(false));
+    setLoadError(null);
+    fetchJson<Activity[]>(modeOnly ? `/api/activities?mode=${mode}` : "/api/activities")
+      .then((rows) => { if (!cancelled) setActivities(rows); })
+      // Without this a failed load would read as "no activities match your filters".
+      .catch((e: Error) => { if (!cancelled) setLoadError(`Couldn't load activities: ${e.message}`); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
     // units.system: analysis summaries are rendered server-side in the current units.
-  }, [mode, modeOnly, units.system]);
+  }, [mode, modeOnly, units.system, attempt]);
+
+  // Fill the panel's working state when an activity is opened — from a row click or a link —
+  // once, so a later refresh of the list does not overwrite notes being typed.
+  const panelFor = useRef<number | null>(null);
+  useEffect(() => {
+    if (selectedId === null) {
+      panelFor.current = null;
+      return;
+    }
+    if (!selectedActivity || panelFor.current === selectedId) return;
+    panelFor.current = selectedId;
+    setDeepDiveReport(selectedActivity.deep_dive_report ?? "");
+    setDeepDiveModel(selectedActivity.deep_dive_model ?? "");
+    setDeepDiveError("");
+    setDeepDiveLoading(false);
+    setNotes(selectedActivity.user_notes ?? "");
+    setNotesSaved(false);
+  }, [selectedId, selectedActivity]);
 
   // Reset sort key and modeOnly when switching modes
   useEffect(() => {
@@ -310,24 +409,12 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
   }, [mode]);
 
   function openPanel(id: number) {
-    const act = activities.find((a) => a.id === id);
-    setSelectedId(id);
-    setDeepDiveReport(act?.deep_dive_report ?? "");
-    setDeepDiveModel(act?.deep_dive_model ?? "");
-    setDeepDiveError("");
-    setDeepDiveLoading(false);
-    setNotes(act?.user_notes ?? "");
-    setNotesSaved(false);
+    navigate("activities", id, { replace: selectedId !== null });
   }
 
   function closePanel() {
-    setSelectedId(null);
-    setDeepDiveReport("");
-    setDeepDiveModel("");
-    setDeepDiveError("");
-    setDeepDiveLoading(false);
-    setNotes("");
-    setNotesSaved(false);
+    // Replace, so Back leaves the page instead of reopening what was just closed.
+    navigate("activities", null, { replace: true });
   }
 
   async function handleSync() {
@@ -347,9 +434,9 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
     }
   }
 
-  function discussInChat(activityId: number) {
-    sessionStorage.setItem(PENDING_CHAT_ACTIVITY_KEY, String(activityId));
-    location.hash = "chat";
+  function discussInChat(activity: Activity) {
+    handOffActivity(activity);
+    navigate("chat");
   }
 
   async function runDeepDive(force = false) {
@@ -516,13 +603,9 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
           ) : (
             <span className="text-sm text-gray-500">{formatSyncFreshness(lastSyncAt)}</span>
           )}
-          <button
-            onClick={handleSync}
-            disabled={syncing}
-            className={`px-3 py-1.5 rounded-md ${theme.accentButton} text-white text-sm disabled:opacity-50 transition-colors`}
-          >
+          <Button onClick={handleSync} loading={syncing}>
             {syncing ? "Syncing…" : "Sync Activities"}
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -603,8 +686,10 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
       </div>
 
       {/* Table */}
-      {loading ? (
-        <p className="text-gray-500 text-sm">Loading…</p>
+      {loadError ? (
+        <ErrorState message={loadError} onRetry={() => setAttempt((n) => n + 1)} />
+      ) : loading ? (
+        <LoadingState />
       ) : (
         <div className="overflow-auto flex-1 rounded-lg border border-gray-800">
           <table className="w-full text-sm">
@@ -652,7 +737,9 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
               {filtered.length === 0 ? (
                 <tr>
                   <td colSpan={showAllView ? 10 : isLiftingView ? 7 : 9} className="px-4 py-8 text-center text-gray-500">
-                    No {isLifting ? "sessions" : "activities"} match your filters.
+                    {activities.length === 0
+                      ? `No ${isLifting ? "sessions" : "activities"} yet. Sync to bring them in.`
+                      : `No ${isLifting ? "sessions" : "activities"} match your filters.`}
                   </td>
                 </tr>
               ) : (
@@ -664,12 +751,23 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
                     className={`hover:bg-gray-800/50 transition-colors cursor-pointer ${selectedId === a.id ? "bg-gray-800/60" : ""}`}
                     onClick={() => openPanel(a.id)}
                   >
-                    <td className="px-4 py-2 text-gray-400 whitespace-nowrap">{a.date}</td>
+                    <td className="px-4 py-2 text-gray-400 whitespace-nowrap">{formatDate(a.date)}</td>
                     {showAllView && (
                       <td className="px-4 py-2 text-gray-500 whitespace-nowrap text-xs">{a.sport_type ?? "—"}</td>
                     )}
                     <td className="px-4 py-2">
                       <span className="text-gray-100">{a.name || "—"}</span>
+                      {recordsByActivity.has(a.id) && (
+                        <>
+                          {" "}
+                          <Badge
+                            tone={recordsByActivity.get(a.id)!.some((r) => r.is_new) ? "highlight" : "neutral"}
+                            title={recordsByActivity.get(a.id)!.map((r) => `${r.label}: ${r.formatted}`).join("\n")}
+                          >
+                            PR
+                          </Badge>
+                        </>
+                      )}
                       {a.analysis_summary && (
                         <p className="text-xs text-gray-500 mt-0.5 max-w-xs truncate">{a.analysis_summary}</p>
                       )}
@@ -769,12 +867,13 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
                   )}
                 </div>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  {selectedActivity.date}
+                  {formatDate(selectedActivity.date, "weekday")}
                   {selectedActivity.sport_type ? ` · ${selectedActivity.sport_type}` : ""}
                 </p>
               </div>
               <button
                 onClick={closePanel}
+                aria-label="Close activity"
                 className="text-gray-500 hover:text-gray-300 transition-colors text-xl leading-none shrink-0 mt-0.5"
               >
                 ×
@@ -783,6 +882,18 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
 
             {/* Panel body — scrollable */}
             <div className="overflow-y-auto flex-1 p-5 space-y-6">
+
+              {recordsByActivity.has(selectedActivity.id) && (
+                <a
+                  href={hrefFor("analytics", "progress")}
+                  className="block rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-sm text-yellow-200 hover:border-yellow-500/60"
+                >
+                  <span className="font-medium">Personal record: </span>
+                  {recordsByActivity.get(selectedActivity.id)!.map((r) => `${r.label} (${r.formatted})`).join(" · ")}
+                </a>
+              )}
+
+              <PlannedBlock date={selectedActivity.date} activityId={selectedActivity.id} />
 
               {/* Basic stats row */}
               {isLiftingActivity ? (
@@ -944,7 +1055,7 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
                   <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Deep Dive Analysis</h4>
                   <div className="flex items-center gap-3">
                     <button
-                      onClick={() => discussInChat(selectedActivity.id)}
+                      onClick={() => discussInChat(selectedActivity)}
                       className={`text-xs ${theme.accentClass} hover:underline transition-colors`}
                     >
                       Discuss in chat →
@@ -997,7 +1108,7 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced }: Props)
                         </span>
                       )}
                     </div>
-                    <div className="prose prose-invert prose-sm max-w-none text-gray-300 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm [&_ul]:pl-4 [&_ol]:pl-4 [&_li]:my-0.5 [&_p]:my-1.5 [&_strong]:text-gray-100 [&_hr]:border-gray-700">
+                    <div className="coach-message text-sm text-gray-300">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
                         {deepDiveReport || selectedActivity.deep_dive_report || ""}
                       </ReactMarkdown>
