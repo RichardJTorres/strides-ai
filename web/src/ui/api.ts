@@ -11,7 +11,9 @@ export async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> 
     const detail = body && typeof body.detail === "string" ? body.detail : null;
     throw new Error(detail ?? `Request failed (${res.status})`);
   }
-  return res.json() as Promise<T>;
+  // A 204 (or any empty success) has no body to parse.
+  const text = await res.text();
+  return (text ? JSON.parse(text) : undefined) as T;
 }
 
 export function jsonBody(method: string, body: unknown): RequestInit {
@@ -25,31 +27,41 @@ export interface ApiState<T> {
   reload: () => void;
 }
 
-/** GET `url` on mount and whenever `url` changes; `null` skips the request. */
+/**
+ * GET `url` on mount and whenever `url` changes; `null` skips the request. `reload` refetches and
+ * keeps showing the current data meanwhile; a different `url` never shows the previous one's data.
+ */
 export function useApi<T>(url: string | null): ApiState<T> {
-  const [data, setData] = useState<T | null>(null);
+  const [state, setState] = useState<{ url: string | null; data: T | null; error: string | null }>(
+    { url: null, data: null, error: null },
+  );
   const [loading, setLoading] = useState(url !== null);
-  const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
+    setLoading(url !== null);
     if (url === null) return;
     const controller = new AbortController();
-    setLoading(true);
-    setError(null);
     fetchJson<T>(url, { signal: controller.signal })
-      .then((d) => {
-        setData(d);
+      .then((data) => {
+        if (controller.signal.aborted) return;
+        setState({ url, data, error: null });
         setLoading(false);
       })
       .catch((e: unknown) => {
         if (controller.signal.aborted) return;
-        setError(e instanceof Error ? e.message : "Request failed");
+        setState({ url, data: null, error: e instanceof Error ? e.message : "Request failed" });
         setLoading(false);
       });
     return () => controller.abort();
   }, [url, attempt]);
 
   const reload = useCallback(() => setAttempt((n) => n + 1), []);
-  return { data, loading, error, reload };
+  const current = state.url === url;
+  return {
+    data: current ? state.data : null,
+    loading,
+    error: current ? state.error : null,
+    reload,
+  };
 }

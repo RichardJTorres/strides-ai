@@ -408,6 +408,7 @@ export default function Memories() {
                         </div>
                         {confirmDeleteId === memory.id ? (
                           <div className="flex shrink-0 items-center gap-1.5">
+                            <span className="text-xs text-gray-400">Delete this memory?</span>
                             <Button
                               variant="danger"
                               size="sm"
@@ -416,7 +417,7 @@ export default function Memories() {
                             >
                               Delete
                             </Button>
-                            <Button variant="ghost" size="sm" onClick={() => setConfirmDeleteId(null)}>
+                            <Button variant="ghost" size="sm" autoFocus onClick={() => setConfirmDeleteId(null)}>
                               Keep
                             </Button>
                           </div>
