@@ -201,10 +201,11 @@ export default function DayPanel({
       const res = await fetch(`/api/calendar/plan/${selectedDate}/nutrition`, { method: "POST" });
       if (!res.ok) throw new Error();
       const nutrition = await res.json();
-      setPlan(prev => ({
+      // The workout may have been moved or deleted while this was running.
+      setPlan(prev => prev[selectedDate] ? {
         ...prev,
         [selectedDate]: { ...prev[selectedDate], nutrition_json: JSON.stringify(nutrition) },
-      }));
+      } : prev);
     } catch {
       setNutritionError("Couldn't get nutrition advice. Try again.");
     } finally {
@@ -223,7 +224,7 @@ export default function DayPanel({
       );
       const result = await res.json().catch(() => ({}));
       if (res.ok) {
-        setPlan(prev => ({
+        setPlan(prev => prev[selectedDate] ? {
           ...prev,
           [selectedDate]: {
             ...prev[selectedDate],
@@ -234,7 +235,7 @@ export default function DayPanel({
             }),
             route_analyzed_at: result.analyzed_at,
           },
-        }));
+        } : prev);
       } else {
         setRouteAnalysisError(result.detail || "Failed to analyze route.");
       }

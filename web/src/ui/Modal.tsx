@@ -3,7 +3,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 interface Props {
   title: ReactNode;
   onClose: () => void;
-  /** While true the dialog cannot be dismissed by Escape or the backdrop (a request is running). */
+  /** While true the dialog cannot be dismissed at all (a request is running). */
   busy?: boolean;
   children: ReactNode;
 }
@@ -25,6 +25,21 @@ export default function Modal({ title, onClose, busy = false, children }: Props)
       if (e.key === "Escape" && !live.current.busy) {
         e.stopPropagation();
         live.current.onClose();
+      }
+      // Keep Tab inside the dialog: aria-modal alone does not stop focus leaving it.
+      if (e.key === "Tab" && panel.current) {
+        const focusable = panel.current.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])',
+        );
+        if (focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        const active = document.activeElement;
+        const outside = !panel.current.contains(active) || active === panel.current;
+        if (e.shiftKey ? active === first || outside : active === last) {
+          e.preventDefault();
+          (e.shiftKey ? last : first).focus();
+        }
       }
     };
     window.addEventListener("keydown", onKey, true);
@@ -50,8 +65,9 @@ export default function Modal({ title, onClose, busy = false, children }: Props)
             <h3 className="text-sm font-semibold text-gray-200">{title}</h3>
             <button
               onClick={onClose}
+              disabled={busy}
               aria-label="Close"
-              className="text-gray-500 hover:text-gray-300 text-xl leading-none"
+              className="text-gray-500 hover:text-gray-300 text-xl leading-none disabled:opacity-40"
             >×</button>
           </div>
           {children}

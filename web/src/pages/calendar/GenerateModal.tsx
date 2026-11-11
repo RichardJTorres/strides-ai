@@ -220,7 +220,9 @@ export default function GenerateModal({ initialStart, initialEnd, plan, setPlan,
                   <Button variant="secondary" onClick={generatePlan} disabled={genLoading || genAccepting}>
                     {genLoading ? "Regenerating…" : "Regenerate"}
                   </Button>
-                  <Button variant="ghost" onClick={() => onClose()}>Discard</Button>
+                  <Button variant="ghost" onClick={() => onClose()} disabled={genLoading || genAccepting}>
+                    Discard
+                  </Button>
                 </div>
               </>
             )}

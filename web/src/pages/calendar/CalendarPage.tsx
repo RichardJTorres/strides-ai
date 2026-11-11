@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { navigate } from "../../nav";
 import { useProgress } from "../../progress/api";
 import Button from "../../ui/Button";
@@ -32,17 +32,18 @@ export default function Calendar({ routeParam }: { routeParam?: string | null })
   );
   const {
     prefs, plan, setPlan, activities, compliance, trainingState, toggleBlocked, addRace, removeRace,
-    loading, loadError, prefsError, reload,
+    loading, loadError, prefsError, reload, confirmed, refreshDerived,
   } = useCalendarData(currentMonth);
   // Streak and quests are computed from the plan and activities, so refetch when the plan changes.
-  const progress = useProgress(plan).data;
+  const progressKey = useMemo(() => ({ plan, confirmed }), [plan, confirmed]);
+  const progress = useProgress(progressKey).data;
   // First day of the week whose breakdown is open.
   const [selectedWeek, setSelectedWeek] = useState<string | null>(null);
   // The URL is the selection, so a day can be linked to and Back closes the panel. Moving
   // between days replaces the history entry instead of stacking one per click.
   const selectedDate = validDate(routeParam);
   const setSelectedDate = (date: string | null) =>
-    navigate("calendar", date, { replace: selectedDate !== null && date !== null });
+    navigate("calendar", date, { replace: selectedDate !== null });
   // Arriving on a day that is not on screen (a link, or Back) brings its month into view.
   useEffect(() => {
     if (!selectedDate) return;
@@ -57,6 +58,8 @@ export default function Calendar({ routeParam }: { routeParam?: string | null })
   // Bumped on every selection so the day panel remounts (and so resets) even for the same day.
   const [panelNonce, setPanelNonce] = useState(0);
   const [editMode, setEditMode] = useState(false);
+  // A day reached by Back/Forward (not a click) must not open mid-edit from the previous day.
+  useEffect(() => setEditMode(false), [selectedDate]);
 
   const [range, setRange] = useState<DateRange | null>(null);
   const rangeAnchor = useRef<string | null>(null);
@@ -159,6 +162,7 @@ export default function Calendar({ routeParam }: { routeParam?: string | null })
         body: JSON.stringify({ set, delete: displaced ? [] : [from] }),
       });
       if (!res.ok) throw new Error();
+      refreshDerived();
     } catch {
       rollback();
       setMoveError("Couldn't move that workout, so it was put back. Try again.");

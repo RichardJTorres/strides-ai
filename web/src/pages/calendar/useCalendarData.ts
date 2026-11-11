@@ -18,15 +18,22 @@ export function useCalendarData(currentMonth: Date) {
   // A failed blocked-day / race save (the change is rolled back).
   const [prefsError, setPrefsError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  // Bumped once a write has been confirmed. The plan-derived figures below are also refetched
+  // on every plan change, but an optimistic change (a drag) is shown before the server has it,
+  // so that fetch can return the old numbers; this one cannot.
+  const [confirmed, setConfirmed] = useState(0);
+  const refreshDerived = useCallback(() => setConfirmed(n => n + 1), []);
 
   // Load, projected ramp and plan conflicts depend on the plan and blocked days/races, so they
   // are refetched whenever either changes (the backend is the single source of these numbers).
   // Secondary: the grid is complete without it, so a failure only hides the load strip.
   useEffect(() => {
+    let cancelled = false;
     fetchJson<TrainingState>("/api/calendar/training-state")
-      .then(setTrainingState)
-      .catch(() => setTrainingState(null));
-  }, [plan, prefs, units.system]);
+      .then(state => { if (!cancelled) setTrainingState(state); })
+      .catch(() => { if (!cancelled) setTrainingState(null); });
+    return () => { cancelled = true; };
+  }, [plan, prefs, units.system, confirmed]);
 
   useEffect(() => {
     let cancelled = false;
@@ -79,43 +86,43 @@ export function useCalendarData(currentMonth: Date) {
       });
     return () => { cancelled = true; };
     // units.system: compliance notes are rendered server-side in the current units.
-  }, [currentMonth, units.system, plan]);
+  }, [currentMonth, units.system, plan, confirmed]);
 
-  // Optimistic: show the change at once, put the previous value back if the save fails.
-  const savePrefs = useCallback((updated: Prefs, previous: Prefs) => {
+  // Optimistic: show the change at once. If the save fails, show what the server actually has
+  // (several quick changes can overlap, so "the previous value" is not reliably the saved one).
+  const savePrefs = useCallback((updated: Prefs) => {
     setPrefs(updated);
     setPrefsError(null);
-    fetchJson("/api/calendar/prefs", jsonBody("PUT", updated)).catch(() => {
-      setPrefs(current => (current === updated ? previous : current));
-      setPrefsError("Couldn't save that change, so it was undone. Try again.");
-    });
-  }, []);
+    fetchJson("/api/calendar/prefs", jsonBody("PUT", updated))
+      .then(refreshDerived)
+      .catch(() => {
+        setPrefsError("Couldn't save your last change to blocked days or races. Try again.");
+        fetchJson<Prefs>("/api/calendar/prefs").then(setPrefs).catch(() => {});
+      });
+  }, [refreshDerived]);
 
   const toggleBlocked = (date: string) => {
-    savePrefs(
-      {
-        ...prefs,
-        blocked_days: prefs.blocked_days.includes(date)
-          ? prefs.blocked_days.filter(d => d !== date)
-          : [...prefs.blocked_days, date],
-      },
-      prefs,
-    );
+    savePrefs({
+      ...prefs,
+      blocked_days: prefs.blocked_days.includes(date)
+        ? prefs.blocked_days.filter(d => d !== date)
+        : [...prefs.blocked_days, date],
+    });
   };
 
   const addRace = (race: Race) => {
-    savePrefs(
-      { ...prefs, races: [...prefs.races, race].sort((a, b) => a.date.localeCompare(b.date)) },
-      prefs,
-    );
+    savePrefs({
+      ...prefs,
+      races: [...prefs.races, race].sort((a, b) => a.date.localeCompare(b.date)),
+    });
   };
 
   const removeRace = (date: string) => {
-    savePrefs({ ...prefs, races: prefs.races.filter(r => r.date !== date) }, prefs);
+    savePrefs({ ...prefs, races: prefs.races.filter(r => r.date !== date) });
   };
 
   return {
     prefs, plan, setPlan, activities, compliance, trainingState, toggleBlocked, addRace, removeRace,
-    loading, loadError, prefsError, reload: () => setAttempt(n => n + 1),
+    loading, loadError, prefsError, reload: () => setAttempt(n => n + 1), confirmed, refreshDerived,
   };
 }

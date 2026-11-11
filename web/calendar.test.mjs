@@ -25,15 +25,16 @@ function moveHarness(initial) {
   const pending = [];
   const movePending = { current: false };
   let moveError = null;
+  let refreshes = 0;
   const setPlan = update => { plan = typeof update === 'function' ? update(plan) : update; };
   const move = () => handler('CalendarPage.tsx', 'moveWorkout', {
     plan, movePending, setPlan, selectedDate: null,
-    setSelectedDate() {}, setEditMode() {}, setMoveError(message) { moveError = message; },
+    setSelectedDate() {}, setEditMode() {}, setMoveError(message) { moveError = message; }, refreshDerived() { refreshes += 1; },
     fetch: (_url, options) => new Promise((resolve, reject) => {
       pending.push({ body: JSON.parse(options.body), resolve, reject });
     }),
   });
-  return { move, pending, setPlan, get plan() { return plan; }, get moveError() { return moveError; } };
+  return { move, pending, setPlan, get plan() { return plan; }, get moveError() { return moveError; }, get refreshes() { return refreshes; } };
 }
 
 test('failed move preserves unrelated edits and new workouts', async () => {
@@ -83,6 +84,7 @@ test('network failure restores both swapped workouts and releases the move lock'
   await retry;
   assert.equal(h.plan.B.structure, a.structure);
   assert.equal(h.moveError, null); // cleared by the next attempt
+  assert.equal(h.refreshes, 1); // only the confirmed move refreshes the derived figures
 });
 
 test('editing preserves structure unless the athlete explicitly removes it', async () => {
