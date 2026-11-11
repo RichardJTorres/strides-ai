@@ -186,7 +186,7 @@ export default function Calendar() {
           pushes the grid; docked beside the grid on wide screens so the calendar stays in view. ── */}
       {(range || selectedDate) && (
         <aside className="fixed inset-y-0 right-0 z-30 w-full sm:w-96 lg:static lg:z-auto lg:w-80 lg:flex-shrink-0 border-l border-zinc-800 bg-zinc-900 overflow-y-auto shadow-2xl lg:shadow-none">
-          {range ? (
+          {range && (
             <div className="p-4 space-y-4">
               <div className="flex items-center justify-between">
                 <div>
@@ -210,7 +210,11 @@ export default function Calendar() {
                 Shift-click another day to adjust the range. Click a day or press Esc to clear it.
               </p>
             </div>
-          ) : selectedDate && (
+          )}
+          {/* Hidden, not unmounted, while a range is showing: the panel owns the edit form, so
+              unmounting it would throw away whatever the athlete had typed. */}
+          {selectedDate && (
+            <div className={range ? "hidden" : undefined}>
             <DayPanel
               key={`${selectedDate}:${panelNonce}`}
               selectedDate={selectedDate}
@@ -223,7 +227,8 @@ export default function Calendar() {
               setEditMode={setEditMode}
               onClose={() => setSelectedDate(null)}
             />
-            )}
+            </div>
+          )}
           </aside>
         )}
       </div>

@@ -64,11 +64,14 @@ test('another move is blocked until the pending request settles', async () => {
 });
 
 test('network failure restores both swapped workouts and releases the move lock', async () => {
-  const a = { workout_type: 'Indoor Ride', structure: { blocks: [{ kind: 'freeride', duration_s: 600 }] } };
+  const route = 'https://ridewithgps.com/routes/1';
+  const a = { workout_type: 'Indoor Ride', route_url: route, structure: { blocks: [{ kind: 'freeride', duration_s: 600 }] } };
   const b = { workout_type: 'Easy Run' };
   const h = moveHarness({ A: a, B: b });
   const request = h.move()('A', 'B');
   assert.deepEqual(h.pending[0].body.set[0].structure, a.structure);
+  assert.equal(h.pending[0].body.set[0].route_url, route); // a move carries the route too
+  assert.equal(h.pending[0].body.set[1].route_url, null);
   h.pending[0].reject(new Error('offline'));
   await request;
   assert.deepEqual(h.plan, { A: a, B: b });
@@ -85,7 +88,7 @@ test('editing preserves structure unless the athlete explicitly removes it', asy
     let body;
     const save = handler('DayPanel.tsx', 'saveWorkout', {
       selectedDate: '2026-10-30', selectedWorkout: { structure },
-      form: { workout_type: 'Indoor Ride', duration_min: clear ? '30' : '60', clear_structure: clear },
+      form: { workout_type: 'Indoor Ride', duration_min: clear ? '30' : '60', clear_structure: clear, route_url: 'https://strava.com/routes/2' },
       NO_DISTANCE_WORKOUT_TYPES: new Set(), ROUTE_CAPABLE_WORKOUT_TYPES: new Set(['Indoor Ride']),
       keepsStructure: () => true, kmFromInput: () => null, mFromInput: () => null,
       setPlan() {}, setEditMode() {},
@@ -97,5 +100,6 @@ test('editing preserves structure unless the athlete explicitly removes it', asy
     await save();
     assert.deepEqual(body.structure, clear ? null : structure);
     assert.equal(body.duration_min, clear ? 30 : 60);
+    assert.equal(body.route_url, 'https://strava.com/routes/2');
   }
 });
