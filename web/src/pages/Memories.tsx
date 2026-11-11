@@ -1,5 +1,9 @@
-import { useState, useEffect } from "react";
-import type { ThemeConfig } from "../App";
+import { useCallback, useState, useEffect } from "react";
+import { fetchJson } from "../ui/api";
+import Button from "../ui/Button";
+import { formatDate } from "../ui/format";
+import PageHeader from "../ui/PageHeader";
+import { ErrorState, LoadingState, Notice } from "../ui/states";
 
 interface Memory {
   id: number;
@@ -37,11 +41,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   other: "text-gray-400 bg-gray-500/10 border-gray-500/20",
 };
 
-interface Props {
-  theme: ThemeConfig;
-}
-
-export default function Memories({ theme }: Props) {
+export default function Memories() {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -55,6 +55,8 @@ export default function Memories({ theme }: Props) {
   const [showHistory, setShowHistory] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Review state
   const [reviewing, setReviewing] = useState(false);
@@ -63,13 +65,16 @@ export default function Memories({ theme }: Props) {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [deleting, setDeleting] = useState(false);
 
-  useEffect(() => {
-    fetch("/api/memories")
-      .then((r) => r.json())
-      .then((data: Memory[]) => setMemories(data))
-      .catch(() => {})
+  const load = useCallback(() => {
+    setLoading(true);
+    setLoadError(null);
+    fetchJson<Memory[]>("/api/memories")
+      .then(setMemories)
+      .catch((e: Error) => setLoadError(`Couldn't load memories: ${e.message}`))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(load, [load]);
 
   function startEdit(memory: Memory) {
     setEditingId(memory.id);
@@ -115,14 +120,16 @@ export default function Memories({ theme }: Props) {
 
   async function deleteMemory(id: number) {
     setDeletingId(id);
+    setError(null);
     try {
       const res = await fetch(`/api/memories/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error();
       setMemories((prev) => prev.filter((m) => m.id !== id));
     } catch {
-      // no-op
+      setError("Could not delete that memory. Try again.");
     } finally {
       setDeletingId(null);
+      setConfirmDeleteId(null);
     }
   }
 
@@ -194,47 +201,26 @@ export default function Memories({ theme }: Props) {
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-2xl mx-auto px-6 py-10">
-        <div className="flex items-start justify-between mb-1">
-          <h2 className="text-xl font-semibold text-gray-100">Memories</h2>
-          {memories.length > 0 && (
-            <button
-              onClick={startReview}
-              disabled={reviewing || loading}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-gray-400 border border-gray-700 hover:border-gray-500 hover:text-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {reviewing ? (
-                <>
-                  <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M21 12a9 9 0 1 1-6.219-8.56" strokeLinecap="round"/>
-                  </svg>
-                  Reviewing…
-                </>
-              ) : (
-                <>
-                  <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
-                  </svg>
-                  Review for staleness
-                </>
-              )}
-            </button>
-          )}
-        </div>
-        <p className="text-sm text-gray-500 mb-8">
-          Facts your coach has remembered from previous conversations. You can edit or delete any
-          memory. Temporary facts override standing facts with the same topic during their date range.
-        </p>
+        <PageHeader
+          title="Memories"
+          subtitle="Facts your coach has remembered from previous conversations. You can edit or delete any memory. Temporary facts override standing facts with the same topic during their date range."
+          actions={
+            memories.length > 0 && (
+              <Button variant="ghost" size="sm" onClick={startReview} loading={reviewing} disabled={loading}>
+                {reviewing ? "Reviewing…" : "Review for staleness"}
+              </Button>
+            )
+          }
+        />
         <label className="flex gap-2 text-sm text-gray-400 mb-4">
           <input type="checkbox" checked={showHistory} onChange={(e) => setShowHistory(e.target.checked)} />
           Show superseded memories
         </label>
-        {error && <p role="alert" className="text-red-400 text-sm mb-4">{error}</p>}
+        {error && <Notice tone="error" className="mb-4">{error}</Notice>}
 
         {/* Review results panel */}
         {reviewError && (
-          <div className="mb-6 p-3 rounded-lg border border-red-500/20 bg-red-500/5 text-xs text-red-400">
-            {reviewError}
-          </div>
+          <Notice tone="error" className="mb-6">{reviewError}</Notice>
         )}
 
         {flagged !== null && (
@@ -254,6 +240,7 @@ export default function Memories({ theme }: Props) {
               </div>
               <button
                 onClick={() => { setFlagged(null); setSelected(new Set()); }}
+                aria-label="Close review"
                 className="text-gray-600 hover:text-gray-400 transition-colors"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -286,13 +273,15 @@ export default function Memories({ theme }: Props) {
                   ))}
                 </ul>
                 <div className="px-4 py-3 border-t border-gray-800 flex items-center gap-3">
-                  <button
+                  <Button
+                    variant="danger"
+                    size="sm"
                     onClick={archiveSelected}
-                    disabled={selected.size === 0 || deleting}
-                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-600 hover:bg-red-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    loading={deleting}
+                    disabled={selected.size === 0}
                   >
                     {deleting ? "Archiving…" : `Archive ${selected.size} selected`}
-                  </button>
+                  </Button>
                   <button
                     onClick={() => { setFlagged(null); setSelected(new Set()); }}
                     disabled={deleting}
@@ -312,11 +301,10 @@ export default function Memories({ theme }: Props) {
           </div>
         )}
 
-        {loading && (
-          <p className="text-sm text-gray-600">Loading…</p>
-        )}
+        {loading && <LoadingState />}
+        {loadError && <ErrorState message={loadError} onRetry={load} />}
 
-        {!loading && memories.length === 0 && (
+        {!loading && !loadError && memories.length === 0 && (
           <div className="text-center py-16">
             <p className="text-gray-600 text-sm">No memories saved yet.</p>
             <p className="text-gray-700 text-xs mt-1">
@@ -376,13 +364,14 @@ export default function Memories({ theme }: Props) {
                           className="w-full bg-gray-800 text-gray-200 text-sm rounded px-2 py-1.5 border border-gray-700 focus:outline-none focus:border-gray-500 disabled:opacity-50 resize-none"
                         />
                         <div className="flex gap-2 mt-2">
-                          <button
+                          <Button
+                            size="sm"
                             onClick={() => saveEdit(memory.id)}
-                            disabled={saving || !editContent.trim()}
-                            className={`px-3 py-1 rounded text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${theme.accentButton} text-white`}
+                            loading={saving}
+                            disabled={!editContent.trim()}
                           >
                             {saving ? "Saving…" : "Save"}
-                          </button>
+                          </Button>
                           <button
                             onClick={cancelEdit}
                             disabled={saving}
@@ -412,15 +401,31 @@ export default function Memories({ theme }: Props) {
                             {memory.topic && ` · ${memory.topic}`}
                           </p>
                           <p className="text-xs text-gray-500 mb-1">
-                            {memory.effective_from ? `From ${memory.effective_from}` : "Start date unspecified"}
-                            {memory.effective_until ? ` through ${memory.effective_until}` : " · No end date"}
+                            {memory.effective_from ? `From ${formatDate(memory.effective_from)}` : "Start date unspecified"}
+                            {memory.effective_until ? ` through ${formatDate(memory.effective_until)}` : " · No end date"}
                           </p>
                           <p className="text-sm text-gray-300 leading-relaxed">{memory.content}</p>
                         </div>
+                        {confirmDeleteId === memory.id ? (
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            <Button
+                              variant="danger"
+                              size="sm"
+                              onClick={() => deleteMemory(memory.id)}
+                              loading={deletingId === memory.id}
+                            >
+                              Delete
+                            </Button>
+                            <Button variant="ghost" size="sm" onClick={() => setConfirmDeleteId(null)}>
+                              Keep
+                            </Button>
+                          </div>
+                        ) : (
                         <div className="flex gap-1 md:opacity-0 md:group-hover:opacity-100 focus-within:opacity-100 transition-opacity shrink-0">
                           <button
                             onClick={() => startEdit(memory)}
                             title="Edit"
+                            aria-label="Edit memory"
                             className="p-1 rounded text-gray-600 hover:text-gray-300 transition-colors"
                           >
                             <svg
@@ -438,9 +443,9 @@ export default function Memories({ theme }: Props) {
                             </svg>
                           </button>
                           <button
-                            onClick={() => deleteMemory(memory.id)}
-                            disabled={deletingId === memory.id}
+                            onClick={() => setConfirmDeleteId(memory.id)}
                             title="Delete"
+                            aria-label="Delete memory"
                             className="p-1 rounded text-gray-600 hover:text-red-400 transition-colors disabled:opacity-50"
                           >
                             <svg
@@ -461,6 +466,7 @@ export default function Memories({ theme }: Props) {
                             </svg>
                           </button>
                         </div>
+                        )}
                       </div>
                     )
                   )}

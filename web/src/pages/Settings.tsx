@@ -1,5 +1,9 @@
 import { useState, useEffect, type Dispatch, type SetStateAction } from "react";
-import type { Mode, ThemeConfig } from "../App";
+import { fetchJson, jsonBody } from "../ui/api";
+import Button from "../ui/Button";
+import PageHeader from "../ui/PageHeader";
+import { Notice } from "../ui/states";
+import { MODES, THEMES, type Mode, type ThemeConfig } from "../ui/theme";
 import { useUnits } from "../UnitsContext";
 import type { UnitSystem } from "../units";
 
@@ -24,47 +28,23 @@ interface Props {
   onProviderChanged: () => void;
 }
 
-const MODE_CARDS: {
-  id: Mode;
-  label: string;
-  description: string;
-  accentClass: string;
-  borderSelected: string;
-  dotClass: string;
-}[] = [
-  {
-    id: "running",
-    label: "Running",
-    description: "Running activities only. Coaching focused on pace, cadence, and running load.",
-    accentClass: "text-green-400",
-    borderSelected: "border-green-500",
-    dotClass: "bg-green-500",
-  },
-  {
-    id: "cycling",
-    label: "Cycling",
-    description: "Cycling activities only. Coaching focused on speed, power, and ride load.",
-    accentClass: "text-blue-400",
-    borderSelected: "border-blue-500",
-    dotClass: "bg-blue-500",
-  },
-  {
-    id: "hybrid",
-    label: "Hybrid",
-    description: "All activities. Cross-training coaching across running and cycling.",
-    accentClass: "text-purple-400",
-    borderSelected: "border-purple-500",
-    dotClass: "bg-purple-500",
-  },
-  {
-    id: "lifting",
-    label: "Lifting",
-    description: "Weightlifting sessions from HEVY. Coaching focused on volume, strength, and progressive overload.",
-    accentClass: "text-orange-400",
-    borderSelected: "border-orange-500",
-    dotClass: "bg-orange-500",
-  },
-];
+const MODE_DESCRIPTIONS: Record<Mode, string> = {
+  running: "Running activities only. Coaching focused on pace, cadence, and running load.",
+  cycling: "Cycling activities only. Coaching focused on speed, power, and ride load.",
+  hybrid: "All activities. Cross-training coaching across running and cycling.",
+  lifting:
+    "Weightlifting sessions from HEVY. Coaching focused on volume, strength, and progressive overload.",
+};
+
+// Colours come from the shared theme, so a mode looks the same here as everywhere else.
+const MODE_CARDS = MODES.map((id) => ({
+  id,
+  label: THEMES[id].name,
+  description: MODE_DESCRIPTIONS[id],
+  accentClass: THEMES[id].accentClass,
+  borderSelected: THEMES[id].accentBorderSelected,
+  dotClass: THEMES[id].accentSolid,
+}));
 
 type SyncState = "idle" | "syncing" | "done" | "error";
 
@@ -103,6 +83,7 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
   const [voiceSaving, setVoiceSaving] = useState(false);
   const units = useUnits();
   const [unitsError, setUnitsError] = useState(false);
+  const [modeError, setModeError] = useState(false);
 
   async function handleUnitsChange(next: UnitSystem) {
     setUnitsError(false);
@@ -166,16 +147,14 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
   }
 
   async function handleModeChange(newMode: Mode) {
+    setModeError(false);
     try {
-      await fetch("/api/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: newMode }),
-      });
+      await fetchJson("/api/settings", jsonBody("PUT", { mode: newMode }));
+      setMode(newMode);
     } catch {
-      // best-effort; switch mode locally regardless
+      // Stay on the current mode: switching only locally would be undone by the next reload.
+      setModeError(true);
     }
-    setMode(newMode);
   }
 
   async function handleProviderChange(providerId: string) {
@@ -254,8 +233,7 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-2xl mx-auto px-6 py-10">
-        <h2 className="text-xl font-semibold text-gray-100 mb-1">Settings</h2>
-        <p className="text-sm text-gray-500 mb-8">Configure your Strides AI preferences.</p>
+        <PageHeader title="Settings" subtitle="Configure your Strides AI preferences." />
 
         <div className="space-y-8">
           <section>
@@ -293,6 +271,11 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
                 );
               })}
             </div>
+            {modeError && (
+              <Notice tone="error" className="mt-2">
+                Couldn't switch mode. Check the server is running and try again.
+              </Notice>
+            )}
           </section>
 
           <section>
@@ -463,13 +446,9 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
               the first time, or to rehydrate the database after moving to a new machine.
             </p>
             <div className="flex items-center gap-4">
-              <button
-                onClick={handleFullSync}
-                disabled={syncState === "syncing"}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${theme.accentButton} text-white`}
-              >
+              <Button onClick={handleFullSync} loading={syncState === "syncing"}>
                 {syncState === "syncing" ? "Syncing…" : "Full Sync"}
-              </button>
+              </Button>
               {syncState === "done" && (
                 <span className="text-xs text-gray-400">
                   {syncCount === 0
@@ -495,20 +474,16 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
               <span className="text-gray-400">hevy.com/settings?developer</span>).
             </p>
             <div className="flex items-center gap-3">
-              <button
-                onClick={() => handleHevySync(false)}
-                disabled={hevySyncState === "syncing"}
-                className="px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed bg-orange-600 hover:bg-orange-500 text-white"
-              >
+              <Button onClick={() => handleHevySync(false)} loading={hevySyncState === "syncing"}>
                 {hevySyncState === "syncing" ? "Syncing…" : "Sync New"}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="secondary"
                 onClick={() => handleHevySync(true)}
                 disabled={hevySyncState === "syncing"}
-                className="px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed bg-gray-700 hover:bg-gray-600 text-white"
               >
                 Full Sync
-              </button>
+              </Button>
               {hevySyncState === "done" && (
                 <span className="text-xs text-gray-400">
                   {hevySyncCount === 0
@@ -527,13 +502,13 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
                 groups.
               </p>
               <div className="flex items-center gap-3">
-                <button
+                <Button
+                  variant="secondary"
                   onClick={handleTemplatesSync}
-                  disabled={templatesSyncState === "syncing"}
-                  className="px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed bg-gray-700 hover:bg-gray-600 text-white"
+                  loading={templatesSyncState === "syncing"}
                 >
                   {templatesSyncState === "syncing" ? "Refreshing…" : "Refresh Templates"}
-                </button>
+                </Button>
                 {templatesSyncState === "done" && (
                   <span className="text-xs text-gray-400">
                     {templatesSynced === 0

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState, type CSSProperties } from "react";
 import Chat from "./pages/Chat";
 import Activities from "./pages/Activities";
 import Calendar from "./pages/Calendar";
@@ -7,61 +7,14 @@ import Settings from "./pages/Settings";
 import Memories from "./pages/Memories";
 import { UnitsProvider } from "./UnitsContext";
 import { DEFAULT_UNIT_SYSTEM, parseUnitSystem, type UnitSystem } from "./units";
+import { navigate, parseHash, type Route, type Tab } from "./nav";
+import { LoadingState } from "./ui/states";
+import { ThemeProvider, THEMES, type Mode } from "./ui/theme";
 
 const Charts = lazy(() => import("./pages/Charts"));
 
-type Tab = "chat" | "activities" | "analytics" | "calendar" | "profile" | "memories" | "settings";
-export type Mode = "running" | "cycling" | "hybrid" | "lifting";
-
-export interface ThemeConfig {
-  accentClass: string;
-  accentBg: string;
-  accentBorder: string;
-  accentButton: string;
-  accentFocus: string;
-  accentActive: string;
-  label: string;
-}
-
-// All Tailwind class strings are written as complete literals so JIT scanner picks them up
-export const THEMES: Record<Mode, ThemeConfig> = {
-  running: {
-    accentClass: "text-green-400",
-    accentBg: "bg-green-500/20",
-    accentBorder: "border-green-500/30",
-    accentButton: "bg-green-600 hover:bg-green-500",
-    accentFocus: "focus:border-green-500/40 focus:ring-green-500/10",
-    accentActive: "bg-green-500/20 text-green-400",
-    label: "Running Coach",
-  },
-  cycling: {
-    accentClass: "text-blue-400",
-    accentBg: "bg-blue-500/20",
-    accentBorder: "border-blue-500/30",
-    accentButton: "bg-blue-600 hover:bg-blue-500",
-    accentFocus: "focus:border-blue-500/40 focus:ring-blue-500/10",
-    accentActive: "bg-blue-500/20 text-blue-400",
-    label: "Cycling Coach",
-  },
-  hybrid: {
-    accentClass: "text-purple-400",
-    accentBg: "bg-purple-500/20",
-    accentBorder: "border-purple-500/30",
-    accentButton: "bg-purple-600 hover:bg-purple-500",
-    accentFocus: "focus:border-purple-500/40 focus:ring-purple-500/10",
-    accentActive: "bg-purple-500/20 text-purple-400",
-    label: "Hybrid Coach",
-  },
-  lifting: {
-    accentClass: "text-orange-400",
-    accentBg: "bg-orange-500/20",
-    accentBorder: "border-orange-500/30",
-    accentButton: "bg-orange-600 hover:bg-orange-500",
-    accentFocus: "focus:border-orange-500/40 focus:ring-orange-500/10",
-    accentActive: "bg-orange-500/20 text-orange-400",
-    label: "Lifting Coach",
-  },
-};
+// Re-exported so pages can keep importing the theme types from the app root.
+export { THEMES, type Mode, type ThemeConfig } from "./ui/theme";
 
 const ICONS: Record<Tab, JSX.Element> = {
   chat: (
@@ -117,17 +70,21 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "memories", label: "Memories" },
 ];
 
-const VALID_TABS = new Set<string>([...TABS.map((t) => t.id), "settings"]);
+// Tabs that fit in the phone's bottom bar; the rest sit behind "More".
+const MOBILE_PRIMARY: Tab[] = ["chat", "activities", "analytics", "calendar"];
 
-function tabFromHash(): Tab {
-  const hash = location.hash.slice(1) === "charts" ? "analytics" : location.hash.slice(1); // legacy #charts
-  return VALID_TABS.has(hash) ? (hash as Tab) : "chat";
-}
+const MORE_ICON = (
+  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>
+  </svg>
+);
 
 type ModeMeta = { activity_label: string; hidden_tabs: string[]; has_analysis: boolean };
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>(tabFromHash);
+  const [route, setRoute] = useState<Route>(() => parseHash(location.hash));
+  const tab = route.tab;
+  const [moreOpen, setMoreOpen] = useState(false);
   const [mode, setMode] = useState<Mode>("running");
   const [modeLoaded, setModeLoaded] = useState(false);
   const [initialUnits, setInitialUnits] = useState<UnitSystem>(DEFAULT_UNIT_SYSTEM);
@@ -136,7 +93,10 @@ export default function App() {
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
 
   useEffect(() => {
-    const onHashChange = () => setTab(tabFromHash());
+    const onHashChange = () => {
+      setRoute(parseHash(location.hash));
+      setMoreOpen(false);
+    };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
@@ -169,10 +129,6 @@ export default function App() {
   // Load backend capabilities on mount
   useEffect(refreshStatus, []);
 
-  function navigate(t: Tab) {
-    location.hash = t;
-  }
-
   const theme = THEMES[mode];
 
   const hiddenTabs = new Set<Tab>((modeMeta[mode]?.hidden_tabs ?? []) as Tab[]);
@@ -186,19 +142,25 @@ export default function App() {
 
   if (!modeLoaded) {
     return (
-      <div className="flex h-screen bg-gray-950 items-center justify-center text-gray-500 text-sm">
-        Loading…
+      <div className="flex h-screen bg-gray-950 items-center justify-center">
+        <LoadingState />
       </div>
     );
   }
 
   const visibleTabs = TABS.filter((t) => !hiddenTabs.has(t.id as Tab));
   const allNavTabs: { id: Tab; label: string }[] = [...visibleTabs, { id: "settings", label: "Settings" }];
-  const mobileNavTabs = allNavTabs.filter((t) => t.id !== "calendar" && t.id !== "memories");
+  const mobilePrimary = allNavTabs.filter((t) => MOBILE_PRIMARY.includes(t.id));
+  const mobileMore = allNavTabs.filter((t) => !MOBILE_PRIMARY.includes(t.id));
+  const moreActive = mobileMore.some((t) => t.id === tab);
 
   return (
     <UnitsProvider initial={initialUnits}>
-    <div className="flex h-dvh bg-gray-950 text-gray-100">
+    <ThemeProvider mode={mode}>
+    <div
+      className="flex h-dvh bg-gray-950 text-gray-100"
+      style={{ "--accent": theme.accentHex } as CSSProperties}
+    >
       {/* Sidebar — desktop only */}
       <nav className="hidden md:flex w-48 shrink-0 bg-gray-900 border-r border-gray-800 flex-col">
         <div className="p-4 border-b border-gray-800">
@@ -259,13 +221,35 @@ export default function App() {
         )}
         {tab === "calendar" && <Calendar />}
         {tab === "profile" && <Profile mode={mode} theme={theme} />}
-        {tab === "memories" && <Memories theme={theme} />}
+        {tab === "memories" && <Memories />}
         {tab === "settings" && <Settings mode={mode} setMode={setMode} theme={theme} onProviderChanged={refreshStatus} />}
       </main>
 
       {/* Bottom nav — mobile only */}
+      {moreOpen && (
+        <div className="md:hidden fixed inset-0 z-20" onClick={() => setMoreOpen(false)}>
+          <ul
+            id="more-menu"
+            className="absolute bottom-14 right-2 w-44 rounded-lg border border-gray-800 bg-gray-900 p-1 shadow-xl"
+          >
+            {mobileMore.map((t) => (
+              <li key={t.id}>
+                <button
+                  onClick={() => navigate(t.id)}
+                  className={`w-full text-left px-3 py-2.5 rounded-md text-sm flex items-center gap-2 ${
+                    tab === t.id ? `${theme.accentActive} font-medium` : "text-gray-300"
+                  }`}
+                >
+                  {ICONS[t.id]}
+                  {t.label}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <nav className="md:hidden fixed bottom-0 inset-x-0 bg-gray-900 border-t border-gray-800 flex z-20">
-        {mobileNavTabs.map((t) => (
+        {mobilePrimary.map((t) => (
           <button
             key={t.id}
             onClick={() => navigate(t.id)}
@@ -274,11 +258,25 @@ export default function App() {
             }`}
           >
             {ICONS[t.id]}
-            <span className="text-[9px] leading-none mt-0.5">{t.label}</span>
+            <span className="text-[10px] leading-none mt-0.5">{t.label}</span>
           </button>
         ))}
+        {mobileMore.length > 0 && (
+          <button
+            onClick={() => setMoreOpen((open) => !open)}
+            aria-expanded={moreOpen}
+            aria-controls="more-menu"
+            className={`flex-1 flex flex-col items-center justify-center gap-0.5 py-2.5 px-1 transition-colors ${
+              moreActive || moreOpen ? `${theme.accentClass}` : "text-gray-500"
+            }`}
+          >
+            {MORE_ICON}
+            <span className="text-[10px] leading-none mt-0.5">More</span>
+          </button>
+        )}
       </nav>
     </div>
+    </ThemeProvider>
     </UnitsProvider>
   );
 }
