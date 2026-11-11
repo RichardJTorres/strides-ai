@@ -53,8 +53,9 @@ web: web/node_modules
 
 # ── Test ──────────────────────────────────────────────────────────────────────
 .PHONY: test
-test: $(VENV)/bin/activate
+test: $(VENV)/bin/activate web/node_modules
 	$(PY) -m pytest tests/ -v
+	cd web && npm test
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 .PHONY: _check_env

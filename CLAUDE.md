@@ -23,7 +23,7 @@ make api              # FastAPI only (uvicorn, :8000)
 make web              # Vite dev server only (:5173)
 
 # Tests & formatting
-make test             # runs pytest tests/ -v
+make test             # runs pytest tests/ -v, then the frontend tests (cd web && npm test)
 ```
 
 `make install` is idempotent — it uses file-based Make targets (`$(VENV)/bin/activate`, `web/node_modules`) so it only re-runs what's stale. It also installs pre-commit hooks; the hook runs `make test` on every commit.
