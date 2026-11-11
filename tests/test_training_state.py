@@ -228,6 +228,50 @@ def test_tool_saves_but_warns_on_overload(mocker):
     save.assert_called_once()
 
 
+def _route_passed(mocker, existing_rows, workout_type):
+    """route_url that one `set` saves when the DB already holds `existing_rows` for the date."""
+    from types import SimpleNamespace
+
+    from strides_ai.backends.base import BaseBackend
+
+    day = (date.today() + timedelta(days=2)).isoformat()
+    mocker.patch("strides_ai.backends.base.db.get_all_activities", return_value=steady_rows())
+    mocker.patch(
+        "strides_ai.backends.base.db.get_training_plan",
+        side_effect=lambda start=None, end=None: existing_rows if start == day else [],
+    )
+    mocker.patch("strides_ai.backends.base.db.get_calendar_prefs", return_value={})
+    mocker.patch("strides_ai.backends.base.db.get_unit_system", return_value=UnitSystem.METRIC)
+    save = mocker.patch("strides_ai.backends.base.db.save_planned_workout")
+    BaseBackend._execute_update_training_plan(
+        SimpleNamespace(
+            _check_cancelled=lambda: None,
+            _budget=SimpleNamespace(tool=lambda a: None, changes=[]),
+        ),
+        {"set": [{"date": day, "workout_type": workout_type, "duration_min": 90}]},
+    )
+    save.assert_called_once()
+    return save.call_args.kwargs["route_url"]
+
+
+ROUTE = "https://ridewithgps.com/routes/123"
+
+
+def test_tool_edit_keeps_the_attached_route(mocker):
+    # The tool has no route field; overwriting a ride must not drop the athlete's route.
+    existing = [{"workout_type": "Long Ride", "route_url": ROUTE}]
+    assert _route_passed(mocker, existing, "Long Ride") == ROUTE
+
+
+def test_tool_edit_drops_route_when_new_type_cannot_have_one(mocker):
+    existing = [{"workout_type": "Long Ride", "route_url": ROUTE}]
+    assert _route_passed(mocker, existing, "Yoga") is None
+
+
+def test_tool_set_on_empty_date_has_no_route(mocker):
+    assert _route_passed(mocker, [], "Easy Run") is None
+
+
 def test_recovery_streak_spanning_history_into_plan_is_flagged():
     # Three rising actual weeks before this one, then a higher planned current week.
     rows, i = [], 1

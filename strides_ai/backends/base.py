@@ -5,8 +5,12 @@ from typing import Callable
 
 from .. import db
 from ..budget import Limits, TurnBudget, bounded_turn, BudgetExceeded, estimate
+from ..compliance import RIDE_WORKOUT_TYPES, RUN_WORKOUT_TYPES
 from ..units import Quantity, UnitSystem, to_si
 from ..workout_structure import INDOOR_RIDE_GUIDANCE, WORKOUT_STRUCTURE_SCHEMA
+
+# Mirrors ROUTE_CAPABLE_WORKOUT_TYPES in web/src/pages/Calendar.tsx.
+ROUTE_CAPABLE_WORKOUT_TYPES = RUN_WORKOUT_TYPES | RIDE_WORKOUT_TYPES
 
 SAVE_MEMORY_DESCRIPTION = (
     "Save an important fact about the athlete to persistent memory. "
@@ -509,6 +513,12 @@ class BaseBackend(ABC):
                 continue
             workout_type = workout.get("workout_type", "Workout")
             distance_km, elevation_m = _workout_measurements(workout)
+            # The tool can't see or set routes, and the upsert overwrites every column, so
+            # carry the athlete's attached route over when the new type can still have one.
+            route_url = None
+            if workout_type in ROUTE_CAPABLE_WORKOUT_TYPES:
+                existing = db.get_training_plan(date, date)
+                route_url = existing[0].get("route_url") if existing else None
             db.save_planned_workout(
                 date,
                 workout_type,
@@ -517,6 +527,7 @@ class BaseBackend(ABC):
                 elevation_m,
                 workout.get("duration_min"),
                 workout.get("intensity"),
+                route_url=route_url,
                 structure=workout.get("structure"),
             )
             self._budget.changes.append(

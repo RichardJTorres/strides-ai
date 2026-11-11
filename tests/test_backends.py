@@ -180,7 +180,7 @@ def test_claude_stream_turn_updates_training_plan(mock_anthropic, mocker):
     text, _, plan_changes = ClaudeBackend("key", []).stream_turn("sys", "plan it", lambda _: None)
 
     mock_set.assert_called_once_with(
-        "2026-10-01", "Long Ride", None, 60, None, None, None, structure=None
+        "2026-10-01", "Long Ride", None, 60, None, None, None, route_url=None, structure=None
     )
     mock_delete.assert_called_once_with("2026-10-03")
     assert plan_changes == [
@@ -331,7 +331,7 @@ def test_gemini_stream_turn_updates_training_plan(mock_genai, mocker):
     text, _, plan_changes = GeminiBackend("key", []).stream_turn("sys", "plan it", lambda _: None)
 
     mock_set.assert_called_once_with(
-        "2026-10-01", "Long Ride", None, None, None, None, None, structure=None
+        "2026-10-01", "Long Ride", None, None, None, None, None, route_url=None, structure=None
     )
     mock_delete.assert_called_once_with("2026-10-03")
     assert plan_changes == [
@@ -536,7 +536,7 @@ def test_openai_stream_turn_updates_training_plan(mock_openai, mocker):
     text, _, plan_changes = OpenAIBackend("key", []).stream_turn("sys", "plan it", lambda _: None)
 
     mock_set.assert_called_once_with(
-        "2026-10-01", "Long Ride", None, None, None, None, None, structure=None
+        "2026-10-01", "Long Ride", None, None, None, None, None, route_url=None, structure=None
     )
     mock_delete.assert_called_once_with("2026-10-03")
     assert plan_changes == [
@@ -689,7 +689,7 @@ def test_ollama_stream_turn_updates_training_plan(mocker):
     )
 
     mock_set.assert_called_once_with(
-        "2026-10-01", "Long Ride", None, None, None, None, None, structure=None
+        "2026-10-01", "Long Ride", None, None, None, None, None, route_url=None, structure=None
     )
     mock_delete.assert_called_once_with("2026-10-03")
     assert plan_changes == [
