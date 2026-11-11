@@ -272,6 +272,37 @@ def test_tool_set_on_empty_date_has_no_route(mocker):
     assert _route_passed(mocker, [], "Easy Run") is None
 
 
+def test_tool_edit_drops_route_when_the_sport_changes(mocker):
+    existing = [{"workout_type": "Long Run", "route_url": ROUTE}]
+    assert _route_passed(mocker, existing, "Long Ride") is None
+
+
+def test_tool_delete_and_set_same_date_keeps_the_replacement(mocker):
+    from types import SimpleNamespace
+
+    from strides_ai.backends.base import BaseBackend
+
+    day = (date.today() + timedelta(days=2)).isoformat()
+    other = (date.today() + timedelta(days=3)).isoformat()
+    for name, ret in (
+        ("get_all_activities", steady_rows()),
+        ("get_training_plan", []),
+        ("get_calendar_prefs", {}),
+        ("get_unit_system", UnitSystem.METRIC),
+    ):
+        mocker.patch(f"strides_ai.backends.base.db.{name}", return_value=ret)
+    save = mocker.patch("strides_ai.backends.base.db.save_planned_workout")
+    delete = mocker.patch("strides_ai.backends.base.db.delete_planned_workout")
+    budget = SimpleNamespace(tool=lambda a: None, changes=[])
+    BaseBackend._execute_update_training_plan(
+        SimpleNamespace(_check_cancelled=lambda: None, _budget=budget),
+        {"delete": [day, other], "set": [{"date": day, "workout_type": "Easy Run"}]},
+    )
+    save.assert_called_once()
+    delete.assert_called_once_with(other)  # `day` was replaced, not cleared
+    assert [(c["action"], c["date"]) for c in budget.changes] == [("set", day), ("delete", other)]
+
+
 def test_recovery_streak_spanning_history_into_plan_is_flagged():
     # Three rising actual weeks before this one, then a higher planned current week.
     rows, i = [], 1

@@ -5,7 +5,7 @@ from typing import Callable
 
 from .. import db
 from ..budget import Limits, TurnBudget, bounded_turn, BudgetExceeded, estimate
-from ..compliance import RIDE_WORKOUT_TYPES, RUN_WORKOUT_TYPES
+from ..compliance import RIDE_WORKOUT_TYPES, RUN_WORKOUT_TYPES, classify_workout_type
 from ..units import Quantity, UnitSystem, to_si
 from ..workout_structure import INDOOR_RIDE_GUIDANCE, WORKOUT_STRUCTURE_SCHEMA
 
@@ -515,10 +515,14 @@ class BaseBackend(ABC):
             distance_km, elevation_m = _workout_measurements(workout)
             # The tool can't see or set routes, and the upsert overwrites every column, so
             # carry the athlete's attached route over when the new type can still have one.
+            # A running route is no use to a ride, so it only survives within the same sport.
             route_url = None
             if workout_type in ROUTE_CAPABLE_WORKOUT_TYPES:
                 existing = db.get_training_plan(date, date)
-                route_url = existing[0].get("route_url") if existing else None
+                if existing and classify_workout_type(
+                    existing[0].get("workout_type")
+                ) is classify_workout_type(workout_type):
+                    route_url = existing[0].get("route_url")
             db.save_planned_workout(
                 date,
                 workout_type,
@@ -536,7 +540,12 @@ class BaseBackend(ABC):
             set_summaries.append(f"{date} ({workout_type})")
 
         delete_summaries: list[str] = []
+        # `set` already overwrites, so a date in both lists keeps its replacement: models are
+        # told to combine delete + set when regenerating, and deleting last would wipe it.
+        set_dates = {w.get("date") for w in args.get("set", []) or []}
         for date in args.get("delete", []) or []:
+            if date in set_dates:
+                continue
             db.delete_planned_workout(date)
             self._budget.changes.append({"action": "delete", "date": date})
             delete_summaries.append(date)
