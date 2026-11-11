@@ -52,14 +52,16 @@ async def save_notes(
 def _planned_context(activity, units: UnitSystem) -> str:
     """The planned workout for the activity's day, so the deep dive can judge it against intent."""
     try:
-        day = date.fromisoformat(activity.date or "")
+        when = date.fromisoformat(activity.date or "")
     except ValueError:
         return ""
     plan_rows = get_training_plan(activity.date, activity.date)
     if not plan_rows:
         return ""
-    scored = compliance_for_range(plan_rows, get_all_activities(), day, day, date.today(), units)
-    return planned_workout_block(plan_rows[0], scored[0] if scored else None, units)
+    scored = compliance_for_range(plan_rows, get_all_activities(), when, when, date.today(), units)
+    day = scored[0] if scored else None
+    is_match = day is not None and day.matched_activity_id == activity.id
+    return planned_workout_block(plan_rows[0], day, units, is_match=is_match)
 
 
 @router.post("/activities/{activity_id}/deep-dive", response_model=DeepDiveResponse)

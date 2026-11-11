@@ -227,3 +227,17 @@ def test_planned_block_omits_missing_targets():
     block = planned_workout_block({"workout_type": "Yoga", "distance_km": None})
     assert "Planned: Yoga\n" in block
     assert "Plan-vs-actual" not in block and "Goal / notes" not in block
+
+
+def test_planned_block_does_not_score_an_activity_the_plan_was_not_matched_to():
+    from datetime import date
+
+    from strides_ai.activity_context import planned_workout_block
+    from strides_ai.compliance import ComplianceStatus, DayCompliance
+
+    # A run was planned and missed; the deep dive is for a ride done that day instead.
+    day = DayCompliance(date(2026, 6, 1), "Easy Run", ComplianceStatus.MISSED, 5.0, None, None, "x")
+    block = planned_workout_block({"workout_type": "Easy Run"}, day, is_match=False)
+    assert "Planned: Easy Run" in block
+    assert "NOT the one matched" in block
+    assert "Plan-vs-actual" not in block and "missed" not in block

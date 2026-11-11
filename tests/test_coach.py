@@ -259,6 +259,28 @@ def test_progress_section_reports_streak_and_quests(tmp_db):
     assert f"{(monday + timedelta(days=6)).isoformat()} Long Run:" in result
 
 
+def test_lifting_coach_gets_no_cardio_streak(tmp_db):
+    from strides_ai.analytics.aggregation import monday_of
+
+    last_week = monday_of(date.today()) - timedelta(days=5)
+    db.save_planned_workout(last_week.isoformat(), "Easy Run", None, 5.0, None, 30, "easy")
+    rows = [_make_row(id=1, date=last_week.isoformat(), distance_m=6000)]
+    assert "Plan streak" in build_system("", [], mode="running", activities=rows)
+    assert "Streak, Quests and Records" not in build_system("", [], mode="lifting", activities=rows)
+
+
+def test_coach_voice_comes_before_the_long_computed_sections(tmp_db):
+    # Optional sections are dropped from the first one that does not fit, so the short voice
+    # instruction must not sit behind the long ones.
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    db.save_planned_workout(tomorrow, "Easy Run", None, 5.0, None, 30, "easy")
+    prompt = build_system("", [], coach_voice="technical")
+    voice = next(i for i, p in enumerate(prompt.priority) if "Coaching Voice" in p)
+    assert all(
+        "Streak, Quests" not in p and "Training State" not in p for p in prompt.priority[:voice]
+    )
+
+
 def test_digest_flags_reach_the_coach_without_a_cached_readout(tmp_db):
     # Nothing for 10 days after steady training: the rule-based gap flag must be in the prompt
     # even though no Analytics readout was ever generated.

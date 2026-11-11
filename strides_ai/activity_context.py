@@ -136,10 +136,15 @@ def build_activity_card(activity: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM)
 
 
 def planned_workout_block(
-    plan_row: dict | None, day=None, units: UnitSystem = DEFAULT_UNIT_SYSTEM
+    plan_row: dict | None,
+    day=None,
+    units: UnitSystem = DEFAULT_UNIT_SYSTEM,
+    is_match: bool = True,
 ) -> str:
     """What was planned for an activity's day, for the deep-dive prompt. `plan_row` is the
-    training_plan row for that date (None -> ""), `day` its compliance.DayCompliance if scored."""
+    training_plan row for that date (None -> ""), `day` its compliance.DayCompliance if scored.
+    `is_match` is False when the plan was matched to a different activity (or to none): the
+    day's score then says nothing about this activity, so it is left out and the model is told."""
     if not plan_row:
         return ""
     from .db.models import TrainingPlan
@@ -158,6 +163,13 @@ def planned_workout_block(
     lines = ["## Planned workout for this day", "Planned: " + " · ".join(facts)]
     if plan_row.get("description"):
         lines.append(f"Goal / notes: {plan_row['description']}")
+    if not is_match:
+        lines.append(
+            "This activity is NOT the one matched to that plan (different sport, or another "
+            "activity that day was). Mention the plan only if it helps explain this session; do "
+            "not judge this activity against it."
+        )
+        return "\n".join(lines)
     if day is not None:
         lines.append(f"Plan-vs-actual: {day.status.value} — {day.note}")
     lines.append(

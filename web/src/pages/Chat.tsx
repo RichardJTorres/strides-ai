@@ -214,7 +214,7 @@ const MessageList = memo(function MessageList({
             {" — "}
             {/* Opens on the first day the coach changed, so the edit is in view. */}
             <a
-              href={hrefFor("calendar", planChanges.map((c) => c.date).sort()[0])}
+              href={hrefFor("calendar", planChanges.map((c) => c.date).filter(Boolean).sort()[0])}
               className="underline hover:text-gray-400"
             >
               View calendar

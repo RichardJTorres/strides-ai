@@ -284,25 +284,33 @@ _WEEK_WORDS = {
 }
 
 
-def _progress_section(activities: list[dict], units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
+def _progress_section(
+    activities: list[dict], mode: str = "running", units: UnitSystem = DEFAULT_UNIT_SYSTEM
+) -> str:
     """What the athlete sees as their streak, weekly quests and new records (progress.py), so the
-    coach can acknowledge them and never contradicts the app. Empty when there is nothing to say."""
+    coach can acknowledge them and never contradicts the app. Empty when there is nothing to say.
+
+    The streak and quests come from the planned-workout calendar, which lifting mode does not
+    use, so the lifting coach only hears about new lifting records."""
     from .progress import build_progress
 
     progress = build_progress(db.get_training_plan(), activities, datetime.now().date(), units)
     streak, week = progress.streak, progress.streak.this_week
-    fresh = [r for r in progress.records if r.is_new]
-    if streak.weeks == 0 and streak.best_weeks == 0 and week.status == "no_plan" and not fresh:
+    lifting = mode == "lifting"
+    fresh = [r for r in progress.records if r.is_new and (r.sport == "lift" or not lifting)]
+    lines = []
+    if not lifting and (streak.weeks or streak.best_weeks or week.status != "no_plan"):
+        lines.append(
+            f"Plan streak: {streak.weeks} week(s) (best {streak.best_weeks}); "
+            f"{_WEEK_WORDS[week.status]} ({week.done} done, {week.missed} missed, "
+            f"{week.upcoming} to go). A week counts with at least one planned workout done and "
+            f"at most {streak.max_misses} missed; shortened workouts count."
+        )
+        if progress.quests:
+            lines.append("This week's quests:")
+            lines += [f"  - {q.date} {q.label}: {_QUEST_WORDS[q.status]}" for q in progress.quests]
+    if not lines and not fresh:
         return ""
-    lines = [
-        f"Plan streak: {streak.weeks} week(s) (best {streak.best_weeks}); {_WEEK_WORDS[week.status]}"
-        f" ({week.done} done, {week.missed} missed, {week.upcoming} to go). A week counts with at "
-        f"least one planned workout done and at most {streak.max_misses} missed; shortened "
-        "workouts count."
-    ]
-    if progress.quests:
-        lines.append("This week's quests:")
-        lines += [f"  - {q.date} {q.label}: {_QUEST_WORDS[q.status]}" for q in progress.quests]
     if fresh:
         lines.append("New personal records (last 14 days):")
         for r in fresh:
@@ -410,9 +418,11 @@ def build_system(
             _memories_section(memories),
             _calendar_prefs_section(),
             _upcoming_workouts_section(units),
-            _training_state_section(activities or [], mode, units),
-            _progress_section(activities or [], units),
+            # Optional sections are added in this order until one does not fit, so the short
+            # voice instruction goes before the long computed ones rather than being lost to them.
             _voice_section(coach_voice),
+            _training_state_section(activities or [], mode, units),
+            _progress_section(activities or [], mode, units),
         ],
         sections,
         periods,
