@@ -241,8 +241,16 @@ def test_longest_and_biggest_week_with_ties_previous_and_ids():
     assert longest.formatted == "30.0 km" and longest.sport == "run"
     assert longest.is_new is False
     assert (longest.previous.date, longest.previous.formatted) == ("2026-03-20", "25.0 km")
+
+
+def test_biggest_week_sums_the_week_and_has_no_activity():
+    # Steady 10 km every other day is 30 or 40 km a week; one extra 35 km run makes its week
+    # (Mon 6 - Sun 12 April) the single biggest.
+    rows = steady_rows() + [run_row(900, date(2026, 4, 9), km=35)]
     week = records(rows)["run.biggest_week"]
-    assert week.date == "2026-04-06" and week.activity_id is None  # Monday of the 30 km week
+    assert (week.date, week.activity_id) == ("2026-04-06", None)
+    assert week.value == pytest.approx(75_000) and week.formatted == "75.0 km"
+    assert week.previous is not None and week.previous.value == pytest.approx(40_000)
 
 
 def test_same_day_tie_goes_to_lowest_id_and_first_record_has_no_previous():
@@ -355,8 +363,8 @@ def test_build_progress_end_to_end():
     assert result.records == []
 
 
-def test_progress_scores_every_sport_whatever_the_mode():
-    # A planned ride completed by a ride counts; nothing here is mode-filtered.
+def test_progress_matches_each_planned_day_against_its_own_sport():
+    # A planned ride is completed by a ride: progress takes every activity, with no mode filter.
     plan = [plan_row(MON - timedelta(days=6), "Long Ride", km=50)]
     acts = [run_row(1, MON - timedelta(days=6), km=50, sport_type="Ride")]
     assert build_progress(plan, acts, TODAY, UnitSystem.METRIC).streak.weeks == 1
