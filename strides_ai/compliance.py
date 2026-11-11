@@ -221,6 +221,26 @@ def compute_range_compliance(
     ]
 
 
+def compliance_for_range(
+    plan_rows: list[dict],
+    activity_rows: list[dict],
+    start: date,
+    end: date,
+    today: date,
+    units: UnitSystem = DEFAULT_UNIT_SYSTEM,
+) -> list[DayCompliance]:
+    """Compliance for the planned workouts dated start..end (inclusive), from DB rows.
+
+    The single entry point every feature uses, so they cannot disagree: `activity_rows` must be
+    ALL activities, never a mode-filtered subset. The plan is shared across modes and each day is
+    matched by its own workout type's sport, so filtering by mode would turn a completed planned
+    ride into "missed" whenever the athlete is in running mode."""
+    planned = [p for p in planned_workouts_from_rows(plan_rows) if start <= p.date <= end]
+    return compute_range_compliance(
+        planned, compliance_activities_from_rows(activity_rows), today, units
+    )
+
+
 def summarize_compliance(days: list[DayCompliance]) -> ComplianceSummary:
     completed = sum(d.status is ComplianceStatus.COMPLETED for d in days)
     modified = sum(d.status is ComplianceStatus.MODIFIED for d in days)

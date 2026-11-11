@@ -83,10 +83,18 @@ def _insights_inputs(session: Session, mode: str, units: UnitSystem):
     plan_rows = [w.model_dump() for w in calendar_crud.get_plan(session)]
     prefs = calendar_crud.get_prefs(session)
     state = build_training_state(rows, plan_rows, prefs, mode, units, today)
+    all_rows = [r.model_dump() for r in crud.get_all(session)]
     digest = build_digest(
-        rows, mode, units, today, plan_rows=plan_rows, races=prefs.get("races", []), state=state
+        rows,
+        mode,
+        units,
+        today,
+        plan_rows=plan_rows,
+        races=prefs.get("races", []),
+        state=state,
+        compliance_rows=all_rows,
     )
-    return digest, digest_fingerprint(rows, mode, units, today, plan_rows, prefs)
+    return digest, digest_fingerprint(rows, mode, units, today, plan_rows, prefs, all_rows)
 
 
 def _load_cached_insights(session: Session, mode: str, units: UnitSystem) -> dict | None:
