@@ -184,3 +184,46 @@ def test_sport_type_missing_falls_back_to_exercises_json_for_lifting_detection()
     activity["total_volume_kg"] = 100.0
     card = build_activity_card(activity)
     assert "Sets: 5" in card
+
+
+# ── planned_workout_block (deep-dive context) ──
+
+
+def test_planned_block_is_empty_without_a_plan():
+    from strides_ai.activity_context import planned_workout_block
+
+    assert planned_workout_block(None) == ""
+    assert planned_workout_block({}) == ""
+
+
+def test_planned_block_lists_the_plan_and_how_it_was_scored():
+    from datetime import date
+
+    from strides_ai.activity_context import planned_workout_block
+    from strides_ai.compliance import ComplianceStatus, DayCompliance
+    from strides_ai.units import UnitSystem
+
+    plan = {
+        "workout_type": "Long Ride",
+        "distance_km": 80.0,
+        "elevation_m": 900,
+        "duration_min": 240,
+        "intensity": "easy",
+        "description": "Keep it aerobic.",
+    }
+    day = DayCompliance(
+        date(2026, 6, 1), "Long Ride", ComplianceStatus.MODIFIED, 80.0, 50.0, 7, "short of target"
+    )
+    block = planned_workout_block(plan, day, UnitSystem.IMPERIAL)
+    assert block.startswith("## Planned workout for this day")
+    assert "Planned: Long Ride · 49.71 mi · 2953 ft climbing · 240 min · easy intensity" in block
+    assert "Goal / notes: Keep it aerobic." in block
+    assert "Plan-vs-actual: modified — short of target" in block
+
+
+def test_planned_block_omits_missing_targets():
+    from strides_ai.activity_context import planned_workout_block
+
+    block = planned_workout_block({"workout_type": "Yoga", "distance_km": None})
+    assert "Planned: Yoga\n" in block
+    assert "Plan-vs-actual" not in block and "Goal / notes" not in block

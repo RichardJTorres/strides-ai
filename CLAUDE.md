@@ -68,7 +68,7 @@ Select backend with `PROVIDER=claude` (default), `PROVIDER=gemini`, `PROVIDER=op
 
 ### System prompt assembly (`strides_ai/coach.py`)
 
-On every turn `build_system()` assembles: mode-specific base prompt → units section (the athlete's `unit_system`) → current date/time → athlete profile text → coaching memories → calendar constraints (upcoming races and blocked-out days from `calendar_prefs`) → upcoming planned workouts (next `PLANNED_WORKOUTS_WINDOW_DAYS` days, default 60) → recent activities training log (last 30, `RECENT_ACTIVITIES_IN_SYSTEM`).
+On every turn `build_system()` assembles: mode-specific base prompt → units section (the athlete's `unit_system`) → current date/time → athlete profile text → coaching memories → calendar constraints (upcoming races and blocked-out days from `calendar_prefs`) → upcoming planned workouts (next `PLANNED_WORKOUTS_WINDOW_DAYS` days, default 60; the next `WORKOUT_DETAIL_DAYS` also carry the athlete's notes and route-fit verdict) → training state, with the Analytics digest's deterministic flags and, when fresh, the cached readout → streak, quests and new records (`progress.py`) → recent activities training log (last 30, `RECENT_ACTIVITIES_IN_SYSTEM`).
 
 At session start, `build_initial_history()` seeds the full activity log (all activities) as the first exchange in `_history`, so older runs are accessible even though the system prompt only carries the 30 most recent. Last 40 messages (`RECALL_MESSAGES`) from the DB are appended after.
 
@@ -106,7 +106,7 @@ Every stored measurement is SI-based: meters, s/km, m/km, kg, ml (`TrainingPlan.
 
 Two stages:
 1. **Metric computation** (run automatically on sync): fetches Strava streams (heartrate, velocity, cadence, altitude), computes cardiac decoupling %, HR zone distribution (Z1–Z5), pace fade, cadence std dev, effort efficiency score (0–100), and elevation flags. Writes results back to the `activities` table. Produces a rule-based NL summary (no LLM) stored as `analysis_summary`.
-2. **Deep dive** (on-demand via `/api/activities/{id}/deep-dive`): calls `backend.stateless_turn()` with downsampled stream data (60-sec intervals + inflection points). Result cached in `deep_dive_report`; re-triggerable.
+2. **Deep dive** (on-demand via `/api/activities/{id}/deep-dive`): calls `backend.stateless_turn()` with downsampled stream data (60-sec intervals + inflection points). The prompt also carries the planned workout for that day and how it was scored (`activity_context.planned_workout_block`), so the report can judge the session against its intent. Result cached in `deep_dive_report`; re-triggerable.
 
 Sync backfills up to 10 pending/unanalyzed activities per cycle. Strava 429 responses mark activities `analysis_status='pending'` for retry.
 

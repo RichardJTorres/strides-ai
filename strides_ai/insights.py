@@ -602,7 +602,7 @@ def _flags(digest: dict) -> list[dict]:
             add(
                 "low_easy_share",
                 "info",
-                f"{m['label']} is {m['formatted']}; most training is above easy intensity.",
+                f"{m['label']} is {m['formatted']}, below the 70% that keeps most training easy.",
                 [m["id"]],
             )
 

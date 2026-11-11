@@ -25,6 +25,9 @@ RECENT_ACTIVITIES_IN_SYSTEM = 30
 # How far ahead planned workouts are surfaced, wide enough to cover a multi-week
 # training block the coach is asked to generate or regenerate.
 PLANNED_WORKOUTS_WINDOW_DAYS = 60
+# Planned workouts this close get their notes and route verdict too; further out, just the row.
+WORKOUT_DETAIL_DAYS = 14
+WORKOUT_NOTE_CHARS = 160
 # How far back to look when summarizing plan-vs-actual compliance for the coach (today inclusive).
 COMPLIANCE_WINDOW_DAYS = 14
 
@@ -161,9 +164,34 @@ def _training_state_section(
     today = datetime.now().date()
     plan_rows, prefs = db.get_training_plan(), db.get_calendar_prefs()
     state = build_training_state(rows, plan_rows, prefs, mode, units, today)
-    text = render_for_prompt(state, units)
-    readout = _dashboard_readout(rows, plan_rows, prefs, mode, units, today, activities)
-    return f"{text}\n\n{readout}" if readout else text
+    parts = [
+        render_for_prompt(state, units),
+        _digest_flags(rows, plan_rows, prefs, mode, units, today, state, activities),
+        _dashboard_readout(rows, plan_rows, prefs, mode, units, today, activities),
+    ]
+    return "\n\n".join(p for p in parts if p)
+
+
+def _digest_flags(rows, plan_rows, prefs, mode, units, today, state, all_rows) -> str:
+    """The Analytics digest's rule-based flags. They are deterministic (no LLM), so unlike the
+    dashboard readout below they are always current and never depend on a cached report."""
+    from .insights import build_digest
+
+    digest = build_digest(
+        rows,
+        mode,
+        units,
+        today,
+        plan_rows=plan_rows,
+        races=prefs.get("races", []),
+        state=state,
+        compliance_rows=all_rows,
+    )
+    if not digest["flags"]:
+        return ""
+    lines = ["Flags (rule-based, from the last 4 weeks vs the prior 8; shown on Analytics):"]
+    lines += [f"  - ({f['severity']}) {f['text']}" for f in digest["flags"]]
+    return "\n".join(lines)
 
 
 def _dashboard_readout(rows, plan_rows, prefs, mode, units, today, all_rows) -> str:
@@ -188,10 +216,34 @@ def _dashboard_readout(rows, plan_rows, prefs, mode, units, today, all_rows) -> 
     return "\n".join(lines)
 
 
+def _workout_detail_lines(workout: dict) -> str:
+    """Indented notes / route-fit lines for one planned workout ("" when it has neither)."""
+    import json
+
+    out = ""
+    description = " ".join((workout.get("description") or "").split())
+    if description:
+        if len(description) > WORKOUT_NOTE_CHARS:
+            description = description[: WORKOUT_NOTE_CHARS - 1].rstrip() + "…"
+        out += f"\n{'':10s}   notes: {description}"
+    try:
+        route = json.loads(workout.get("route_analysis_json") or "null")
+    except (TypeError, ValueError):
+        route = None
+    if isinstance(route, dict) and route.get("verdict"):
+        verdict = str(route["verdict"]).replace("_", " ")
+        why = " ".join(str(route.get("explanation") or "").split())[:WORKOUT_NOTE_CHARS]
+        out += f"\n{'':10s}   attached route: {verdict}" + (f" — {why}" if why else "")
+    elif workout.get("route_url"):
+        out += f"\n{'':10s}   attached route: not yet analyzed"
+    return out
+
+
 def _upcoming_workouts_section(units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
     upcoming = db.get_upcoming_planned_workouts(days=PLANNED_WORKOUTS_WINDOW_DAYS)
     if not upcoming:
         return ""
+    detail_until = (datetime.now().date() + timedelta(days=WORKOUT_DETAIL_DAYS)).isoformat()
     header = "Date       | Type             | Distance  | Elevation | Duration | Intensity"
     sep = "-" * 78
     rows = []
@@ -208,6 +260,9 @@ def _upcoming_workouts_section(units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
         structure = structure_from_json(w.get("structure_json"))
         if structure:
             row += f"\n{'':10s}   structure: {render_text(structure)}"
+        # The athlete's notes and route verdict, for the sessions close enough to discuss.
+        if w["date"] <= detail_until:
+            row += _workout_detail_lines(w)
         rows.append(row)
     return (
         f"## Upcoming Planned Workouts (next {PLANNED_WORKOUTS_WINDOW_DAYS} days)\n"
@@ -217,6 +272,43 @@ def _upcoming_workouts_section(units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
         + "\n"
         + "\n".join(rows)
     )
+
+
+_QUEST_WORDS = {"done": "done", "partial": "shortened", "pending": "to do", "missed": "missed"}
+_WEEK_WORDS = {
+    "hit": "this week already counts",
+    "on_track": "on track this week",
+    "at_risk": "one more missed workout breaks it",
+    "lost": "this week will not count",
+    "no_plan": "nothing planned this week",
+}
+
+
+def _progress_section(activities: list[dict], units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
+    """What the athlete sees as their streak, weekly quests and new records (progress.py), so the
+    coach can acknowledge them and never contradicts the app. Empty when there is nothing to say."""
+    from .progress import build_progress
+
+    progress = build_progress(db.get_training_plan(), activities, datetime.now().date(), units)
+    streak, week = progress.streak, progress.streak.this_week
+    fresh = [r for r in progress.records if r.is_new]
+    if streak.weeks == 0 and streak.best_weeks == 0 and week.status == "no_plan" and not fresh:
+        return ""
+    lines = [
+        f"Plan streak: {streak.weeks} week(s) (best {streak.best_weeks}); {_WEEK_WORDS[week.status]}"
+        f" ({week.done} done, {week.missed} missed, {week.upcoming} to go). A week counts with at "
+        f"least one planned workout done and at most {streak.max_misses} missed; shortened "
+        "workouts count."
+    ]
+    if progress.quests:
+        lines.append("This week's quests:")
+        lines += [f"  - {q.date} {q.label}: {_QUEST_WORDS[q.status]}" for q in progress.quests]
+    if fresh:
+        lines.append("New personal records (last 14 days):")
+        for r in fresh:
+            was = f", was {r.previous.formatted}" if r.previous else ""
+            lines.append(f"  - {r.label}: {r.formatted} on {r.date}{was}")
+    return "## Streak, Quests and Records\n" + "\n".join(lines)
 
 
 def _calendar_prefs_section() -> str:
@@ -319,6 +411,7 @@ def build_system(
             _calendar_prefs_section(),
             _upcoming_workouts_section(units),
             _training_state_section(activities or [], mode, units),
+            _progress_section(activities or [], units),
             _voice_section(coach_voice),
         ],
         sections,

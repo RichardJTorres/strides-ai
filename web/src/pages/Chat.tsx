@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import type { Mode, ThemeConfig } from "../App";
 import { handleChatAdmission } from "./chatAdmission";
 import { formatSyncFreshness } from "./syncFreshness";
+import { hrefFor } from "../nav";
 import NewRecordBanner from "../progress/NewRecordBanner";
 import ProposalCards, { type ProfileProposal } from "./profile/ProposalCards";
 import { PENDING_CHAT_DRAFT_KEY, takeActivityHandoff } from "./chatActivityHandoff";
@@ -195,6 +196,8 @@ const MessageList = memo(function MessageList({
           <div className="mt-4 text-xs text-gray-600 italic text-center">
             Remembered:{" "}
             {savedMemories.map((m) => `[${m.category}] ${m.content}`).join(" · ")}
+            {" — "}
+            <a href={hrefFor("memories")} className="underline hover:text-gray-400">View memories</a>
           </div>
         )}
 
@@ -209,13 +212,13 @@ const MessageList = memo(function MessageList({
             {planChanges.filter((c) => c.action === "delete").length > 0 &&
               `removed ${planChanges.filter((c) => c.action === "delete").length}`}
             {" — "}
-            <button
-              type="button"
-              onClick={() => { window.location.hash = "#calendar"; }}
+            {/* Opens on the first day the coach changed, so the edit is in view. */}
+            <a
+              href={hrefFor("calendar", planChanges.map((c) => c.date).sort()[0])}
               className="underline hover:text-gray-400"
             >
               View calendar
-            </button>
+            </a>
           </div>
         )}
 
@@ -394,7 +397,9 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
           `/api/history/search?q=${encodeURIComponent(searchQuery.trim())}&limit=20&mode=${mode}`
         );
         const { results } = await res.json();
-        setSearchResults(results);
+        setSearchResults(res.ok && Array.isArray(results) ? results : []);
+      } catch {
+        setSearchResults([]); // a failed search shows no matches rather than throwing
       } finally {
         setSearching(false);
       }

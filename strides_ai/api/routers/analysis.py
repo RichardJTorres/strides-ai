@@ -2,15 +2,17 @@
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlmodel import Session
 
+from ...activity_context import planned_workout_block
 from ...analysis import RateLimitError
+from ...compliance import compliance_for_range
 from ...db import activities as crud
-from ...db import get_all_memories, get_profile_fields
+from ...db import get_all_activities, get_all_memories, get_profile_fields, get_training_plan
 from ...memory_context import memories_section
 from ...db.engine import get_session
 from ...profile import profile_to_text
@@ -45,6 +47,19 @@ async def save_notes(
     if crud.get(session, activity_id) is None:
         raise HTTPException(status_code=404, detail="Activity not found")
     crud.update_analysis(session, activity_id, {"user_notes": body.notes})
+
+
+def _planned_context(activity, units: UnitSystem) -> str:
+    """The planned workout for the activity's day, so the deep dive can judge it against intent."""
+    try:
+        day = date.fromisoformat(activity.date or "")
+    except ValueError:
+        return ""
+    plan_rows = get_training_plan(activity.date, activity.date)
+    if not plan_rows:
+        return ""
+    scored = compliance_for_range(plan_rows, get_all_activities(), day, day, date.today(), units)
+    return planned_workout_block(plan_rows[0], scored[0] if scored else None, units)
 
 
 @router.post("/activities/{activity_id}/deep-dive", response_model=DeepDiveResponse)
@@ -101,6 +116,10 @@ async def deep_dive(
     context = memories_section(get_all_memories())
     if context:
         system_prompt += f"\n\n{context}"
+
+    planned = _planned_context(activity, units)
+    if planned:
+        system_prompt += f"\n\n{planned}"
 
     def _run_llm():
         return backend.stateless_turn(system_prompt, user_content, on_token=lambda _: None)
