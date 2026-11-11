@@ -3,17 +3,19 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 
-// Exercise the component's actual handlers with deferred requests and React-style updates.
-const source = readFileSync(new URL('./src/pages/Calendar.tsx', import.meta.url), 'utf8');
-const ast = ts.createSourceFile('Calendar.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-function handler(name, bindings) {
+// Exercise the components' actual handlers with deferred requests and React-style updates.
+// Each handler is lifted out of its source file by name and run with its free variables bound,
+// so it must stay a `const` declaration in that file and keep those variable names.
+function handler(file, name, bindings) {
+  const source = readFileSync(new URL(`./src/pages/calendar/${file}`, import.meta.url), 'utf8');
+  const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   let declaration;
   function visit(node) {
     if (ts.isVariableDeclaration(node) && node.name.getText(ast) === name) declaration = node;
     ts.forEachChild(node, visit);
   }
   visit(ast);
-  assert.ok(declaration, `Missing production handler: ${name}`);
+  assert.ok(declaration, `Missing production handler: ${name} in ${file}`);
   const compiled = ts.transpile(`const ${declaration.getText(ast)};`, { target: ts.ScriptTarget.ES2022 });
   return new Function(...Object.keys(bindings), `${compiled}\nreturn ${name};`)(...Object.values(bindings));
 }
@@ -23,7 +25,7 @@ function moveHarness(initial) {
   const pending = [];
   const movePending = { current: false };
   const setPlan = update => { plan = typeof update === 'function' ? update(plan) : update; };
-  const move = () => handler('moveWorkout', {
+  const move = () => handler('CalendarPage.tsx', 'moveWorkout', {
     plan, movePending, setPlan, selectedDate: null,
     setSelectedDate() {}, setEditMode() {},
     fetch: (_url, options) => new Promise((resolve, reject) => {
@@ -81,7 +83,7 @@ test('editing preserves structure unless the athlete explicitly removes it', asy
   const structure = { blocks: [{ kind: 'steady', duration_s: 3600, pct: 0.75 }] };
   for (const clear of [false, true]) {
     let body;
-    const save = handler('saveWorkout', {
+    const save = handler('DayPanel.tsx', 'saveWorkout', {
       selectedDate: '2026-10-30', selectedWorkout: { structure },
       form: { workout_type: 'Indoor Ride', duration_min: clear ? '30' : '60', clear_structure: clear },
       NO_DISTANCE_WORKOUT_TYPES: new Set(), ROUTE_CAPABLE_WORKOUT_TYPES: new Set(['Indoor Ride']),

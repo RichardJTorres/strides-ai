@@ -9,7 +9,7 @@ from ..compliance import RIDE_WORKOUT_TYPES, RUN_WORKOUT_TYPES, classify_workout
 from ..units import Quantity, UnitSystem, to_si
 from ..workout_structure import INDOOR_RIDE_GUIDANCE, WORKOUT_STRUCTURE_SCHEMA
 
-# Mirrors ROUTE_CAPABLE_WORKOUT_TYPES in web/src/pages/Calendar.tsx.
+# Mirrors ROUTE_CAPABLE_WORKOUT_TYPES in web/src/pages/calendar/constants.ts.
 ROUTE_CAPABLE_WORKOUT_TYPES = RUN_WORKOUT_TYPES | RIDE_WORKOUT_TYPES
 
 SAVE_MEMORY_DESCRIPTION = (
