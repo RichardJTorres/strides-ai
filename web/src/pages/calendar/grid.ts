@@ -4,11 +4,13 @@ import type { Activity, ComplianceDay, GridCell, Plan, WeekSummary } from "./typ
 export const dateToStr = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
-/** The month as full weeks, including the leading/trailing days of the adjacent months, so a
- *  training week is never cut off mid-row. */
+/** The month as full Monday-Sunday weeks, including the leading/trailing days of the adjacent
+ *  months, so a training week is never cut off mid-row. Monday-first matches every weekly
+ *  figure the backend computes (ramp, streak, quests), so a row is exactly one of its weeks. */
 export function buildGrid(month: Date): GridCell[] {
   const daysInMonth = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
-  const firstDow = new Date(month.getFullYear(), month.getMonth(), 1).getDay();
+  // Days between the Monday that starts the first row and the 1st (getDay(): Sunday = 0).
+  const firstDow = (new Date(month.getFullYear(), month.getMonth(), 1).getDay() + 6) % 7;
   const totalCells = Math.ceil((firstDow + daysInMonth) / 7) * 7;
   const gridStart = new Date(month.getFullYear(), month.getMonth(), 1 - firstDow);
   return Array.from({ length: totalCells }, (_, i) => {

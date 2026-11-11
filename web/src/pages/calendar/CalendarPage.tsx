@@ -1,4 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { navigate } from "../../nav";
+import { useProgress } from "../../progress/api";
+import Button from "../../ui/Button";
+import { formatDate } from "../../ui/format";
+import { ErrorState, Notice } from "../../ui/states";
+
 import DayPanel from "./DayPanel";
 import GenerateModal from "./GenerateModal";
 import { buildGrid, chunkWeeks, dateToStr, rangeLength, splitActivities } from "./grid";
@@ -8,7 +14,16 @@ import type { DateRange, GridProps, Workout } from "./types";
 import { useCalendarData } from "./useCalendarData";
 import WeekModal from "./WeekModal";
 
-export default function Calendar() {
+/** "YYYY-MM-DD" that is a real calendar day, else null (the route only checks the shape). */
+function validDate(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const [y, m, d] = value.split("-").map(Number);
+  return dateToStr(new Date(y, m - 1, d)) === value ? value : null;
+}
+
+/** `routeParam` is the selected day from the URL (`#calendar/2026-11-10`), or null. */
+export default function Calendar({ routeParam }: { routeParam?: string | null }) {
+
   const today = new Date();
   const todayStr = dateToStr(today);
 
@@ -17,10 +32,28 @@ export default function Calendar() {
   );
   const {
     prefs, plan, setPlan, activities, compliance, trainingState, toggleBlocked, addRace, removeRace,
+    loading, loadError, prefsError, reload,
   } = useCalendarData(currentMonth);
+  // Streak and quests are computed from the plan and activities, so refetch when the plan changes.
+  const progress = useProgress(plan).data;
   // First day of the week whose breakdown is open.
   const [selectedWeek, setSelectedWeek] = useState<string | null>(null);
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  // The URL is the selection, so a day can be linked to and Back closes the panel. Moving
+  // between days replaces the history entry instead of stacking one per click.
+  const selectedDate = validDate(routeParam);
+  const setSelectedDate = (date: string | null) =>
+    navigate("calendar", date, { replace: selectedDate !== null && date !== null });
+  // Arriving on a day that is not on screen (a link, or Back) brings its month into view.
+  useEffect(() => {
+    if (!selectedDate) return;
+    setCurrentMonth(month =>
+      buildGrid(month).some(c => c.dateStr === selectedDate)
+        ? month
+        : new Date(Number(selectedDate.slice(0, 4)), Number(selectedDate.slice(5, 7)) - 1, 1)
+    );
+  }, [selectedDate]);
+  // A failed drag-to-move (the grid is rolled back).
+  const [moveError, setMoveError] = useState<string | null>(null);
   // Bumped on every selection so the day panel remounts (and so resets) even for the same day.
   const [panelNonce, setPanelNonce] = useState(0);
   const [editMode, setEditMode] = useState(false);
@@ -34,11 +67,11 @@ export default function Calendar() {
   useEffect(() => {
     if (!range) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !genModalOpen) setRange(null);
+      if (e.key === "Escape" && !genModalOpen && !selectedWeek) setRange(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [range, genModalOpen]);
+  }, [range, genModalOpen, selectedWeek]);
 
   // Close the week breakdown on month navigation, so it never shows a week that is off screen.
   useEffect(() => {
@@ -57,8 +90,8 @@ export default function Calendar() {
 
   // Shift-click extends a range from the last plainly-clicked day (the anchor); a plain click
   // moves the anchor and clears any range. The range feeds "Generate plan" for those days.
-  const handleDayClick = (e: React.MouseEvent, date: string) => {
-    if (e.shiftKey) {
+  const activateDay = (date: string, extend: boolean) => {
+    if (extend) {
       const anchor = rangeAnchor.current ?? selectedDate ?? date;
       rangeAnchor.current = anchor;
       setRange(anchor <= date ? { start: anchor, end: date } : { start: date, end: anchor });
@@ -68,6 +101,7 @@ export default function Calendar() {
     setRange(null);
     openDay(date);
   };
+  const handleDayClick = (e: React.MouseEvent, date: string) => activateDay(date, e.shiftKey);
 
   // Drag a planned workout onto another day. An occupied target swaps the two workouts. Bulk
   // upsert both days (no deletes needed); optimistic, reverted if the save fails.
@@ -96,6 +130,7 @@ export default function Calendar() {
     const swapped = displaced
       ? { ...displaced, date: from, nutrition_json: null, route_analysis_json: null }
       : undefined;
+    setMoveError(null);
     const rollback = () => setPlan(prev => {
       const next = { ...prev };
       // Keep any edits made while the move was saving, including on unrelated days.
@@ -123,9 +158,10 @@ export default function Calendar() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ set, delete: displaced ? [] : [from] }),
       });
-      if (!res.ok) rollback();
+      if (!res.ok) throw new Error();
     } catch {
       rollback();
+      setMoveError("Couldn't move that workout, so it was put back. Try again.");
     } finally {
       movePending.current = false;
     }
@@ -157,11 +193,11 @@ export default function Calendar() {
   const grid: GridProps = {
     plan, activities, compliance, prefs, trainingState, todayStr, selectedDate, range,
     conflictByDate, dragFrom, dragOver, setDragFrom, setDragOver, movePending, handleDayClick,
-    moveWorkout, openWeek: setSelectedWeek,
+    activateDay, moveWorkout, openWeek: setSelectedWeek,
   };
 
   return (
-    <div className="flex h-full bg-zinc-900 text-zinc-100 overflow-hidden">
+    <div className="flex flex-col md:flex-row h-full bg-gray-950 text-gray-100 overflow-hidden">
 
       <Sidebar
         prefs={prefs}
@@ -171,42 +207,54 @@ export default function Calendar() {
       />
 
       {/* ── Main column ── */}
-      <div className="flex-1 flex min-w-0 overflow-hidden">
+      <div className="flex-1 flex min-w-0 min-h-0 overflow-hidden">
       <div className="flex-1 min-w-0 flex flex-col overflow-y-auto">
-        <MonthGrid
-          currentMonth={currentMonth}
-          setCurrentMonth={setCurrentMonth}
-          goToToday={goToToday}
-          weeks={weeks}
-          grid={grid}
-        />
+        {loadError ? (
+          <div className="p-4"><ErrorState message={loadError} onRetry={reload} /></div>
+        ) : (
+          <>
+            {(prefsError || moveError) && (
+              <div className="px-4 pt-3 space-y-2">
+                {prefsError && <Notice tone="error">{prefsError}</Notice>}
+                {moveError && <Notice tone="error">{moveError}</Notice>}
+              </div>
+            )}
+            <MonthGrid
+              currentMonth={currentMonth}
+              setCurrentMonth={setCurrentMonth}
+              goToToday={goToToday}
+              weeks={weeks}
+              grid={grid}
+              progress={progress}
+              loading={loading}
+            />
+          </>
+        )}
       </div>
 
       {/* ── Side panel: range actions or the selected day. A fixed overlay below lg so it never
           pushes the grid; docked beside the grid on wide screens so the calendar stays in view. ── */}
       {(range || selectedDate) && (
-        <aside className="fixed inset-y-0 right-0 z-30 w-full sm:w-96 lg:static lg:z-auto lg:w-80 lg:flex-shrink-0 border-l border-zinc-800 bg-zinc-900 overflow-y-auto shadow-2xl lg:shadow-none">
+        <aside className="fixed inset-y-0 right-0 z-30 w-full sm:w-96 lg:static lg:z-auto lg:w-80 lg:flex-shrink-0 border-l border-gray-800 bg-gray-900 overflow-y-auto shadow-2xl lg:shadow-none">
           {range && (
             <div className="p-4 space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-sm font-semibold text-zinc-200">
+                  <div className="text-sm font-semibold text-gray-200">
                     {rangeDays} day{rangeDays === 1 ? "" : "s"} selected
                   </div>
-                  <div className="text-xs text-zinc-500">{range.start} → {range.end}</div>
+                  <div className="text-xs text-gray-500">{formatDate(range.start)} → {formatDate(range.end)}</div>
                 </div>
                 <button
                   onClick={() => setRange(null)}
-                  className="text-zinc-500 hover:text-zinc-300 text-xl leading-none"
+                  aria-label="Clear selection"
+                  className="text-gray-500 hover:text-gray-300 text-xl leading-none"
                 >×</button>
               </div>
-              <button
-                onClick={() => openGenerateModal(range)}
-                className="w-full bg-green-600 hover:bg-green-500 text-white rounded px-3 py-2 text-sm font-medium"
-              >
+              <Button className="w-full" onClick={() => openGenerateModal(range)}>
                 Generate plan for selection
-              </button>
-              <p className="text-xs text-zinc-600">
+              </Button>
+              <p className="text-xs text-gray-600">
                 Shift-click another day to adjust the range. Click a day or press Esc to clear it.
               </p>
             </div>

@@ -40,6 +40,22 @@ export function hrefFor(tab: Tab, param?: string | number | null): string {
   return param == null || param === "" ? `#${tab}` : `#${tab}/${param}`;
 }
 
-export function navigate(tab: Tab, param?: string | number | null): void {
-  location.hash = hrefFor(tab, param);
+/**
+ * Go to a route. `replace` swaps the current history entry instead of adding one — for changing
+ * a selection within a page (day to day), so Back leaves the page rather than replaying clicks.
+ */
+export function navigate(
+  tab: Tab,
+  param?: string | number | null,
+  opts: { replace?: boolean } = {},
+): void {
+  const href = hrefFor(tab, param);
+  if (!opts.replace) {
+    location.hash = href;
+    return;
+  }
+  if (location.hash === href) return;
+  history.replaceState(null, "", href);
+  // replaceState does not fire hashchange, which is what the app listens to.
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
 }

@@ -1,5 +1,6 @@
 
-export const DAYS_OF_WEEK = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+// Column order of the grid (weeks start on Monday). DAY_NAMES is indexed by Date.getDay().
+export const DAYS_OF_WEEK = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 export const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 // Mirrored in strides_ai/compliance.py (RUN_WORKOUT_TYPES/RIDE_WORKOUT_TYPES/
@@ -58,12 +59,12 @@ export const WORKOUT_COLORS: Record<string, string> = {
   "Race":           "bg-amber-500/20 text-amber-300 border-amber-500/30",
   "Cross-Training": "bg-blue-500/20 text-blue-300 border-blue-500/30",
   "Yoga":           "bg-pink-500/20 text-pink-300 border-pink-500/30",
-  "Rest":           "bg-zinc-700/50 text-zinc-400 border-zinc-600/30",
+  "Rest":           "bg-gray-700/50 text-gray-400 border-gray-600/30",
 };
 
 
 // Shown for a workout type that has no colour of its own.
-export const FALLBACK_WORKOUT_COLOR = "bg-zinc-700/50 text-zinc-400 border-zinc-600/30";
+export const FALLBACK_WORKOUT_COLOR = "bg-gray-700/50 text-gray-400 border-gray-600/30";
 
 // distance/elevation hold what the athlete sees and types, in their unit system; they are
 // converted back to the stored km / m on save (see kmFromInput / mFromInput).
@@ -83,7 +84,7 @@ export const VERDICT_STYLES: Record<string, { cls: string; label: string }> = {
   too_hard: { cls: "bg-red-500/20 text-red-300 border-red-500/30", label: "⚠ Too hard" },
   too_easy: { cls: "bg-blue-500/20 text-blue-300 border-blue-500/30", label: "⚠ Too easy" },
   wrong_terrain: { cls: "bg-orange-500/20 text-orange-300 border-orange-500/30", label: "⚠ Wrong terrain" },
-  needs_info: { cls: "bg-zinc-700/50 text-zinc-400 border-zinc-600/30", label: "? Needs info" },
+  needs_info: { cls: "bg-gray-700/50 text-gray-400 border-gray-600/30", label: "? Needs info" },
 };
 
 export const RUN_TYPES = new Set(["Run", "TrailRun", "VirtualRun"]);

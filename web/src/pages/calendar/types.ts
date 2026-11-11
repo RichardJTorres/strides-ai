@@ -139,6 +139,8 @@ export interface GridProps {
   setDragOver: (date: string | null) => void;
   movePending: MutableRefObject<boolean>;
   handleDayClick: (e: MouseEvent, date: string) => void;
+  /** Open a day, or with `extend` grow the selected range to it (what shift-click does). */
+  activateDay: (date: string, extend: boolean) => void;
   moveWorkout: (from: string, to: string) => void;
   /** Opens the week breakdown for the week whose first grid cell is `weekStart`. */
   openWeek: (weekStart: string) => void;

@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { navigate } from "../../nav";
+import Button from "../../ui/Button";
+import { formatDate, formatDuration } from "../../ui/format";
+import { Notice } from "../../ui/states";
 import { climbLabel, plannedClimbRate } from "../activityLabels";
+import { PENDING_CHAT_ACTIVITY_KEY, PENDING_CHAT_DRAFT_KEY } from "../chatActivityHandoff";
 import ActivityCard from "./ActivityCard";
 import {
   DAY_NAMES, EMPTY_FORM, FALLBACK_WORKOUT_COLOR, INTENSITIES, NO_DISTANCE_WORKOUT_TYPES,
@@ -87,6 +92,7 @@ export default function DayPanel({
   };
 
   const [nutritionLoading, setNutritionLoading] = useState(false);
+  const [nutritionError, setNutritionError] = useState<string | null>(null);
   const [routeAnalysisLoading, setRouteAnalysisLoading] = useState(false);
   const [routeAnalysisError, setRouteAnalysisError] = useState<string | null>(null);
   const [showRouteForm, setShowRouteForm] = useState(false);
@@ -98,6 +104,7 @@ export default function DayPanel({
     selectedWorkout ? formFromWorkout(selectedWorkout) : EMPTY_FORM
   );
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // While the create/edit form is showing (either editing an existing workout, or adding a
   // brand-new one — which renders the same form without editMode ever becoming true), autofill
@@ -150,43 +157,56 @@ export default function DayPanel({
       // Preserve the structure unless the athlete explicitly removes it.
       structure: keepsStructure(form.workout_type) && !form.clear_structure ? selectedWorkout?.structure ?? null : null,
     };
-    const res = await fetch(`/api/calendar/plan/${selectedDate}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (res.ok) {
+    setSaveError(null);
+    try {
+      const res = await fetch(`/api/calendar/plan/${selectedDate}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error();
       const saved = (await res.json().catch(() => null))?.workout;
       setPlan(prev => ({ ...prev, [selectedDate]: saved ?? { date: selectedDate, ...body } }));
       setEditMode(false);
+    } catch {
+      // The form stays open with what was typed, so nothing is lost.
+      setSaveError("Couldn't save this workout. Check your connection and try again.");
     }
   };
 
   const deleteWorkout = async () => {
     if (!selectedDate) return;
-    const res = await fetch(`/api/calendar/plan/${selectedDate}`, { method: "DELETE" });
-    if (res.ok) {
+    setSaveError(null);
+    try {
+      const res = await fetch(`/api/calendar/plan/${selectedDate}`, { method: "DELETE" });
+      if (!res.ok) throw new Error();
       setPlan(prev => {
         const next = { ...prev };
         delete next[selectedDate];
         return next;
       });
       setEditMode(false);
+    } catch {
+      setSaveError("Couldn't delete this workout. Check your connection and try again.");
+    } finally {
+      setConfirmingDelete(false);
     }
   };
 
   const analyzeNutrition = async () => {
     if (!selectedDate) return;
     setNutritionLoading(true);
+    setNutritionError(null);
     try {
       const res = await fetch(`/api/calendar/plan/${selectedDate}/nutrition`, { method: "POST" });
-      if (res.ok) {
-        const nutrition = await res.json();
-        setPlan(prev => ({
-          ...prev,
-          [selectedDate]: { ...prev[selectedDate], nutrition_json: JSON.stringify(nutrition) },
-        }));
-      }
+      if (!res.ok) throw new Error();
+      const nutrition = await res.json();
+      setPlan(prev => ({
+        ...prev,
+        [selectedDate]: { ...prev[selectedDate], nutrition_json: JSON.stringify(nutrition) },
+      }));
+    } catch {
+      setNutritionError("Couldn't get nutrition advice. Try again.");
     } finally {
       setNutritionLoading(false);
     }
@@ -230,6 +250,7 @@ export default function DayPanel({
   const saveRouteUrl = async () => {
     if (!selectedDate || !selectedWorkout) return;
     setSavingRouteUrl(true);
+    setSaveError(null);
     try {
       const url = routeUrlDraft.trim();
       const preview = url && isRouteUrl(url) ? await fetchRoutePreview(url) : null;
@@ -252,14 +273,34 @@ export default function DayPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (res.ok) {
-        const saved = (await res.json().catch(() => null))?.workout;
-        setPlan(prev => ({ ...prev, [selectedDate]: saved ?? { date: selectedDate, ...body } }));
-        setShowRouteForm(false);
-      }
+      if (!res.ok) throw new Error();
+      const saved = (await res.json().catch(() => null))?.workout;
+      setPlan(prev => ({ ...prev, [selectedDate]: saved ?? { date: selectedDate, ...body } }));
+      setShowRouteForm(false);
+    } catch {
+      setSaveError("Couldn't save the route. Check your connection and try again.");
     } finally {
       setSavingRouteUrl(false);
     }
+  };
+
+  // Opens the chat with a drafted (never auto-sent) question about this day, and attaches the
+  // activity that completed the workout when there is one.
+  const askCoach = () => {
+    const day = formatDate(selectedDate, "weekday");
+    const what = selectedWorkout ? `my planned ${selectedWorkout.workout_type} on ${day}` : day;
+    try {
+      sessionStorage.setItem(
+        PENDING_CHAT_DRAFT_KEY,
+        selectedSplit.matched
+          ? `How did ${what} go compared with the plan, and should anything change this week?`
+          : `Tell me about ${what}: what is it for, and how should I approach it?`,
+      );
+      if (selectedSplit.matched) {
+        sessionStorage.setItem(PENDING_CHAT_ACTIVITY_KEY, String(selectedSplit.matched.id));
+      }
+    } catch { /* best-effort handoff */ }
+    navigate("chat");
   };
 
   const startEdit = () => {
@@ -287,12 +328,13 @@ export default function DayPanel({
       <div className="min-w-0 space-y-3">
         <div className="flex items-center justify-between">
           <div>
-            <div className="text-sm font-semibold text-zinc-200">{selectedDate}</div>
-            <div className="text-xs text-zinc-500">{dowName(selectedDate)}</div>
+            <div className="text-sm font-semibold text-gray-200">{formatDate(selectedDate)}</div>
+            <div className="text-xs text-gray-500">{dowName(selectedDate)}</div>
           </div>
           <button
             onClick={onClose}
-            className="text-zinc-500 hover:text-zinc-300 text-xl leading-none"
+            aria-label="Close day"
+            className="text-gray-500 hover:text-gray-300 text-xl leading-none"
           >×</button>
         </div>
 
@@ -301,15 +343,17 @@ export default function DayPanel({
             type="checkbox"
             checked={prefs.blocked_days.includes(selectedDate)}
             onChange={() => toggleBlocked(selectedDate)}
-            className="accent-zinc-500"
+            className="accent-gray-500"
           />
-          <span className="text-xs text-zinc-400">Mark as blocked (unavailable)</span>
+          <span className="text-xs text-gray-400">Mark as blocked (unavailable)</span>
         </label>
+
+        {saveError && <Notice tone="error">{saveError}</Notice>}
 
         {/* Planned workout: view or form */}
         {selectedWorkout && !editMode ? (
           <div className="space-y-2">
-            <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Planned</h4>
+            <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Planned</h4>
             <div className={`px-3 py-2 rounded border ${WORKOUT_COLORS[selectedWorkout.workout_type] ?? FALLBACK_WORKOUT_COLOR}`}>
               <div className="font-medium text-sm">{selectedWorkout.workout_type}</div>
               {selectedWorkout.intensity && (
@@ -319,21 +363,21 @@ export default function DayPanel({
             {(selectedWorkout.distance_km || selectedWorkout.elevation_m || selectedWorkout.duration_min) && (
               <div className="flex gap-2 flex-wrap">
                 {selectedWorkout.distance_km && (
-                  <div className="bg-zinc-800 rounded p-2 text-xs">
-                    <div className="text-zinc-500">Distance</div>
-                    <div className="text-zinc-200 font-medium">{fmtKm(selectedWorkout.distance_km, 2)}</div>
+                  <div className="bg-gray-800 rounded p-2 text-xs">
+                    <div className="text-gray-500">Distance</div>
+                    <div className="text-gray-200 font-medium">{fmtKm(selectedWorkout.distance_km, 2)}</div>
                   </div>
                 )}
                 {selectedWorkout.duration_min && (
-                  <div className="bg-zinc-800 rounded p-2 text-xs">
-                    <div className="text-zinc-500">Duration</div>
-                    <div className="text-zinc-200 font-medium">{selectedWorkout.duration_min} min</div>
+                  <div className="bg-gray-800 rounded p-2 text-xs">
+                    <div className="text-gray-500">Duration</div>
+                    <div className="text-gray-200 font-medium">{formatDuration(selectedWorkout.duration_min * 60)}</div>
                   </div>
                 )}
                 {selectedWorkout.elevation_m && (
-                  <div className="bg-zinc-800 rounded p-2 text-xs">
-                    <div className="text-zinc-500">Elevation</div>
-                    <div className="text-zinc-200 font-medium">{units.fmt(selectedWorkout.elevation_m, "elevation")}</div>
+                  <div className="bg-gray-800 rounded p-2 text-xs">
+                    <div className="text-gray-500">Elevation</div>
+                    <div className="text-gray-200 font-medium">{units.fmt(selectedWorkout.elevation_m, "elevation")}</div>
                   </div>
                 )}
                 {(() => {
@@ -343,11 +387,11 @@ export default function DayPanel({
                     ? "run" : keepsStructure(selectedWorkout.workout_type) ? "ride" : "other";
                   const terrain = climbLabel(rate, group);
                   return (
-                    <div className="bg-zinc-800 rounded p-2 text-xs" title={terrain?.detail}>
-                      <div className="text-zinc-500">Climb ratio</div>
-                      <div className="text-zinc-200 font-medium">
+                    <div className="bg-gray-800 rounded p-2 text-xs" title={terrain?.detail}>
+                      <div className="text-gray-500">Climb ratio</div>
+                      <div className="text-gray-200 font-medium">
                         {units.fmt(rate, "climb_rate")}
-                        {terrain && <span className="ml-1 text-zinc-400 font-normal">{terrain.text}</span>}
+                        {terrain && <span className="ml-1 text-gray-400 font-normal">{terrain.text}</span>}
                       </div>
                     </div>
                   );
@@ -355,18 +399,18 @@ export default function DayPanel({
               </div>
             )}
             {selectedWorkout.description && (
-              <p className="text-xs text-zinc-400 leading-relaxed">{selectedWorkout.description}</p>
+              <p className="text-xs text-gray-400 leading-relaxed">{selectedWorkout.description}</p>
             )}
             {selectedSplit.matched && (
               <div className="space-y-2">
-                <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Actual (Strava)</h4>
+                <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Actual (Strava)</h4>
                 <ActivityCard activity={selectedSplit.matched} />
               </div>
             )}
             {selectedWorkout.structure_text && (
-              <div className="bg-zinc-800/60 rounded p-2 text-xs space-y-1.5">
-                <div className="text-zinc-500">Structured workout (% FTP)</div>
-                <div className="text-zinc-300 leading-relaxed">{selectedWorkout.structure_text}</div>
+              <div className="bg-gray-800/60 rounded p-2 text-xs space-y-1.5">
+                <div className="text-gray-500">Structured workout (% FTP)</div>
+                <div className="text-gray-300 leading-relaxed">{selectedWorkout.structure_text}</div>
                 <a
                   href={`/api/calendar/plan/${selectedWorkout.date}/zwo`}
                   download
@@ -386,16 +430,14 @@ export default function DayPanel({
                   value={routeUrlDraft}
                   onChange={e => setRouteUrlDraft(e.target.value)}
                   onKeyDown={e => { if (e.key === "Enter") saveRouteUrl(); if (e.key === "Escape") setShowRouteForm(false); }}
-                  className="flex-1 text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-200"
+                  className="flex-1 text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-200"
                 />
-                <button
-                  onClick={saveRouteUrl}
-                  disabled={savingRouteUrl}
-                  className="text-xs bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white rounded px-2 py-1"
-                >{savingRouteUrl ? "Saving…" : "Save"}</button>
+                <Button size="sm" onClick={saveRouteUrl} loading={savingRouteUrl}>
+                  {savingRouteUrl ? "Saving…" : "Save"}
+                </Button>
                 <button
                   onClick={() => setShowRouteForm(false)}
-                  className="text-xs text-zinc-500 hover:text-zinc-300 px-1"
+                  className="text-xs text-gray-500 hover:text-gray-300 px-1"
                 >Cancel</button>
               </div>
             ) : selectedWorkout.route_url ? (
@@ -410,19 +452,19 @@ export default function DayPanel({
                     >View route ↗</a>
                     <button
                       onClick={() => { setRouteUrlDraft(selectedWorkout.route_url || ""); setShowRouteForm(true); }}
-                      className="text-xs text-zinc-500 hover:text-zinc-300"
+                      className="text-xs text-gray-500 hover:text-gray-300"
                     >Change</button>
                   </div>
                   <button
                     onClick={() => analyzeRoute(!!selectedRouteAnalysis)}
                     disabled={routeAnalysisLoading}
-                    className="text-xs bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 text-zinc-300 rounded px-2 py-0.5"
+                    className="text-xs bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-gray-300 rounded px-2 py-0.5"
                   >
                     {routeAnalysisLoading ? "Analyzing…" : selectedRouteAnalysis ? "Refresh" : "Analyze Route"}
                   </button>
                 </div>
                 {routeAnalysisError && (
-                  <p className="text-xs text-red-400">{routeAnalysisError}</p>
+                  <Notice tone="error">{routeAnalysisError}</Notice>
                 )}
                 {selectedRouteAnalysis && (
                   <div className={`px-3 py-2 rounded border text-xs ${VERDICT_STYLES[selectedRouteAnalysis.verdict]?.cls ?? VERDICT_STYLES.needs_info.cls}`}>
@@ -442,16 +484,17 @@ export default function DayPanel({
             ) : (
               <button
                 onClick={() => { setRouteUrlDraft(""); setShowRouteForm(true); }}
-                className="text-xs text-zinc-500 hover:text-zinc-300"
+                className="text-xs text-gray-500 hover:text-gray-300"
               >+ Add route</button>
               )
             )}
             <div className="flex items-center gap-2">
-              <button onClick={startEdit} className="text-sm bg-zinc-700 hover:bg-zinc-600 text-zinc-200 rounded px-4 py-2">Edit</button>
+              <Button variant="secondary" onClick={startEdit}>Edit</Button>
+              <Button variant="ghost" onClick={askCoach}>Ask coach</Button>
               {confirmingDelete ? (
                 <>
-                  <button onClick={deleteWorkout} className="text-xs bg-red-700 hover:bg-red-600 text-white rounded px-3 py-1.5">Confirm delete</button>
-                  <button onClick={() => setConfirmingDelete(false)} className="text-xs text-zinc-500 hover:text-zinc-300 px-2 py-1.5">Cancel</button>
+                  <Button variant="danger" size="sm" onClick={deleteWorkout}>Confirm delete</Button>
+                  <button onClick={() => setConfirmingDelete(false)} className="text-xs text-gray-500 hover:text-gray-300 px-2 py-1.5">Cancel</button>
                 </>
               ) : (
                 <button onClick={() => setConfirmingDelete(true)} className="text-xs text-red-500 hover:text-red-400 px-2 py-1.5">Delete</button>
@@ -460,15 +503,15 @@ export default function DayPanel({
           </div>
         ) : (
           <div className="space-y-2">
-            <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+            <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
               {selectedWorkout ? "Edit Planned Workout" : "Add Planned Workout"}
             </h4>
             <div>
-              <label className="text-xs text-zinc-500 mb-1 block">Type</label>
+              <label className="text-xs text-gray-500 mb-1 block">Type</label>
               <select
                 value={form.workout_type}
                 onChange={e => setForm(f => ({ ...f, workout_type: e.target.value }))}
-                className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
+                className="w-full text-sm bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-gray-200"
               >
                 {WORKOUT_TYPE_GROUPS.map(group => (
                   <optgroup key={group.label} label={group.label}>
@@ -478,7 +521,7 @@ export default function DayPanel({
               </select>
             </div>
             {selectedWorkout?.structure && keepsStructure(form.workout_type) && (
-              <label className="flex items-center gap-2 text-xs text-zinc-400">
+              <label className="flex items-center gap-2 text-xs text-gray-400">
                 <input
                   type="checkbox"
                   checked={form.clear_structure}
@@ -490,48 +533,48 @@ export default function DayPanel({
             <div className="grid grid-cols-2 gap-2">
               {!NO_DISTANCE_WORKOUT_TYPES.has(form.workout_type) && (
               <div>
-                <label className="text-xs text-zinc-500 mb-1 block">Distance ({distLabel})</label>
+                <label className="text-xs text-gray-500 mb-1 block">Distance ({distLabel})</label>
                 <input
                   type="number" step="0.1" placeholder="—"
                   value={form.distance}
                   onChange={e => setForm(f => ({ ...f, distance: e.target.value }))}
-                  className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
+                  className="w-full text-sm bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-gray-200"
                 />
               </div>
               )}
               {!NO_DISTANCE_WORKOUT_TYPES.has(form.workout_type) && (
               <div>
-                <label className="text-xs text-zinc-500 mb-1 block">Elevation ({units.label("elevation")})</label>
+                <label className="text-xs text-gray-500 mb-1 block">Elevation ({units.label("elevation")})</label>
                 <input
                   type="number" placeholder="—"
                   value={form.elevation}
                   onChange={e => setForm(f => ({ ...f, elevation: e.target.value }))}
-                  className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
+                  className="w-full text-sm bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-gray-200"
                 />
               </div>
               )}
               <div>
-                <label className="text-xs text-zinc-500 mb-1 block">Duration (min)</label>
+                <label className="text-xs text-gray-500 mb-1 block">Duration (min)</label>
                 <input
                   type="number" placeholder="—"
                   value={hasFormStructure ? selectedWorkout?.duration_min?.toString() ?? "" : form.duration_min}
                   disabled={hasFormStructure}
                   aria-describedby={hasFormStructure ? "structured-duration-help" : undefined}
                   onChange={e => setForm(f => ({ ...f, duration_min: e.target.value }))}
-                  className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200 disabled:opacity-50"
+                  className="w-full text-sm bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-gray-200 disabled:opacity-50"
                 />
                 {hasFormStructure && (
-                  <p id="structured-duration-help" className="mt-1 text-xs text-zinc-500">
+                  <p id="structured-duration-help" className="mt-1 text-xs text-gray-500">
                     Duration comes from the structure. Remove it to edit duration.
                   </p>
                 )}
               </div>
               <div>
-                <label className="text-xs text-zinc-500 mb-1 block">Intensity</label>
+                <label className="text-xs text-gray-500 mb-1 block">Intensity</label>
                 <select
                   value={form.intensity}
                   onChange={e => setForm(f => ({ ...f, intensity: e.target.value }))}
-                  className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
+                  className="w-full text-sm bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-gray-200"
                 >
                   {INTENSITIES.map(i => (
                     <option key={i} value={i}>{i.charAt(0).toUpperCase() + i.slice(1)}</option>
@@ -540,42 +583,40 @@ export default function DayPanel({
               </div>
             </div>
             <div>
-              <label className="text-xs text-zinc-500 mb-1 block">Notes (optional)</label>
+              <label className="text-xs text-gray-500 mb-1 block">Notes (optional)</label>
               <textarea
                 rows={2}
                 placeholder="What's the goal for this workout?"
                 value={form.description}
                 onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-                className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200 resize-none"
+                className="w-full text-sm bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-gray-200 resize-none"
               />
             </div>
             {ROUTE_CAPABLE_WORKOUT_TYPES.has(form.workout_type) && (
             <div>
-              <label className="text-xs text-zinc-500 mb-1 block">Route URL (optional)</label>
+              <label className="text-xs text-gray-500 mb-1 block">Route URL (optional)</label>
               <input
                 type="url"
                 placeholder="https://ridewithgps.com/routes/... or https://strava.com/routes/..."
                 value={form.route_url}
                 onChange={e => setForm(f => ({ ...f, route_url: e.target.value }))}
-                className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
+                className="w-full text-sm bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-gray-200"
               />
               {routePreviewLoading && (
-                <p className="text-xs text-zinc-500 mt-1">Fetching route details…</p>
+                <p className="text-xs text-gray-500 mt-1">Fetching route details…</p>
               )}
               {!routePreviewLoading && routePreviewNotice && (
-                <p className="text-xs text-zinc-500 mt-1">{routePreviewNotice}</p>
+                <p className="text-xs text-gray-500 mt-1">{routePreviewNotice}</p>
               )}
             </div>
             )}
             <div className="flex gap-2">
-              <button
-                onClick={saveWorkout}
-                className="flex-1 text-sm bg-green-700 hover:bg-green-600 text-white rounded px-3 py-1.5"
-              >Save</button>
-              <button
+              <Button className="flex-1" onClick={saveWorkout}>Save</Button>
+              <Button
+                variant="secondary"
+                className="flex-1"
                 onClick={() => { setEditMode(false); if (!selectedWorkout) onClose(); }}
-                className="flex-1 text-sm bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded px-3 py-1.5"
-              >Cancel</button>
+              >Cancel</Button>
             </div>
           </div>
         )}
@@ -584,7 +625,7 @@ export default function DayPanel({
       {/* Col 2: Strava activities */}
       {selectedActivities.length > 0 && (
         <div className="space-y-2">
-          <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Strava</h4>
+          <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Strava</h4>
           {selectedActivities.map(a => <ActivityCard key={a.id} activity={a} />)}
         </div>
       )}
@@ -593,43 +634,44 @@ export default function DayPanel({
       {showNutritionCol && (
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Nutrition</h4>
+            <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Nutrition</h4>
             <button
               onClick={analyzeNutrition}
               disabled={nutritionLoading}
-              className="text-xs bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 text-zinc-300 rounded px-2 py-0.5"
+              className="text-xs bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-gray-300 rounded px-2 py-0.5"
             >
               {nutritionLoading ? "Analyzing…" : selectedNutrition ? "Refresh" : "Get advice"}
             </button>
           </div>
+          {nutritionError && <Notice tone="error">{nutritionError}</Notice>}
           {selectedNutrition ? (
             <>
-              <div className="text-sm text-zinc-400 font-medium">Calories (kcal)</div>
+              <div className="text-sm text-gray-400 font-medium">Calories (kcal)</div>
               <div className="grid grid-cols-3 gap-2 text-center">
                 {(["pre", "during", "post"] as const).map(phase => (
-                  <div key={phase} className="bg-zinc-800 rounded p-2">
-                    <div className="text-xs text-zinc-500 capitalize mb-1">{phase}</div>
-                    <div className="text-sm font-semibold text-zinc-200">
+                  <div key={phase} className="bg-gray-800 rounded p-2">
+                    <div className="text-xs text-gray-500 capitalize mb-1">{phase}</div>
+                    <div className="text-sm font-semibold text-gray-200">
                       {selectedNutrition[`calories_${phase}` as keyof NutritionData] as number}
                     </div>
                   </div>
                 ))}
               </div>
-              <div className="text-sm text-zinc-400 font-medium">Hydration ({units.label("volume")})</div>
+              <div className="text-sm text-gray-400 font-medium">Hydration ({units.label("volume")})</div>
               <div className="grid grid-cols-3 gap-2 text-center">
                 {(["pre", "during", "post"] as const).map(phase => (
-                  <div key={phase} className="bg-zinc-800/60 rounded p-2">
-                    <div className="text-xs text-zinc-500 capitalize mb-1">{phase}</div>
+                  <div key={phase} className="bg-gray-800/60 rounded p-2">
+                    <div className="text-xs text-gray-500 capitalize mb-1">{phase}</div>
                     <div className="text-sm font-semibold text-blue-300">
                       {units.fmt(selectedNutrition[`hydration_${phase}_ml` as keyof NutritionData] as number, "volume", { withLabel: false })}
                     </div>
                   </div>
                 ))}
               </div>
-              <p className="text-sm text-zinc-400 leading-relaxed">{selectedNutrition.notes}</p>
+              <p className="text-sm text-gray-400 leading-relaxed">{selectedNutrition.notes}</p>
             </>
           ) : (
-            <p className="text-sm text-zinc-600 italic">
+            <p className="text-sm text-gray-600 italic">
               Click "Get advice" for personalized calorie and hydration recommendations.
             </p>
           )}

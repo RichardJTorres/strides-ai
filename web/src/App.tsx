@@ -219,7 +219,7 @@ export default function App() {
             <Charts mode={mode} theme={theme} />
           </Suspense>
         )}
-        {tab === "calendar" && <Calendar />}
+        {tab === "calendar" && <Calendar routeParam={route.param} />}
         {tab === "profile" && <Profile mode={mode} theme={theme} />}
         {tab === "memories" && <Memories />}
         {tab === "settings" && <Settings mode={mode} setMode={setMode} theme={theme} onProviderChanged={refreshStatus} />}

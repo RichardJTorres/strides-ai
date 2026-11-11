@@ -1,4 +1,8 @@
 import { useEffect, useState } from "react";
+import Button from "../../ui/Button";
+import { formatDate, formatDuration } from "../../ui/format";
+import Modal from "../../ui/Modal";
+import { Notice } from "../../ui/states";
 import { plannedClimbRate } from "../activityLabels";
 import { FALLBACK_WORKOUT_COLOR, WORKOUT_COLORS } from "./constants";
 import type { GeneratePlanResult, Plan, SetPlan } from "./types";
@@ -23,11 +27,11 @@ function GeneratingProgress() {
   }, []);
   const stage = [...GEN_STAGES].reverse().find(s => elapsed >= s.after) ?? GEN_STAGES[0];
   return (
-    <div role="status" aria-live="polite" className="flex items-center gap-3 rounded border border-zinc-700 bg-zinc-800/60 px-3 py-3">
-      <span className="h-4 w-4 shrink-0 rounded-full border-2 border-zinc-600 border-t-green-400 animate-spin" />
+    <div role="status" aria-live="polite" className="flex items-center gap-3 rounded border border-gray-700 bg-gray-800/60 px-3 py-3">
+      <span className="h-4 w-4 shrink-0 rounded-full border-2 border-gray-600 border-t-gray-200 animate-spin" />
       <div className="min-w-0 flex-1">
-        <div className="text-sm text-zinc-200">{stage.text}</div>
-        <div className="text-xs text-zinc-500">
+        <div className="text-sm text-gray-200">{stage.text}</div>
+        <div className="text-xs text-gray-500">
           {elapsed}s elapsed · usually 15–45 seconds · keep this window open
         </div>
       </div>
@@ -93,55 +97,40 @@ export default function GenerateModal({ initialStart, initialEnd, plan, setPlan,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ set: genResult.workouts }),
       });
-      if (!res.ok) {
-        setGenError("Failed to save the training block.");
-        return;
-      }
+      if (!res.ok) throw new Error();
       setPlan(prev => {
         const next = { ...prev };
         for (const w of genResult.workouts) next[w.date] = w;
         return next;
       });
       onClose();
+    } catch {
+      setGenError("Failed to save the training block. Check your connection and try again.");
     } finally {
       setGenAccepting(false);
     }
   };
 
   return (
-    <>
-      <div
-        className="fixed inset-0 z-40 bg-black/60"
-        onClick={() => !genLoading && !genAccepting && onClose()}
-      />
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
-        <div className="pointer-events-auto bg-zinc-900 border border-zinc-700 rounded-lg w-full max-w-lg max-h-[85vh] overflow-y-auto shadow-2xl">
-          <div className="px-5 py-4 border-b border-zinc-800 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-zinc-200">Generate Training Block</h3>
-            <button
-              onClick={() => onClose()}
-              className="text-zinc-500 hover:text-zinc-300 text-xl leading-none"
-            >×</button>
-          </div>
-
+    <Modal title="Generate Training Block" busy={genLoading || genAccepting} onClose={onClose}>
           <div className="p-5 space-y-4">
             {!genResult ? (
               <>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-xs text-zinc-500 mb-1 block">Start date</label>
+                    <label className="text-xs text-gray-500 mb-1 block">Start date</label>
                     <input
                       type="date" value={genStart}
                       onChange={e => setGenStart(e.target.value)}
-                      className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
+                      className="w-full text-sm bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-gray-200"
                     />
                   </div>
                   <div>
-                    <label className="text-xs text-zinc-500 mb-1 block">End date</label>
+                    <label className="text-xs text-gray-500 mb-1 block">End date</label>
                     <input
                       type="date" value={genEnd}
                       onChange={e => setGenEnd(e.target.value)}
-                      className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200"
+                      className="w-full text-sm bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-gray-200"
                     />
                   </div>
                 </div>
@@ -149,35 +138,35 @@ export default function GenerateModal({ initialStart, initialEnd, plan, setPlan,
                   <p className="text-xs text-red-400">Start date must be on or before end date.</p>
                 )}
                 <div>
-                  <label className="text-xs text-zinc-500 mb-1 block">Notes (optional)</label>
+                  <label className="text-xs text-gray-500 mb-1 block">Notes (optional)</label>
                   <textarea
                     rows={3}
                     placeholder={'e.g. "I have a century ride Nov 15, focus on climbing" or "I\'m traveling Oct 10-12, keep it light"'}
                     value={genFreeform}
                     onChange={e => setGenFreeform(e.target.value)}
-                    className="w-full text-sm bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200 resize-none"
+                    className="w-full text-sm bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-gray-200 resize-none"
                   />
                 </div>
                 {genLoading && <GeneratingProgress />}
-                {genError && <p className="text-xs text-red-400">{genError}</p>}
-                <button
+                {genError && <Notice tone="error">{genError}</Notice>}
+                <Button
+                  className="w-full"
                   onClick={generatePlan}
                   disabled={genLoading || !genStart || !genEnd || genStart > genEnd}
-                  className="w-full text-sm bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white rounded px-3 py-2 font-medium"
                 >
                   {genLoading ? "Generating…" : "Generate"}
-                </button>
+                </Button>
               </>
             ) : (
               <>
                 {genResult.summary && (
-                  <p className="text-sm text-zinc-300 leading-relaxed">{genResult.summary}</p>
+                  <p className="text-sm text-gray-300 leading-relaxed">{genResult.summary}</p>
                 )}
                 {(genResult.warnings ?? []).map((w, i) => (
                   <p key={i} className="text-xs text-amber-400">⚠ {w}</p>
                 ))}
                 {genResult.workouts.length === 0 ? (
-                  <p className="text-sm text-zinc-500 italic">No workouts suggested for this range.</p>
+                  <p className="text-sm text-gray-500 italic">No workouts suggested for this range.</p>
                 ) : (
                   <div className="space-y-1.5 max-h-72 overflow-y-auto">
                     {genResult.workouts.map(w => (
@@ -186,11 +175,11 @@ export default function GenerateModal({ initialStart, initialEnd, plan, setPlan,
                         className={`px-3 py-2 rounded border text-sm ${WORKOUT_COLORS[w.workout_type] ?? FALLBACK_WORKOUT_COLOR}`}
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <span className="font-medium">{w.date} — {w.workout_type}</span>
+                          <span className="font-medium">{formatDate(w.date, "weekday")} — {w.workout_type}</span>
                           <span className="text-xs opacity-70 text-right">
                             {[
                               w.distance_km ? fmtKm(w.distance_km) : null,
-                              w.duration_min ? `${w.duration_min}min` : null,
+                              w.duration_min ? formatDuration(w.duration_min * 60) : null,
                               w.intensity,
                             ].filter(Boolean).join(" · ")}
                           </span>
@@ -218,34 +207,24 @@ export default function GenerateModal({ initialStart, initialEnd, plan, setPlan,
                   </div>
                 )}
                 {genLoading && <GeneratingProgress />}
-                {genError && <p className="text-xs text-red-400">{genError}</p>}
+                {genError && <Notice tone="error">{genError}</Notice>}
                 <div className="flex gap-2 pt-1">
-                  <button
+                  <Button
+                    className="flex-1"
                     onClick={acceptGeneratedPlan}
-                    disabled={genAccepting || genResult.workouts.length === 0}
-                    className="flex-1 text-sm bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white rounded px-3 py-2 font-medium"
+                    loading={genAccepting}
+                    disabled={genResult.workouts.length === 0}
                   >
                     {genAccepting ? "Adding…" : "Accept & Add to Calendar"}
-                  </button>
-                  <button
-                    onClick={generatePlan}
-                    disabled={genLoading || genAccepting}
-                    className="text-sm bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 text-zinc-300 rounded px-3 py-2"
-                  >
+                  </Button>
+                  <Button variant="secondary" onClick={generatePlan} disabled={genLoading || genAccepting}>
                     {genLoading ? "Regenerating…" : "Regenerate"}
-                  </button>
-                  <button
-                    onClick={() => onClose()}
-                    className="text-sm bg-zinc-800 hover:bg-zinc-700 text-zinc-400 rounded px-3 py-2"
-                  >
-                    Discard
-                  </button>
+                  </Button>
+                  <Button variant="ghost" onClick={() => onClose()}>Discard</Button>
                 </div>
               </>
             )}
           </div>
-        </div>
-      </div>
-    </>
+    </Modal>
   );
 }
