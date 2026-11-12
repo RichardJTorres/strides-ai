@@ -108,6 +108,15 @@ def units_section(units: UnitSystem) -> str:
     )
 
 
+PLAN_CHUNK_RULE = (
+    "## Writing Plans\n"
+    "Each reply has a hard output limit of roughly 4000 tokens, tool-call arguments included. "
+    "When creating or rewriting a training block, make several update_training_plan calls in a "
+    "row, each covering up to 14 workouts (about two weeks), rather than one call for the whole "
+    "block. Keep workout notes short. Briefly summarise afterwards."
+)
+
+
 def _memories_section(memories: list[dict]) -> str:
     return memories_section(memories)
 
@@ -274,7 +283,6 @@ def _upcoming_workouts_section(units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
     )
 
 
-_QUEST_WORDS = {"done": "done", "partial": "shortened", "pending": "to do", "missed": "missed"}
 _WEEK_WORDS = {
     "hit": "this week already counts",
     "on_track": "on track this week",
@@ -287,10 +295,10 @@ _WEEK_WORDS = {
 def _progress_section(
     activities: list[dict], mode: str = "running", units: UnitSystem = DEFAULT_UNIT_SYSTEM
 ) -> str:
-    """What the athlete sees as their streak, weekly quests and new records (progress.py), so the
+    """What the athlete sees as their streak and new records (progress.py), so the
     coach can acknowledge them and never contradicts the app. Empty when there is nothing to say.
 
-    The streak and quests come from the planned-workout calendar, which lifting mode does not
+    The streak comes from the planned-workout calendar, which lifting mode does not
     use, so the lifting coach only hears about new lifting records."""
     from .progress import build_progress
 
@@ -306,9 +314,6 @@ def _progress_section(
             f"{week.upcoming} to go). A week counts with at least one planned workout done and "
             f"at most {streak.max_misses} missed; shortened workouts count."
         )
-        if progress.quests:
-            lines.append("This week's quests:")
-            lines += [f"  - {q.date} {q.label}: {_QUEST_WORDS[q.status]}" for q in progress.quests]
     if not lines and not fresh:
         return ""
     if fresh:
@@ -316,7 +321,7 @@ def _progress_section(
         for r in fresh:
             was = f", was {r.previous.formatted}" if r.previous else ""
             lines.append(f"  - {r.label}: {r.formatted} on {r.date}{was}")
-    return "## Streak, Quests and Records\n" + "\n".join(lines)
+    return "## Streak and Records\n" + "\n".join(lines)
 
 
 def _calendar_prefs_section() -> str:
@@ -386,6 +391,7 @@ def build_system(
         [
             cfg.system_prompt,
             units_section(units),
+            PLAN_CHUNK_RULE,
             _datetime_section(),
             "Older activity details are excluded. Use only included details and labeled aggregates. "
             "Context sections and periods absent from this request are omitted, not evidence of no training.",

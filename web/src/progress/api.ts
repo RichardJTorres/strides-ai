@@ -22,15 +22,6 @@ export interface ProgressRecord {
   previous: { value: number; formatted: string; date: string } | null;
 }
 
-export interface Quest {
-  id: string;
-  kind: "long" | "quality" | "rest";
-  label: string;
-  date: string;
-  status: "done" | "partial" | "pending" | "missed";
-  activity_id: number | null;
-}
-
 export type WeekStatus = "hit" | "on_track" | "at_risk" | "lost" | "no_plan";
 
 export interface Streak {
@@ -46,7 +37,6 @@ export interface Progress {
   /** Monday of the current week. */
   week_start: string;
   streak: Streak;
-  quests: Quest[];
   records: ProgressRecord[];
 }
 
@@ -68,7 +58,7 @@ export const SPORTS_BY_MODE: Record<string, Sport[]> = {
 };
 
 /**
- * The athlete's streak, quests and records. Refetches when the unit system changes (figures are
+ * The athlete's streak and records. Refetches when the unit system changes (figures are
  * formatted server-side) and whenever `refreshKey` changes — pass something that changes when
  * the plan or the activities do.
  */

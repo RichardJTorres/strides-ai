@@ -1,4 +1,4 @@
-"""Progress: the weekly plan streak, this week's quests, and personal records.
+"""Progress: the weekly plan streak and personal records.
 
 Pure: no DB access, `today` is passed explicitly (same rule as compliance.py). Everything is
 derived on read from plan rows and activity rows; nothing is stored. Not mode-scoped: the plan is
@@ -12,12 +12,6 @@ Streak
   only Rest/Yoga) is PAUSED: it neither extends nor breaks the streak, but more than
   MAX_PAUSED_WEEKS paused weeks in a row end it, so an abandoned plan is not a current streak.
   The in-progress week never counts and never breaks it; `this_week` reports where it is heading.
-
-Quests (current week, from that week's plan; capped at MAX_QUESTS, rest days dropped first)
-  long     one per planned Long Run / Long Ride
-  quality  one per planned Tempo Run / Tempo Ride / Intervals
-  rest     one per planned Rest day: missed if a run or ride with distance was logged that day
-           (a lift or a walk does not break a rest day), else done once the day has passed.
 
 Records (per sport)
   A sport has records only once it has MIN_ACTIVITIES qualifying activities and the earliest is
@@ -42,14 +36,11 @@ from .units import Quantity, UnitSystem, format_value
 
 MAX_MISSES = 1  # scored plan days a week may miss and still count
 MAX_PAUSED_WEEKS = 2  # consecutive unscored weeks a streak survives
-MAX_QUESTS = 4
 MIN_ACTIVITIES = 6  # per sport, before it has records
 RECORD_MIN_HISTORY_DAYS = 28
 RECORD_FRESH_DAYS = 14  # a record set within this many days is flagged "new"
 E1RM_EXERCISES = 6  # most-trained lifts that get an estimated-1RM record
 
-LONG_WORKOUT_TYPES = frozenset({"Long Run", "Long Ride"})
-QUALITY_WORKOUT_TYPES = frozenset({"Tempo Run", "Tempo Ride", "Intervals"})
 
 _DONE = (ComplianceStatus.COMPLETED, ComplianceStatus.MODIFIED)
 
@@ -75,15 +66,6 @@ class Record(BaseModel):
     previous: Optional[RecordPrev]  # the best before `date`; None when this is the first
 
 
-class Quest(BaseModel):
-    id: str  # f"{kind}:{date}"
-    kind: Literal["long", "quality", "rest"]
-    label: str
-    date: str
-    status: Literal["done", "partial", "pending", "missed"]
-    activity_id: Optional[int]
-
-
 class ThisWeek(BaseModel):
     done: int
     missed: int
@@ -103,7 +85,6 @@ class ProgressPayload(BaseModel):
     unit_system: str
     week_start: str  # Monday of the current week
     streak: Streak
-    quests: list[Quest]
     records: list[Record]
 
 
@@ -171,51 +152,6 @@ def this_week(days: list[DayCompliance]) -> ThisWeek:
     else:
         status = "at_risk"
     return ThisWeek(done=done, missed=missed, upcoming=upcoming, status=status)
-
-
-# ── Weekly quests ───────────────────────────────────────────────────────────────
-
-_QUEST_STATUS = {
-    ComplianceStatus.COMPLETED: "done",
-    ComplianceStatus.MODIFIED: "partial",
-    ComplianceStatus.UPCOMING: "pending",
-    ComplianceStatus.MISSED: "missed",
-}
-
-
-def build_week_quests(
-    days: list[DayCompliance], today: date, cardio_dates: frozenset[date] = frozenset()
-) -> list[Quest]:
-    """Quests for the days of one week (long, then quality, then rest; each by date).
-    `cardio_dates` are the days with a run or ride that covered distance."""
-    by_kind: dict[str, list[Quest]] = {"long": [], "quality": [], "rest": []}
-    for d in sorted(days, key=lambda d: d.date):
-        activity_id = d.matched_activity_id
-        if d.workout_type in LONG_WORKOUT_TYPES:
-            kind, label, status = "long", d.workout_type, _QUEST_STATUS.get(d.status)
-        elif d.workout_type in QUALITY_WORKOUT_TYPES:
-            kind, label, status = "quality", d.workout_type, _QUEST_STATUS.get(d.status)
-        elif d.workout_type == "Rest":
-            kind, label, activity_id = "rest", "Rest day", None
-            if d.date in cardio_dates:
-                status = "missed"
-            else:
-                status = "pending" if d.date >= today else "done"
-        else:
-            continue
-        if status is None:
-            continue
-        by_kind[kind].append(
-            Quest(
-                id=f"{kind}:{d.date.isoformat()}",
-                kind=kind,
-                label=label,
-                date=d.date.isoformat(),
-                status=status,
-                activity_id=activity_id,
-            )
-        )
-    return [q for kind in ("long", "quality", "rest") for q in by_kind[kind]][:MAX_QUESTS]
 
 
 # ── Personal records ────────────────────────────────────────────────────────────
@@ -394,13 +330,6 @@ def build_progress(
     week_end = this_monday + timedelta(days=6)
     days = compliance_for_range(plan_rows, activity_rows, date.min, week_end, today, units)
     week_days = [d for d in days if d.date >= this_monday]
-    cardio_dates = frozenset(
-        when
-        for row in activity_rows
-        if row.get("sport_type") in RUN_TYPES | CYCLE_TYPES
-        and _positive(row.get("distance_m")) is not None
-        and (when := _parse_date(row)) is not None
-    )
     current, best = streak_weeks(days, today)
     return ProgressPayload(
         as_of=today.isoformat(),
@@ -409,6 +338,5 @@ def build_progress(
         streak=Streak(
             weeks=current, best_weeks=best, max_misses=MAX_MISSES, this_week=this_week(week_days)
         ),
-        quests=build_week_quests(week_days, today, cardio_dates),
         records=build_records(activity_rows, units, today),
     )

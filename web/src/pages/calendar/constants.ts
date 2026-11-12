@@ -1,6 +1,10 @@
+import type { WeekStart } from "./types";
 
-// Column order of the grid (weeks start on Monday). DAY_NAMES is indexed by Date.getDay().
-export const DAYS_OF_WEEK = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+// Column order of the grid, by the week-start setting. DAY_NAMES is indexed by Date.getDay().
+export const DAYS_OF_WEEK: Record<WeekStart, string[]> = {
+  monday: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+  sunday: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+};
 export const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 // Mirrored in strides_ai/compliance.py (RUN_WORKOUT_TYPES/RIDE_WORKOUT_TYPES/

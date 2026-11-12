@@ -5,7 +5,12 @@ from datetime import date, timedelta
 import pytest
 
 from strides_ai import db
-from strides_ai.coach import build_initial_history, build_system, build_training_log
+from strides_ai.coach import (
+    PLAN_CHUNK_RULE,
+    build_initial_history,
+    build_system,
+    build_training_log,
+)
 from strides_ai.modes import (
     CYCLING_SYSTEM_PROMPT,
     HYBRID_SYSTEM_PROMPT,
@@ -240,10 +245,10 @@ def test_upcoming_workout_with_unanalyzed_route_says_so(tmp_db):
 
 
 def test_progress_section_absent_without_plan_or_records(tmp_db):
-    assert "Streak, Quests and Records" not in build_system("", [])
+    assert "Streak and Records" not in build_system("", [])
 
 
-def test_progress_section_reports_streak_and_quests(tmp_db):
+def test_progress_section_reports_streak(tmp_db):
     from strides_ai.analytics.aggregation import monday_of
 
     monday = monday_of(date.today())
@@ -254,9 +259,8 @@ def test_progress_section_reports_streak_and_quests(tmp_db):
     )
     rows = [_make_row(id=1, date=last_week.isoformat(), distance_m=6000)]
     result = build_system("", [], activities=rows)
-    assert "## Streak, Quests and Records" in result
+    assert "## Streak and Records" in result
     assert "Plan streak: 1 week(s) (best 1)" in result
-    assert f"{(monday + timedelta(days=6)).isoformat()} Long Run:" in result
 
 
 def test_lifting_coach_gets_no_cardio_streak(tmp_db):
@@ -266,7 +270,7 @@ def test_lifting_coach_gets_no_cardio_streak(tmp_db):
     db.save_planned_workout(last_week.isoformat(), "Easy Run", None, 5.0, None, 30, "easy")
     rows = [_make_row(id=1, date=last_week.isoformat(), distance_m=6000)]
     assert "Plan streak" in build_system("", [], mode="running", activities=rows)
-    assert "Streak, Quests and Records" not in build_system("", [], mode="lifting", activities=rows)
+    assert "Streak and Records" not in build_system("", [], mode="lifting", activities=rows)
 
 
 def test_coach_voice_comes_before_the_long_computed_sections(tmp_db):
@@ -277,7 +281,7 @@ def test_coach_voice_comes_before_the_long_computed_sections(tmp_db):
     prompt = build_system("", [], coach_voice="technical")
     voice = next(i for i, p in enumerate(prompt.priority) if "Coaching Voice" in p)
     assert all(
-        "Streak, Quests" not in p and "Training State" not in p for p in prompt.priority[:voice]
+        "Streak and Records" not in p and "Training State" not in p for p in prompt.priority[:voice]
     )
 
 
@@ -465,3 +469,8 @@ def test_build_training_log_hybrid_header_has_type_column():
     log = build_training_log([_make_row()], mode="hybrid")
     header = log.split("\n")[0]
     assert "TYPE" in header
+
+
+def test_build_system_tells_coach_to_chunk_plan_writes():
+    system = build_system("", [], "running", [])
+    assert PLAN_CHUNK_RULE in system

@@ -1,4 +1,4 @@
-"""Tests for strides_ai.progress — the plan streak, weekly quests and personal records."""
+"""Tests for strides_ai.progress — the plan streak and personal records."""
 
 import json
 from datetime import date, timedelta
@@ -9,7 +9,6 @@ from strides_ai.compliance import ComplianceStatus, DayCompliance
 from strides_ai.progress import (
     build_progress,
     build_records,
-    build_week_quests,
     compute_streak,
     streak_weeks,
     this_week,
@@ -176,41 +175,6 @@ def test_this_week_status(statuses, status):
     )
 
 
-# ── quests ──
-
-
-def test_quests_map_status_order_and_activity():
-    days = [
-        day(MON + timedelta(days=2), U, "Tempo Run"),
-        day(MON, C, "Long Run", matched=11),
-        day(MON + timedelta(days=1), M, "Long Ride", matched=12),
-        day(MON + timedelta(days=3), X, "Easy Run"),  # not a quest
-    ]
-    quests = build_week_quests(days, TODAY)
-    assert [(q.kind, q.label, q.status, q.activity_id) for q in quests] == [
-        ("long", "Long Run", "done", 11),
-        ("long", "Long Ride", "partial", 12),
-        ("quality", "Tempo Run", "pending", None),
-    ]
-    assert quests[0].id == "long:2026-06-01"
-
-
-def test_rest_day_is_broken_only_by_cardio():
-    future = day(TODAY + timedelta(days=1), R, "Rest")
-    clean = day(MON, R, "Rest")
-    lifted = day(MON + timedelta(days=1), R, "Rest", matched=7)  # a lift was logged
-    ran = day(TODAY, R, "Rest", matched=8)
-    quests = build_week_quests([clean, lifted, ran, future], TODAY, frozenset({TODAY}))
-    assert [q.status for q in quests] == ["done", "done", "missed", "pending"]
-    assert all(q.activity_id is None for q in quests)
-
-
-def test_quests_capped_and_empty_week():
-    many = [day(MON + timedelta(days=i), C, "Long Run") for i in range(6)]
-    assert len(build_week_quests(many, TODAY)) == 4
-    assert build_week_quests([], TODAY) == []
-
-
 # ── records ──
 
 
@@ -349,11 +313,6 @@ def test_build_progress_end_to_end():
         "2026-06-01",
         "imperial",
     )
-    assert [(q.kind, q.status, q.activity_id) for q in result.quests] == [
-        ("long", "done", 2),
-        ("quality", "pending", None),
-        ("rest", "done", None),
-    ]
     assert result.streak.model_dump() == {
         "weeks": 1,
         "best_weeks": 1,

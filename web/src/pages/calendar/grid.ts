@@ -1,16 +1,18 @@
 // Pure calendar-grid maths: no React, no fetching.
-import type { Activity, ComplianceDay, GridCell, Plan, WeekSummary } from "./types";
+import type { Activity, ComplianceDay, GridCell, Plan, WeekStart, WeekSummary } from "./types";
 
 export const dateToStr = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
-/** The month as full Monday-Sunday weeks, including the leading/trailing days of the adjacent
- *  months, so a training week is never cut off mid-row. Monday-first matches every weekly
- *  figure the backend computes (ramp, streak, quests), so a row is exactly one of its weeks. */
-export function buildGrid(month: Date): GridCell[] {
+/** The month as full weeks, including the leading/trailing days of the adjacent months, so a
+ *  week is never cut off mid-row. Monday-first (the default) matches every weekly figure the
+ *  backend computes (ramp, streak), so a row is exactly one of its weeks; Sunday-first
+ *  is a display preference. */
+export function buildGrid(month: Date, weekStart: WeekStart = "monday"): GridCell[] {
   const daysInMonth = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
-  // Days between the Monday that starts the first row and the 1st (getDay(): Sunday = 0).
-  const firstDow = (new Date(month.getFullYear(), month.getMonth(), 1).getDay() + 6) % 7;
+  // Days between the first row's start and the 1st (getDay(): Sunday = 0).
+  const firstDow =
+    (new Date(month.getFullYear(), month.getMonth(), 1).getDay() + (weekStart === "monday" ? 6 : 0)) % 7;
   const totalCells = Math.ceil((firstDow + daysInMonth) / 7) * 7;
   const gridStart = new Date(month.getFullYear(), month.getMonth(), 1 - firstDow);
   return Array.from({ length: totalCells }, (_, i) => {
@@ -75,6 +77,12 @@ export function summarizeWeek(
     else if (status === "upcoming") summary.upcoming++;
   }
   return summary;
+}
+
+/** A perfect week: at least one scored workout, and every one of them completed as planned,
+ *  so nothing shortened, missed or still upcoming. */
+export function isPerfectWeek(w: { completed: number; modified: number; missed: number; upcoming: number }): boolean {
+  return w.completed > 0 && w.modified === 0 && w.missed === 0 && w.upcoming === 0;
 }
 
 /** "3 as planned · 1 shortened · 1 missed" — only the non-zero parts. "Done" elsewhere means

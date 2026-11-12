@@ -7,6 +7,8 @@ from ..units import DEFAULT_UNIT_SYSTEM, UnitSystem
 from .models import Setting
 
 UNIT_SYSTEM_KEY = "unit_system"
+WEEK_START_KEY = "week_start"
+WEEK_STARTS = ("monday", "sunday")
 
 
 def get(session: Session, key: str, default: str | None = None) -> str | None:
@@ -25,3 +27,10 @@ def get_unit_system(session: Session) -> UnitSystem:
     """The athlete's display unit system. Every measurement is stored in SI; this only
     controls how values are shown and what units the coach is told to use."""
     return UnitSystem.parse(get(session, UNIT_SYSTEM_KEY, DEFAULT_UNIT_SYSTEM.value))
+
+
+def get_week_start(session: Session) -> str:
+    """Which day the Calendar grid's weeks start on. Display only: training weeks (ramp,
+    streak) are always Monday–Sunday on the backend."""
+    value = get(session, WEEK_START_KEY, "monday")
+    return value if value in WEEK_STARTS else "monday"

@@ -122,6 +122,9 @@ export type Plan = Record<string, Workout>;
 export type SetPlan = Dispatch<SetStateAction<Plan>>;
 export type DateRange = { start: string; end: string };
 
+/** First day of each grid row (the "week_start" setting). Training weeks stay Monday-Sunday. */
+export type WeekStart = "monday" | "sunday";
+
 /** Everything a week row and its day cells read from the page. */
 export interface GridProps {
   plan: Plan;
