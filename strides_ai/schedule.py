@@ -8,7 +8,7 @@ import anthropic
 import httpx
 
 from .backends.ollama import DEFAULT_HOST
-from .db.models import TrainingPlan
+from .db.models import PlanRow
 from .units import DEFAULT_UNIT_SYSTEM, UnitSystem, describe_for_prompt
 
 NUTRITION_SYSTEM_PROMPT = """\
@@ -27,7 +27,7 @@ The object must have exactly these keys:
 
 def _build_prompt(workout: dict, profile_text: str, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
     def measured(field: str) -> str:
-        m = TrainingPlan.measure_field(workout, field, units) if workout.get(field) else None
+        m = PlanRow.measure_field(workout, field, units) if workout.get(field) else None
         return m.formatted if m else "not specified"
 
     dist = measured("distance_km")

@@ -5,7 +5,7 @@ import time
 import anthropic
 
 from .base import (
-    WORKOUT_MEASUREMENT_PROPERTIES,
+    UPDATE_TRAINING_PLAN_PARAMETERS,
     SAVE_MEMORY_CATEGORIES,
     SAVE_MEMORY_TIMING_PROPERTIES,
     SAVE_MEMORY_DESCRIPTION,
@@ -40,25 +40,6 @@ SAVE_MEMORY_TOOL = {
     },
 }
 
-_WORKOUT_ENTRY_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "date": {"type": "string", "description": "ISO date, YYYY-MM-DD"},
-        "workout_type": {
-            "type": "string",
-            "description": (
-                "e.g. Easy Run, Long Run, Tempo Run, Easy Ride, Long Ride, Tempo Ride, "
-                "Indoor Ride, Intervals, Cross-Training, Race, Rest"
-            ),
-        },
-        "description": {"type": "string"},
-        **WORKOUT_MEASUREMENT_PROPERTIES,
-        "duration_min": {"type": "integer"},
-        "intensity": {"type": "string", "enum": ["easy", "moderate", "hard", "rest"]},
-    },
-    "required": ["date", "workout_type"],
-}
-
 UPDATE_PROFILE_TOOL = {
     "name": "update_profile",
     "description": UPDATE_PROFILE_DESCRIPTION,
@@ -76,21 +57,7 @@ UPDATE_PROFILE_TOOL = {
 UPDATE_TRAINING_PLAN_TOOL = {
     "name": "update_training_plan",
     "description": UPDATE_TRAINING_PLAN_DESCRIPTION,
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "set": {
-                "type": "array",
-                "description": "Workouts to create or overwrite, one entry per date.",
-                "items": _WORKOUT_ENTRY_SCHEMA,
-            },
-            "delete": {
-                "type": "array",
-                "description": "Dates (YYYY-MM-DD) to clear from the calendar.",
-                "items": {"type": "string"},
-            },
-        },
-    },
+    "input_schema": UPDATE_TRAINING_PLAN_PARAMETERS,
 }
 
 

@@ -7,29 +7,33 @@ export const DAYS_OF_WEEK: Record<WeekStart, string[]> = {
 };
 export const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-// Mirrored in strides_ai/compliance.py (RUN_WORKOUT_TYPES/RIDE_WORKOUT_TYPES/
-// UNSCORED_WORKOUT_TYPES) for plan-vs-actual compliance scoring — keep both in sync. If they
-// drift, the backend falls back to treating an unrecognized type as sport-ambiguous rather
-// than crashing or misclassifying, so drift degrades gracefully but should still be fixed.
+// The taxonomy is defined once, in strides_ai/kinds.py. These mirror it, and
+// tests/fixtures/taxonomy.json (asserted by pytest and by web/taxonomy.test.mjs) keeps them
+// from drifting. Races and rest are kinds, not workout types.
 export const WORKOUT_TYPE_GROUPS: { label: string; types: string[] }[] = [
-  { label: "Running", types: ["Easy Run", "Long Run", "Tempo Run", "Running Race"] },
-  { label: "Cycling", types: ["Easy Ride", "Long Ride", "Tempo Ride", "Indoor Ride", "Cycling Race"] },
-  // Generic "Race" kept for existing entries predating the sport-specific race types above;
-  // left out of Running/Cycling since it can't be sport-categorized automatically.
-  { label: "Other", types: ["Intervals", "Race", "Cross-Training", "Yoga", "Rest"] },
+  { label: "Running", types: ["Easy Run", "Long Run", "Tempo Run"] },
+  { label: "Cycling", types: ["Easy Ride", "Long Ride", "Tempo Ride", "Indoor Ride"] },
+  { label: "Other", types: ["Intervals", "Cross-Training", "Yoga"] },
 ];
-// Route (Strava or RideWithGPS) only makes sense for Running/Cycling types — a generic
-// "Race"/"Intervals" could be either sport, so it's left out rather than guessing.
+// Route (Strava or RideWithGPS) only makes sense for running/cycling workouts and races.
 export const ROUTE_CAPABLE_WORKOUT_TYPES = new Set([
   ...WORKOUT_TYPE_GROUPS[0].types,
   ...WORKOUT_TYPE_GROUPS[1].types,
 ]);
-// Distance/elevation don't apply to these. Mirrored as UNSCORED_WORKOUT_TYPES in
-// strides_ai/compliance.py — these are excluded from compliance scoring entirely.
-export const NO_DISTANCE_WORKOUT_TYPES = new Set(["Yoga", "Rest"]);
-// Structured workouts are cycling-only. Mirrored by RIDE_WORKOUT_TYPES in strides_ai/compliance.py,
-// which the server enforces.
+// Distance/elevation don't apply to these (never scored either).
+export const NO_DISTANCE_WORKOUT_TYPES = new Set(["Yoga"]);
+// Structured workouts are cycling-only; the server enforces it.
 export const keepsStructure = (workoutType: string) => WORKOUT_TYPE_GROUPS[1].types.includes(workoutType);
+
+export const ENTRY_KINDS: { kind: "workout" | "race" | "rest" | "travel" | "other"; label: string }[] = [
+  { kind: "workout", label: "Workout" },
+  { kind: "race", label: "Race" },
+  { kind: "rest", label: "Rest day" },
+  { kind: "travel", label: "Travel" },
+  { kind: "other", label: "Other" },
+];
+export const RACE_SPORTS = ["run", "ride", "other"];
+export const RACE_PRIORITIES = ["A", "B", "C"];
 
 export const COMPLIANCE_DOT_COLORS: Record<string, string> = {
   completed: "bg-green-400",
@@ -47,7 +51,7 @@ export const COMPLIANCE_STATUS_LABELS: Record<string, string> = {
   unscored: "Not scored",
 };
 
-export const INTENSITIES = ["easy", "moderate", "hard", "rest"];
+export const INTENSITIES = ["easy", "moderate", "hard"];
 
 export const WORKOUT_COLORS: Record<string, string> = {
   "Easy Run":       "bg-green-500/20 text-green-300 border-green-500/30",
@@ -64,6 +68,8 @@ export const WORKOUT_COLORS: Record<string, string> = {
   "Cross-Training": "bg-blue-500/20 text-blue-300 border-blue-500/30",
   "Yoga":           "bg-pink-500/20 text-pink-300 border-pink-500/30",
   "Rest":           "bg-gray-700/50 text-gray-400 border-gray-600/30",
+  "Travel":         "bg-sky-500/20 text-sky-300 border-sky-500/30",
+  "Other":          "bg-gray-700/50 text-gray-400 border-gray-600/30",
 };
 
 
@@ -74,6 +80,11 @@ export const FALLBACK_WORKOUT_COLOR = "bg-gray-700/50 text-gray-400 border-gray-
 // converted back to the stored km / m on save (see kmFromInput / mFromInput).
 export const EMPTY_FORM = {
   workout_type: "Easy Run",
+  title: "",
+  sport: "run",
+  goal_time: "",
+  priority: "",
+  result_activity_id: "",
   description: "",
   distance: "",
   elevation: "",

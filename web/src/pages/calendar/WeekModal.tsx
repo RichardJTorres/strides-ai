@@ -6,8 +6,8 @@ import Modal from "../../ui/Modal";
 import {
   COMPLIANCE_DOT_COLORS, COMPLIANCE_STATUS_LABELS, FALLBACK_WORKOUT_COLOR, WORKOUT_COLORS,
 } from "./constants";
-import { splitActivities as splitDay, summarizeWeek, weekBreakdown, weekFrom } from "./grid";
-import type { Activity, ComplianceDay, Plan } from "./types";
+import { entriesOn, splitActivities as splitDay, summarizeWeek, weekBreakdown, weekFrom } from "./grid";
+import type { Activity, ComplianceById, Plan } from "./types";
 import { useDistance } from "./useDistance";
 
 interface Props {
@@ -15,7 +15,7 @@ interface Props {
   weekStart: string;
   plan: Plan;
   activities: Record<string, Activity[]>;
-  compliance: Record<string, ComplianceDay>;
+  compliance: ComplianceById;
   onClose: () => void;
 }
 
@@ -24,7 +24,6 @@ interface Props {
 export default function WeekModal({ weekStart, plan, activities, compliance, onClose }: Props) {
   const { units, fmtKm } = useDistance();
   const selectedWeek = summarizeWeek(weekFrom(weekStart), plan, activities, compliance);
-  const splitActivities = (date: string) => splitDay(plan, activities, compliance, date);
   const weekLabel = `${formatDate(selectedWeek.cells[0].dateStr, "short")} – ${formatDate(selectedWeek.cells[6].dateStr, "short")}`;
 
   // Opens the chat with a drafted (never auto-sent) request to review this week.
@@ -86,9 +85,8 @@ export default function WeekModal({ weekStart, plan, activities, compliance, onC
               <div className="space-y-2">
                 {selectedWeek.cells.map(cell => {
                   const dateStr = cell.dateStr;
-                  const workout = plan[dateStr];
-                  const { matched: matchedActivity, others: dayActivities } = splitActivities(dateStr);
-                  const complianceDay = compliance[dateStr];
+                  const entries = entriesOn(plan, dateStr);
+                  const { byEntry, others: dayActivities } = splitDay(plan, activities, compliance, dateStr);
                   return (
                     <div
                       key={dateStr}
@@ -98,41 +96,50 @@ export default function WeekModal({ weekStart, plan, activities, compliance, onC
                         {formatDate(dateStr, "weekday")}
                       </a>
                       <div className="flex-1 min-w-0 space-y-1">
-                        {workout ? (
-                          <div
-                            className={`inline-block text-xs px-1.5 py-0.5 rounded border ${WORKOUT_COLORS[workout.workout_type] ?? FALLBACK_WORKOUT_COLOR}`}
-                          >
-                            {workout.workout_type}
-                            {matchedActivity
-                              ? ` · ✓ ${units.fmt(matchedActivity.distance_m ?? 0, "distance", { decimals: 1 })}${workout.distance_km ? ` / ${fmtKm(workout.distance_km)}` : ""}`
-                              : workout.distance_km ? ` · ${fmtKm(workout.distance_km)}` : ""}
-                          </div>
-                        ) : (
-                          <div className="text-xs text-gray-600 italic">No planned workout</div>
+                        {entries.length === 0 && (
+                          <div className="text-xs text-gray-600 italic">Nothing planned</div>
                         )}
-                        {matchedActivity && (
-                          <a href={hrefFor("activities", matchedActivity.id)} className="block text-xs text-gray-400 hover:underline">
-                            {matchedActivity.name} →
-                          </a>
-                        )}
+                        {entries.map(entry => {
+                          const matched = byEntry[entry.id];
+                          const complianceDay = compliance[entry.id];
+                          const label = entry.kind === "workout" ? entry.workout_type : entry.title || entry.workout_type;
+                          return (
+                            <div key={entry.id} className="space-y-1">
+                              <div
+                                className={`inline-block text-xs px-1.5 py-0.5 rounded border ${WORKOUT_COLORS[entry.workout_type] ?? FALLBACK_WORKOUT_COLOR}`}
+                              >
+                                {entry.kind === "race" && "🏁 "}
+                                {label}
+                                {matched
+                                  ? ` · ✓ ${units.fmt(matched.distance_m ?? 0, "distance", { decimals: 1 })}${entry.distance_km ? ` / ${fmtKm(entry.distance_km)}` : ""}`
+                                  : entry.distance_km && entry.kind !== "rest" ? ` · ${fmtKm(entry.distance_km)}` : ""}
+                              </div>
+                              {matched && (
+                                <a href={hrefFor("activities", matched.id)} className="block text-xs text-gray-400 hover:underline">
+                                  {matched.name} →
+                                </a>
+                              )}
+                              {complianceDay && entry.kind === "workout" && (
+                                <div className="flex items-center gap-1.5 text-xs">
+                                  {COMPLIANCE_DOT_COLORS[complianceDay.status] && (
+                                    <span
+                                      className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${COMPLIANCE_DOT_COLORS[complianceDay.status]}`}
+                                    />
+                                  )}
+                                  <span className="text-gray-300 font-medium">
+                                    {COMPLIANCE_STATUS_LABELS[complianceDay.status]}
+                                  </span>
+                                  <span className="text-gray-500 truncate">— {complianceDay.note}</span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                         {dayActivities.map(a => (
                           <a key={a.id} href={hrefFor("activities", a.id)} className="block text-xs text-gray-400 hover:underline">
                             ✓ {units.fmt(a.distance_m ?? 0, "distance", { decimals: 1 })} {a.sport_type} →
                           </a>
                         ))}
-                        {complianceDay && (
-                          <div className="flex items-center gap-1.5 text-xs">
-                            {COMPLIANCE_DOT_COLORS[complianceDay.status] && (
-                              <span
-                                className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${COMPLIANCE_DOT_COLORS[complianceDay.status]}`}
-                              />
-                            )}
-                            <span className="text-gray-300 font-medium">
-                              {COMPLIANCE_STATUS_LABELS[complianceDay.status]}
-                            </span>
-                            <span className="text-gray-500 truncate">— {complianceDay.note}</span>
-                          </div>
-                        )}
                       </div>
                     </div>
                   );

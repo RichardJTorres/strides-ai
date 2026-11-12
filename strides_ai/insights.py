@@ -662,10 +662,35 @@ def digest_fingerprint(
         # Reports carry day-specific calendar advice (upcoming sessions, countdowns).
         today.isoformat(),
         sorted(
-            [p.get("date"), p.get("workout_type"), p.get("distance_km"), p.get("intensity")]
-            for p in (plan_rows or [])
+            (
+                [
+                    p.get("id"),
+                    p.get("date"),
+                    p.get("workout_type"),
+                    p.get("distance_km"),
+                    p.get("intensity"),
+                    p.get("title"),
+                    p.get("goal_time_s"),
+                    p.get("priority"),
+                    p.get("sport"),
+                ]
+                for p in (plan_rows or [])
+            ),
+            key=str,
         ),
-        sorted([r.get("date"), r.get("name")] for r in (prefs or {}).get("races", [])),
+        sorted(
+            (
+                [
+                    r.get("date"),
+                    r.get("name"),
+                    r.get("target_time"),
+                    r.get("priority"),
+                    r.get("sport"),
+                ]
+                for r in (prefs or {}).get("races", [])
+            ),
+            key=str,
+        ),
         sorted((prefs or {}).get("blocked_days", [])),
         len(rows if compliance_rows is None else compliance_rows),
     ]

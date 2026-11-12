@@ -7,6 +7,7 @@ from google.genai import types
 from google.genai.errors import ClientError
 
 from ..budget import BudgetExceeded
+from ..kinds import KINDS, RACE_PRIORITIES, RACE_SPORTS, WORKOUT_TYPES
 from ..workout_structure import WORKOUT_STRUCTURE_SCHEMA
 
 from .base import (
@@ -125,21 +126,23 @@ UPDATE_TRAINING_PLAN_TOOL = types.Tool(
                 properties={
                     "set": types.Schema(
                         type=types.Type.ARRAY,
-                        description="Workouts to create or overwrite, one entry per date.",
+                        description="Entries to create (no id) or update (with id).",
                         items=types.Schema(
                             type=types.Type.OBJECT,
                             properties={
+                                "id": types.Schema(
+                                    type=types.Type.INTEGER,
+                                    description="Entry id to change. Omit to create.",
+                                ),
                                 "date": types.Schema(
                                     type=types.Type.STRING, description="ISO date, YYYY-MM-DD"
                                 ),
+                                "kind": types.Schema(type=types.Type.STRING, enum=list(KINDS)),
                                 "workout_type": types.Schema(
                                     type=types.Type.STRING,
-                                    description=(
-                                        "e.g. Easy Run, Long Run, Tempo Run, Easy Ride, Long "
-                                        "Ride, Tempo Ride, Indoor Ride, Intervals, "
-                                        "Cross-Training, Race, Rest"
-                                    ),
+                                    description="Workouts only: " + ", ".join(WORKOUT_TYPES),
                                 ),
+                                "title": types.Schema(type=types.Type.STRING),
                                 "description": types.Schema(type=types.Type.STRING),
                                 "distance": types.Schema(type=types.Type.NUMBER),
                                 "distance_unit": types.Schema(
@@ -151,18 +154,23 @@ UPDATE_TRAINING_PLAN_TOOL = types.Tool(
                                 ),
                                 "duration_min": types.Schema(type=types.Type.INTEGER),
                                 "intensity": types.Schema(
-                                    type=types.Type.STRING,
-                                    enum=["easy", "moderate", "hard", "rest"],
+                                    type=types.Type.STRING, enum=["easy", "moderate", "hard"]
+                                ),
+                                "sport": types.Schema(
+                                    type=types.Type.STRING, enum=list(RACE_SPORTS)
+                                ),
+                                "goal_time": types.Schema(type=types.Type.STRING),
+                                "priority": types.Schema(
+                                    type=types.Type.STRING, enum=list(RACE_PRIORITIES)
                                 ),
                                 "structure": _gemini_structure_schema(),
                             },
-                            required=["date", "workout_type"],
                         ),
                     ),
                     "delete": types.Schema(
                         type=types.Type.ARRAY,
-                        description="Dates (YYYY-MM-DD) to clear from the calendar.",
-                        items=types.Schema(type=types.Type.STRING),
+                        description="Ids of entries to remove from the calendar.",
+                        items=types.Schema(type=types.Type.INTEGER),
                     ),
                 },
             ),

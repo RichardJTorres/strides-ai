@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from ... import compliance
+from ... import kinds
 from ...config import VALID_MODES, get_settings
 from ...coach import RECENT_ACTIVITIES_IN_SYSTEM
 from ...db import activities as act_crud
@@ -17,7 +18,6 @@ from ...db import calendar as crud
 from ...db import memories as mem_crud
 from ...db import profiles as prof_crud
 from ...db.engine import get_session
-from ...db.models import TrainingPlan
 from ...plan_generation import (
     SURROUNDING_WINDOW_DAYS,
     build_plan_generation_prompt,
@@ -46,27 +46,45 @@ router = APIRouter()
 
 class CalendarPrefsBody(BaseModel):
     blocked_days: list[str] = []
-    races: list[dict] = []
 
 
-class WorkoutBody(BaseModel):
-    workout_type: str
+class EntryBody(BaseModel):
+    """Create / patch body. On PATCH only the fields actually sent are applied (an explicit
+    null clears the field); ``kind`` cannot change after create."""
+
+    date: str | None = None
+    kind: str | None = None
+    title: str | None = None
+    notes: str | None = None
+    # Convenience for generated plans and older clients: the old single free-text field. It
+    # becomes the objective (workout), the name (race) or the notes (anything else).
     description: str | None = None
+    # workout
+    workout_type: str | None = None
+    objective: str | None = None
     distance_km: float | None = None
     elevation_m: float | None = None
     duration_min: int | None = None
     intensity: str | None = None
     route_url: str | None = None
     structure: dict | None = None
+    # race
+    sport: str | None = None
+    goal_time_s: int | None = None
+    goal_text: str | None = None
+    priority: str | None = None
+    result_activity_id: int | None = None
+    result_time_s: int | None = None
 
 
-class BulkWorkoutEntry(WorkoutBody):
-    date: str
+class ChangeOp(EntryBody):
+    op: str
+    id: int | None = None
 
 
-class BulkPlanBody(BaseModel):
-    set: list[BulkWorkoutEntry] = []
-    delete: list[str] = []
+class BulkBody(BaseModel):
+    ops: list[ChangeOp]
+    request_id: str | None = None
 
 
 class GeneratePlanBody(BaseModel):
@@ -100,7 +118,7 @@ def get_calendar_prefs(session: Session = Depends(get_session)):
 
 @router.put("/calendar/prefs")
 def put_calendar_prefs(body: CalendarPrefsBody, session: Session = Depends(get_session)):
-    crud.save_prefs(session, body.blocked_days, body.races)
+    crud.save_prefs(session, body.blocked_days)
     return {"status": "ok"}
 
 
@@ -116,24 +134,76 @@ def get_training_state(
     if mode not in VALID_MODES or mode == "lifting":
         mode = "running"
     rows = [r.model_dump() for r in act_crud.get_for_mode(session, mode)]
-    plan_rows = [w.model_dump() for w in crud.get_plan(session)]
+    plan_rows = crud.get_plan_rows(session)
     return build_training_state(
         rows, plan_rows, crud.get_prefs(session), mode, units, date_cls.today()
     ).to_dict()
 
 
-def _plan_row(row) -> dict:
-    """A plan row for the API: the stored structure_json is exposed parsed as ``structure``."""
-    data = row.model_dump()
+def _plan_row(data: dict) -> dict:
+    """An entry for the API: stored structure_json is exposed parsed as ``structure``."""
+    data = dict(data)
     structure = structure_from_json(data.pop("structure_json", None))
     data["structure"] = structure
     data["structure_text"] = render_text(structure) if structure else None
     return data
 
 
-@router.get("/calendar/plan")
-def get_calendar_plan(session: Session = Depends(get_session)):
-    return [_plan_row(r) for r in crud.get_plan(session)]
+def _normalize_entry_data(data: dict, creating: bool) -> dict:
+    """Resolve the legacy shape (`workout_type` "Race"/"Running Race"/"Rest", `description`) into
+    kind + detail fields, so generated plans and older clients need no special casing."""
+    data = dict(data)
+    wtype = data.get("workout_type")
+    if creating and not data.get("kind"):
+        if kinds.race_sport_for_legacy_type(wtype):
+            data["kind"] = kinds.KIND_RACE
+            data.setdefault("sport", kinds.race_sport_for_legacy_type(wtype))
+        elif wtype == kinds.LEGACY_REST_TYPE:
+            data["kind"] = kinds.KIND_REST
+        else:
+            data["kind"] = kinds.KIND_WORKOUT
+    kind = data.get("kind")
+    if kind in (kinds.KIND_RACE, kinds.KIND_REST):
+        data.pop("workout_type", None)
+    if kind == kinds.KIND_REST:
+        for key in ("intensity", "distance_km", "elevation_m", "duration_min", "structure"):
+            data.pop(key, None)
+    if "description" in data:
+        text = data.pop("description")
+        target = {kinds.KIND_WORKOUT: "objective", kinds.KIND_RACE: "title"}.get(kind, "notes")
+        data.setdefault(target, text)
+    return data
+
+
+def _entry_or_404(session: Session, entry_id: int) -> dict:
+    row = crud.get_entry(session, entry_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="No calendar entry with this id")
+    return row
+
+
+def _write(fn, *args):
+    try:
+        return fn(*args)
+    except crud.EntryNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except crud.EntryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/calendar/kinds")
+def get_kinds():
+    """The calendar taxonomy (kinds, workout types, race sports) — the frontend declares none."""
+    return kinds.taxonomy()
+
+
+@router.get("/calendar/entries")
+def get_calendar_entries(
+    start_date: str | None = None,
+    end_date: str | None = None,
+    session: Session = Depends(get_session),
+):
+    return [_plan_row(r) for r in crud.get_plan_rows(session, start_date, end_date)]
 
 
 @router.get("/calendar/compliance")
@@ -154,7 +224,7 @@ def get_compliance(
     if start > end:
         raise HTTPException(status_code=400, detail="start_date must be on or before end_date")
 
-    plan_rows = [r.model_dump() for r in crud.get_plan(session, start_date, end_date)]
+    plan_rows = crud.get_plan_rows(session, start_date, end_date)
     activity_rows = [
         r.model_dump()
         for r in act_crud.get_all(session)
@@ -169,6 +239,7 @@ def get_compliance(
         "days": [
             {
                 "date": d.date.isoformat(),
+                "entry_id": d.entry_id,
                 "workout_type": d.workout_type,
                 "status": d.status.value,
                 "planned_distance_km": d.planned_distance_km,
@@ -191,65 +262,66 @@ def get_compliance(
     }
 
 
-@router.put("/calendar/plan/{date}")
-def put_planned_workout(date: str, body: WorkoutBody, session: Session = Depends(get_session)):
-    crud.save_planned_workout(
-        session,
-        date,
-        body.workout_type,
-        body.description,
-        body.distance_km,
-        body.elevation_m,
-        body.duration_min,
-        body.intensity,
-        body.route_url,
-        body.structure,
-    )
-    # The server may adjust what was sent (duration derives from a structure), so return the row.
-    saved = session.get(TrainingPlan, date)
-    return {"status": "ok", "date": date, "workout": _plan_row(saved) if saved else None}
-
-
-@router.get("/calendar/plan/{date}/zwo")
-def download_zwo(date: str, session: Session = Depends(get_session)):
-    """Zwift workout file for a planned workout that has a structure."""
-    row = session.get(TrainingPlan, date)
-    structure = structure_from_json(row.structure_json) if row else None
-    if not structure:
-        raise HTTPException(status_code=404, detail="No structured workout on this date")
-    name = f"{row.workout_type} {date}"
-    return Response(
-        content=to_zwo(structure, name, row.description),
-        media_type="application/xml",
-        headers={"Content-Disposition": f'attachment; filename="{zwo_filename(date, name)}"'},
+@router.post("/calendar/entries")
+def create_calendar_entry(body: EntryBody, session: Session = Depends(get_session)):
+    return _plan_row(
+        _write(
+            crud.create_entry,
+            session,
+            _normalize_entry_data(body.model_dump(exclude_unset=True), True),
+        )
     )
 
 
-@router.delete("/calendar/plan/{date}")
-def delete_planned_workout(date: str, session: Session = Depends(get_session)):
-    crud.delete_planned_workout(session, date)
+@router.patch("/calendar/entries/{entry_id}")
+def patch_calendar_entry(entry_id: int, body: EntryBody, session: Session = Depends(get_session)):
+    existing = _entry_or_404(session, entry_id)
+    if body.kind is not None and body.kind != existing["kind"]:
+        raise HTTPException(
+            status_code=400, detail="An entry's kind cannot change; delete it and add a new one"
+        )
+    patch = _normalize_entry_data(
+        {**body.model_dump(exclude_unset=True), "kind": existing["kind"]}, False
+    )
+    return _plan_row(_write(crud.update_entry, session, entry_id, patch))
+
+
+@router.delete("/calendar/entries/{entry_id}")
+def delete_calendar_entry(entry_id: int, session: Session = Depends(get_session)):
+    crud.delete_entry(session, entry_id)
     return {"status": "ok"}
 
 
-@router.post("/calendar/plan/bulk")
-def bulk_update_plan(body: BulkPlanBody, session: Session = Depends(get_session)):
-    """Apply multiple workout upserts/deletes in one call (used to accept a generated block)."""
-    for w in body.set:
-        crud.save_planned_workout(
-            session,
-            w.date,
-            w.workout_type,
-            w.description,
-            w.distance_km,
-            w.elevation_m,
-            w.duration_min,
-            w.intensity,
-            w.route_url,
-            w.structure,
-        )
-    for date in body.delete:
-        crud.delete_planned_workout(session, date)
-    return {"status": "ok", "set": len(body.set), "deleted": len(body.delete)}
+@router.post("/calendar/entries/bulk")
+def bulk_calendar_entries(body: BulkBody, session: Session = Depends(get_session)):
+    """Atomic, idempotent change set (accepting a generated block, bulk edits). All operations
+    apply or none do; resending the same ``request_id`` returns the first result."""
+    ops = []
+    for o in body.ops:
+        data = o.model_dump(exclude_unset=True)
+        if data.get("id") is None:
+            data.pop("id", None)
+        op = data.pop("op")
+        ops.append({"op": op, **_normalize_entry_data(data, op == "create")})
+    result = _write(crud.apply_changes, session, ops, body.request_id)
+    return {"status": "ok", **result}
+
+
+@router.get("/calendar/entries/{entry_id}/zwo")
+def download_zwo(entry_id: int, session: Session = Depends(get_session)):
+    """Zwift workout file for a planned workout that has a structure."""
+    row = _entry_or_404(session, entry_id)
+    structure = structure_from_json(row.get("structure_json"))
+    if not structure:
+        raise HTTPException(status_code=404, detail="No structured workout on this entry")
+    name = f"{row['workout_type']} {row['date']}"
+    return Response(
+        content=to_zwo(structure, name, row.get("objective")),
+        media_type="application/xml",
+        headers={
+            "Content-Disposition": f'attachment; filename="{zwo_filename(row["date"], name)}"'
+        },
+    )
 
 
 def _apply_guardrails(result, mode_rows, plan_rows, prefs, mode, units, today) -> dict:
@@ -277,7 +349,7 @@ async def generate_plan(
     units: UnitSystem = Depends(get_units),
 ):
     """Generate a suggested training block for a date range. Does not write to the calendar —
-    the frontend accepts the result via POST /calendar/plan/bulk."""
+    the frontend accepts the result via POST /calendar/entries/bulk."""
     try:
         start = date_cls.fromisoformat(body.start_date)
         end = date_cls.fromisoformat(body.end_date)
@@ -294,13 +366,13 @@ async def generate_plan(
 
     padded_start = (start - timedelta(days=SURROUNDING_WINDOW_DAYS)).isoformat()
     padded_end = (end + timedelta(days=SURROUNDING_WINDOW_DAYS)).isoformat()
-    surrounding = [w.model_dump() for w in crud.get_plan(session, padded_start, padded_end)]
+    surrounding = crud.get_plan_rows(session, padded_start, padded_end)
 
     recent_activities = [a.model_dump() for a in act_crud.get_all(session)][
         :RECENT_ACTIVITIES_IN_SYSTEM
     ]
     mode_rows = [a.model_dump() for a in act_crud.get_for_mode(session, mode)]
-    all_plan = [w.model_dump() for w in crud.get_plan(session)]
+    all_plan = crud.get_plan_rows(session)
     today = date_cls.today()
     training_state_text = (
         render_for_prompt(
@@ -355,9 +427,9 @@ async def generate_plan(
         raise HTTPException(status_code=500, detail=f"Plan generation failed: {exc}")
 
 
-@router.post("/calendar/plan/{date}/nutrition")
+@router.post("/calendar/entries/{entry_id}/nutrition")
 def analyze_workout_nutrition(
-    date: str,
+    entry_id: int,
     request: Request,
     session: Session = Depends(get_session),
     units: UnitSystem = Depends(get_units),
@@ -366,17 +438,21 @@ def analyze_workout_nutrition(
     if not api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not set")
 
-    plan = crud.get_plan(session)
-    workout = next((w.model_dump() for w in plan if w.date == date), None)
-    if not workout:
-        raise HTTPException(status_code=404, detail="No planned workout found for this date")
+    workout = _entry_or_404(session, entry_id)
+    if workout["kind"] not in (kinds.KIND_WORKOUT, kinds.KIND_RACE):
+        raise HTTPException(
+            status_code=400, detail="Nutrition advice applies to workouts and races"
+        )
 
     mode = getattr(request.app.state, "mode", "running")
     profile_fields = prof_crud.get_fields(session, mode)
     profile_text = profile_to_text(profile_fields, mode, units)
 
     nutrition = analyze_nutrition(workout, profile_text, api_key, units)
-    crud.save_workout_nutrition(session, date, nutrition)
+    # Rejected (not saved) if the entry changed while the model was working.
+    crud.save_workout_nutrition(
+        session, entry_id, nutrition, workout.get("inputs_hash") or crud.inputs_hash(workout)
+    )
     return nutrition
 
 
@@ -399,9 +475,9 @@ def route_preview(url: str):
         raise HTTPException(status_code=502, detail=str(exc))
 
 
-@router.post("/calendar/plan/{date}/analyze-route")
+@router.post("/calendar/entries/{entry_id}/analyze-route")
 async def analyze_workout_route(
-    date: str,
+    entry_id: int,
     request: Request,
     force: bool = False,
     session: Session = Depends(get_session),
@@ -410,10 +486,7 @@ async def analyze_workout_route(
 ):
     """Fetch the workout's route (Strava or RideWithGPS) and judge whether it fits the
     workout's goal."""
-    plan = crud.get_plan(session)
-    workout = next((w.model_dump() for w in plan if w.date == date), None)
-    if not workout:
-        raise HTTPException(status_code=404, detail="No planned workout found for this date")
+    workout = _entry_or_404(session, entry_id)
     if not workout.get("route_url"):
         raise HTTPException(status_code=400, detail="No route URL attached to this workout")
 
@@ -460,5 +533,12 @@ async def analyze_workout_route(
         raise HTTPException(status_code=500, detail=f"Route analysis failed: {exc}")
 
     analyzed_at = datetime.now(timezone.utc).isoformat()
-    crud.save_route_analysis(session, date, analysis, analyzed_at, backend.label)
+    crud.save_route_analysis(
+        session,
+        entry_id,
+        analysis,
+        analyzed_at,
+        backend.label,
+        workout.get("inputs_hash") or crud.inputs_hash(workout),
+    )
     return {"cached": False, "analyzed_at": analyzed_at, "model": backend.label, **analysis}

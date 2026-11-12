@@ -178,30 +178,102 @@ class CalendarPref(SQLModel, table=True):
     )
 
 
-class TrainingPlan(MeasuredModel, SQLModel, table=True):
-    __tablename__ = "training_plan"
+class CalendarEntry(SQLModel, table=True):
+    """One thing on the calendar. ``kind`` is immutable; workout/race entries own a detail row."""
+
+    __tablename__ = "calendar_entry"
+    __table_args__ = (sa.Index("ix_calendar_entry_date_id", "date", "id"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    date: str
+    kind: str
+    title: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: Optional[str] = Field(
+        default=None,
+        sa_column=Column(sa.Text, server_default=sa.text("datetime('now')")),
+    )
+
+
+class WorkoutDetail(MeasuredModel, SQLModel, table=True):
+    __tablename__ = "workout_detail"
     __measurements__: ClassVar[MeasurementSpec] = {
         "distance_km": (Quantity.DISTANCE, 1000.0),
         "elevation_m": (Quantity.ELEVATION, 1.0),
     }
 
-    date: str = Field(primary_key=True)
-    workout_type: Optional[str] = None
-    description: Optional[str] = None
+    entry_id: int = Field(
+        sa_column=Column(
+            sa.Integer, sa.ForeignKey("calendar_entry.id", ondelete="CASCADE"), primary_key=True
+        )
+    )
+    workout_type: str
+    objective: Optional[str] = None
     distance_km: Optional[float] = None
     elevation_m: Optional[float] = None
     duration_min: Optional[int] = None
     intensity: Optional[str] = None
-    nutrition_json: Optional[str] = None
     route_url: Optional[str] = None
     route_analysis_json: Optional[str] = None
     route_analyzed_at: Optional[str] = None
     route_analysis_model: Optional[str] = None
     structure_json: Optional[str] = None
+    nutrition_json: Optional[str] = None
+    # Hash of the inputs the route / nutrition prompts read; a stale analysis write is rejected.
+    inputs_hash: Optional[str] = None
+
+
+class RaceDetail(MeasuredModel, SQLModel, table=True):
+    __tablename__ = "race_detail"
+    __measurements__: ClassVar[MeasurementSpec] = {
+        "distance_km": (Quantity.DISTANCE, 1000.0),
+        "elevation_m": (Quantity.ELEVATION, 1.0),
+    }
+
+    entry_id: int = Field(
+        sa_column=Column(
+            sa.Integer, sa.ForeignKey("calendar_entry.id", ondelete="CASCADE"), primary_key=True
+        )
+    )
+    sport: str = "other"
+    distance_km: Optional[float] = None
+    elevation_m: Optional[float] = None
+    goal_time_s: Optional[int] = None
+    goal_text: Optional[str] = None
+    priority: Optional[str] = None
+    route_url: Optional[str] = None
+    result_activity_id: Optional[int] = None
+    result_time_s: Optional[int] = None
+    route_analysis_json: Optional[str] = None
+    route_analyzed_at: Optional[str] = None
+    route_analysis_model: Optional[str] = None
+    nutrition_json: Optional[str] = None
+    inputs_hash: Optional[str] = None
+
+
+class ChangeRequest(SQLModel, table=True):
+    """Idempotency record: a retried change set with the same request_id returns this result."""
+
+    __tablename__ = "change_request"
+
+    request_id: str = Field(primary_key=True)
+    result_json: str
     created_at: Optional[str] = Field(
         default=None,
         sa_column=Column(sa.Text, server_default=sa.text("datetime('now')")),
     )
+
+
+class PlanRow(MeasuredModel):
+    """Not a table: the flattened read shape (entry + detail) older consumers expect.
+
+    ``measure_field`` works on the plain dicts that ``db.calendar.get_plan_rows`` returns.
+    """
+
+    __measurements__: ClassVar[MeasurementSpec] = {
+        "distance_km": (Quantity.DISTANCE, 1000.0),
+        "elevation_m": (Quantity.ELEVATION, 1.0),
+    }
 
 
 class ExerciseTemplate(SQLModel, table=True):

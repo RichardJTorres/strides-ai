@@ -3,7 +3,7 @@ import { formatDate } from "../../ui/format";
 import {
   COMPLIANCE_DOT_COLORS, COMPLIANCE_STATUS_LABELS, FALLBACK_WORKOUT_COLOR, WORKOUT_COLORS,
 } from "./constants";
-import { dateToStr, splitActivities as splitDay } from "./grid";
+import { dateToStr, dayCompliance, entriesOn, splitActivities as splitDay } from "./grid";
 import type { GridCell, GridProps } from "./types";
 import { useDistance } from "./useDistance";
 
@@ -15,28 +15,25 @@ export default function DayCell({ cell, grid }: { cell: GridCell; grid: GridProp
     dragFrom, dragOver, setDragFrom, setDragOver, movePending, handleDayClick, activateDay,
     moveWorkout,
   } = grid;
-  const splitActivities = (date: string) => splitDay(plan, activities, compliance, date);
-  const raceOnDate = (date: string) => prefs.races.find(r => r.date === date);
-
   const dateStr = cell.dateStr;
-  const workout = plan[dateStr];
-  const { matched: matchedActivity, others: dayActivities } = splitActivities(dateStr);
+  const entries = entriesOn(plan, dateStr);
+  const { byEntry, others: dayActivities } = splitDay(plan, activities, compliance, dateStr);
+  const matchedActivities = Object.values(byEntry);
   const isToday = dateStr === todayStr;
   const isSelected = selectedDate === dateStr;
   const inRange = !!range && dateStr >= range.start && dateStr <= range.end;
   const isBlocked = prefs.blocked_days.includes(dateStr);
-  const race = raceOnDate(dateStr);
   const showMonthLabel = cell.dayNum === 1 && !cell.inCurrentMonth;
-  const complianceStatus = compliance[dateStr]?.status;
+  const day = dayCompliance(plan, compliance, dateStr);
+  const complianceStatus = day?.status;
   const dotColor = complianceStatus ? COMPLIANCE_DOT_COLORS[complianceStatus] : undefined;
 
   // What a screen reader hears for the cell: the day and everything marked on it.
   const label = [
     formatDate(dateStr, "weekday"),
     isToday && "today",
-    workout && `planned ${workout.workout_type}`,
+    ...entries.map(e => (e.kind === "race" ? `race: ${e.title || "Race"}` : `planned ${e.workout_type}`)),
     complianceStatus && complianceStatus !== "upcoming" && COMPLIANCE_STATUS_LABELS[complianceStatus],
-    race && `race: ${race.name}`,
     isBlocked && "blocked",
   ].filter(Boolean).join(", ");
 
@@ -66,7 +63,7 @@ export default function DayCell({ cell, grid }: { cell: GridCell; grid: GridProp
       onClick={e => handleDayClick(e, dateStr)}
       onMouseDown={e => { if (e.shiftKey) e.preventDefault(); }}
       onDragOver={e => {
-        if (!dragFrom || dragFrom === dateStr) return;
+        if (dragFrom == null) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = "move";
         if (dragOver !== dateStr) setDragOver(dateStr);
@@ -77,7 +74,7 @@ export default function DayCell({ cell, grid }: { cell: GridCell; grid: GridProp
         const from = dragFrom;
         setDragFrom(null);
         setDragOver(null);
-        if (from) moveWorkout(from, dateStr);
+        if (from != null) moveWorkout(from, dateStr);
       }}
       className={[
         dragOver === dateStr ? "ring-2 ring-inset ring-sky-400/80" : "",
@@ -103,58 +100,60 @@ export default function DayCell({ cell, grid }: { cell: GridCell; grid: GridProp
         )}
         {complianceStatus === "completed" ? (
           <span
-            title={compliance[dateStr]?.note}
+            title={day?.note}
             className="badge-pop ml-auto w-4 h-4 rounded-full bg-green-400 text-gray-900 text-[10px] font-bold leading-none flex items-center justify-center shadow-[0_0_8px_rgba(74,222,128,0.8)]"
           >✓</span>
         ) : dotColor && (
           <span
-            title={compliance[dateStr]?.note}
+            title={day?.note}
             className={`w-1.5 h-1.5 rounded-full ml-auto ${dotColor}`}
           />
         )}
       </div>
       {/* Phones: no room for chips, so one dot per thing on the day. */}
       <div className="md:hidden flex flex-wrap gap-0.5" aria-hidden="true">
-        {race && <span className="w-2 h-2 rounded-full bg-amber-400" />}
-        {workout && (
-          <span className={`w-2 h-2 rounded-full border ${WORKOUT_COLORS[workout.workout_type] ?? FALLBACK_WORKOUT_COLOR}`} />
-        )}
-        {(matchedActivity ? [matchedActivity, ...dayActivities] : dayActivities).map(a => (
+        {entries.map(e => (
+          <span
+            key={e.id}
+            className={`w-2 h-2 rounded-full border ${WORKOUT_COLORS[e.workout_type] ?? FALLBACK_WORKOUT_COLOR}`}
+          />
+        ))}
+        {[...matchedActivities, ...dayActivities].map(a => (
           <span key={a.id} className="w-2 h-2 rounded-full bg-gray-400" />
         ))}
       </div>
-      {race && (
-        <div className="hidden md:block text-xs px-1 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 truncate mb-0.5">
-          🏁 {race.name}
-        </div>
-      )}
-      {workout && (
-        <div
-          draggable
-          onDragStart={e => {
-            if (movePending.current) { e.preventDefault(); return; }
-            e.dataTransfer.effectAllowed = "move";
-            e.dataTransfer.setData("text/plain", dateStr);
-            setDragFrom(dateStr);
-          }}
-          onDragEnd={() => { setDragFrom(null); setDragOver(null); }}
-          className={`hidden md:block text-xs px-1 py-0.5 rounded border truncate mb-0.5 cursor-grab active:cursor-grabbing ${dragFrom === dateStr ? "opacity-40" : ""} ${WORKOUT_COLORS[workout.workout_type] ?? FALLBACK_WORKOUT_COLOR}`}>
-          {matchedActivity && "✓ "}
-          {workout.workout_type}
-          {matchedActivity ? (
-            <span className="ml-1 opacity-90">
-              {units.fmt(matchedActivity.distance_m ?? 0, "distance", { decimals: 1 })}
-              {workout.distance_km ? (
-                <span className="opacity-60"> / {fmtKm(workout.distance_km)}</span>
-              ) : null}
-            </span>
-          ) : (
-            workout.distance_km && (
-              <span className="ml-1 opacity-70">{fmtKm(workout.distance_km)}</span>
-            )
-          )}
-        </div>
-      )}
+      {entries.map(entry => {
+        const matched = byEntry[entry.id];
+        const label = entry.kind === "race" ? `🏁 ${entry.title || "Race"}` : entry.kind === "workout" ? entry.workout_type : entry.title || entry.workout_type;
+        return (
+          <div
+            key={entry.id}
+            draggable
+            onDragStart={e => {
+              if (movePending.current) { e.preventDefault(); return; }
+              e.dataTransfer.effectAllowed = "move";
+              e.dataTransfer.setData("text/plain", String(entry.id));
+              setDragFrom(entry.id);
+            }}
+            onDragEnd={() => { setDragFrom(null); setDragOver(null); }}
+            className={`hidden md:block text-xs px-1 py-0.5 rounded border truncate mb-0.5 cursor-grab active:cursor-grabbing ${dragFrom === entry.id ? "opacity-40" : ""} ${WORKOUT_COLORS[entry.workout_type] ?? FALLBACK_WORKOUT_COLOR}`}>
+            {matched && "✓ "}
+            {label}
+            {matched ? (
+              <span className="ml-1 opacity-90">
+                {units.fmt(matched.distance_m ?? 0, "distance", { decimals: 1 })}
+                {entry.distance_km ? (
+                  <span className="opacity-60"> / {fmtKm(entry.distance_km)}</span>
+                ) : null}
+              </span>
+            ) : (
+              entry.distance_km && entry.kind !== "rest" && (
+                <span className="ml-1 opacity-70">{fmtKm(entry.distance_km)}</span>
+              )
+            )}
+          </div>
+        );
+      })}
       {dayActivities.map(a => (
         <div key={a.id} className="hidden md:block text-xs px-1 py-0.5 rounded bg-gray-600/40 text-gray-300 border border-gray-600/40 truncate mb-0.5">
           ✓ {units.fmt(a.distance_m ?? 0, "distance", { decimals: 1 })} {a.sport_type}

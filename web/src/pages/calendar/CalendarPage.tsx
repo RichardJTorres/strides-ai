@@ -8,8 +8,9 @@ import { ErrorState, Notice } from "../../ui/states";
 import DayPanel from "./DayPanel";
 import GenerateModal from "./GenerateModal";
 import { buildGrid, chunkWeeks, dateToStr, rangeLength, splitActivities } from "./grid";
+import { applyMove, datePatch, failureMessage, findEntry } from "./entryOps";
 import MonthGrid from "./MonthGrid";
-import type { DateRange, GridProps, Workout } from "./types";
+import type { DateRange, GridProps } from "./types";
 import { useCalendarData } from "./useCalendarData";
 import WeekModal from "./WeekModal";
 
@@ -30,7 +31,7 @@ export default function Calendar({ routeParam }: { routeParam?: string | null })
     new Date(today.getFullYear(), today.getMonth(), 1)
   );
   const {
-    prefs, plan, setPlan, activities, compliance, trainingState, toggleBlocked, weekStart,
+    prefs, plan, setPlan, reloadPlan, activities, compliance, trainingState, toggleBlocked, weekStart,
     loading, loadError, prefsError, reload, confirmed, refreshDerived,
   } = useCalendarData(currentMonth);
   // The streak is computed from the plan and activities, so refetch when the plan changes.
@@ -105,66 +106,34 @@ export default function Calendar({ routeParam }: { routeParam?: string | null })
   };
   const handleDayClick = (e: React.MouseEvent, date: string) => activateDay(date, e.shiftKey);
 
-  // Drag a planned workout onto another day. An occupied target swaps the two workouts. Bulk
-  // upsert both days (no deletes needed); optimistic, reverted if the save fails.
-  const [dragFrom, setDragFrom] = useState<string | null>(null);
+  // Drag an entry onto another day: a date-only PATCH. Entries coexist, so nothing is swapped.
+  // Optimistic; if the server refuses (e.g. a second scored workout of the same sport that day)
+  // the grid is reloaded to what it actually has and the reason is shown.
+  const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
   const movePending = useRef(false);
 
-  const moveWorkout = async (from: string, to: string) => {
-    const moving = plan[from];
-    if (!moving || from === to || movePending.current) return;
+  const moveWorkout = async (entryId: number, to: string) => {
+    const moving = findEntry(plan, entryId);
+    if (!moving || moving.date === to || movePending.current) return;
     movePending.current = true;
-    const displaced = plan[to];
-    const entry = (w: Workout, date: string) => ({
-      date,
-      workout_type: w.workout_type,
-      description: w.description ?? null,
-      distance_km: w.distance_km ?? null,
-      elevation_m: w.elevation_m ?? null,
-      duration_min: w.duration_min ?? null,
-      intensity: w.intensity ?? null,
-      route_url: w.route_url ?? null,
-      structure: w.structure ?? null,
-    });
-    const set = [entry(moving, to), ...(displaced ? [entry(displaced, from)] : [])];
-    const moved = { ...moving, date: to, nutrition_json: null, route_analysis_json: null };
-    const swapped = displaced
-      ? { ...displaced, date: from, nutrition_json: null, route_analysis_json: null }
-      : undefined;
     setMoveError(null);
-    const rollback = () => setPlan(prev => {
-      const next = { ...prev };
-      // Keep any edits made while the move was saving, including on unrelated days.
-      if (prev[from] === swapped) next[from] = moving;
-      if (prev[to] === moved) {
-        if (displaced) next[to] = displaced;
-        else delete next[to];
-      }
-      return next;
-    });
-    setPlan(prev => {
-      const next = { ...prev };
-      delete next[from];
-      next[to] = moved;
-      if (swapped) next[from] = swapped;
-      return next;
-    });
-    if (selectedDate === from || selectedDate === to) {
+    setPlan(prev => applyMove(prev, entryId, to));
+    if (selectedDate === moving.date || selectedDate === to) {
       setSelectedDate(null);
       setEditMode(false);
     }
     try {
-      const res = await fetch("/api/calendar/plan/bulk", {
-        method: "POST",
+      const res = await fetch(`/api/calendar/entries/${entryId}`, {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ set, delete: displaced ? [] : [from] }),
+        body: JSON.stringify(datePatch(to)),
       });
-      if (!res.ok) throw new Error();
-      refreshDerived();
-    } catch {
-      rollback();
-      setMoveError("Couldn't move that workout, so it was put back. Try again.");
+      if (!res.ok) throw new Error(await failureMessage(res, ""));
+      reloadPlan();
+    } catch (e) {
+      await reloadPlan();
+      setMoveError(`Couldn't move that, so it was put back. ${e instanceof Error ? e.message : ""}`.trim());
     } finally {
       movePending.current = false;
     }
@@ -185,7 +154,7 @@ export default function Calendar({ routeParam }: { routeParam?: string | null })
 
   const weeks = chunkWeeks(buildGrid(currentMonth, weekStart));
   const rangeDays = range ? rangeLength(range) : 0;
-  const selectedWorkout = selectedDate ? plan[selectedDate] : null;
+  const selectedEntries = selectedDate ? plan[selectedDate] ?? [] : [];
 
   // First conflict per date (blocked-day / race-day) for the ⚠ badge on a day cell.
   const conflictByDate: Record<string, string> = {};
@@ -264,11 +233,12 @@ export default function Calendar({ routeParam }: { routeParam?: string | null })
             <DayPanel
               key={`${selectedDate}:${panelNonce}`}
               selectedDate={selectedDate}
-              selectedWorkout={selectedWorkout}
-              selectedSplit={splitActivities(plan, activities, compliance, selectedDate)}
+              entries={selectedEntries}
+              compliance={compliance}
+              split={splitActivities(plan, activities, compliance, selectedDate)}
               prefs={prefs}
               toggleBlocked={toggleBlocked}
-              setPlan={setPlan}
+              reloadPlan={reloadPlan}
               editMode={editMode}
               setEditMode={setEditMode}
               onClose={() => setSelectedDate(null)}
@@ -284,7 +254,7 @@ export default function Calendar({ routeParam }: { routeParam?: string | null })
           initialStart={genRange.start}
           initialEnd={genRange.end}
           plan={plan}
-          setPlan={setPlan}
+          reloadPlan={reloadPlan}
           onClose={() => setGenRange(null)}
         />
       )}

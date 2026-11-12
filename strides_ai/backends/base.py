@@ -5,12 +5,23 @@ from typing import Callable
 
 from .. import db
 from ..budget import Limits, TurnBudget, bounded_turn, BudgetExceeded, estimate
-from ..compliance import RIDE_WORKOUT_TYPES, RUN_WORKOUT_TYPES, classify_workout_type
+from ..kinds import (
+    KINDS,
+    display_type,
+    parse_goal_time,
+    race_sport_for_legacy_type,
+    RACE_PRIORITIES,
+    RACE_SPORTS,
+    RIDE_DISPLAY_TYPES,
+    RUN_DISPLAY_TYPES,
+    WORKOUT_TYPES,
+)
+from ..db.calendar import EntryError
 from ..units import Quantity, UnitSystem, to_si
 from ..workout_structure import INDOOR_RIDE_GUIDANCE, WORKOUT_STRUCTURE_SCHEMA
 
 # Mirrors ROUTE_CAPABLE_WORKOUT_TYPES in web/src/pages/calendar/constants.ts.
-ROUTE_CAPABLE_WORKOUT_TYPES = RUN_WORKOUT_TYPES | RIDE_WORKOUT_TYPES
+ROUTE_CAPABLE_WORKOUT_TYPES = RUN_DISPLAY_TYPES | RIDE_DISPLAY_TYPES
 
 SAVE_MEMORY_DESCRIPTION = (
     "Save an important fact about the athlete to persistent memory. "
@@ -69,19 +80,23 @@ def update_profile_fields() -> list[str]:
 SAVE_MEMORY_CATEGORIES: list[str] = ["goal", "race", "injury", "preference", "training", "other"]
 
 UPDATE_TRAINING_PLAN_DESCRIPTION = (
-    "Create, update, or remove planned workouts on the athlete's training calendar. "
-    "Use `set` to schedule or overwrite workouts (one entry per date, `date` and `workout_type` "
-    "required) and `delete` to clear a date back to a rest day. Always check the "
-    "'Upcoming Planned Workouts' and 'Calendar Constraints' sections of this prompt first so you "
-    "work around races, blocked-out days, and workouts already scheduled — never schedule over "
-    "them without the athlete's go-ahead (scheduling on a blocked-out day or race day is rejected). "
-    "Also use the 'Training State' section: keep weekly ramp and the projected fatigue/fitness "
-    "ratio inside its guardrails and add a down week after a few rising weeks. When the athlete says they can't complete a workout, or "
-    "a conflict shows up on a date you'd otherwise use, delete or move that day rather than "
-    "double-booking it. When regenerating a whole block, combine `delete` for the days that need "
-    "to change with `set` for their replacements in the same call. Give `distance` and "
-    "`elevation` in the athlete's units and say which with `distance_unit` / `elevation_unit`. "
-    + INDOOR_RIDE_GUIDANCE
+    "Create, update, or remove entries on the athlete's training calendar: workouts, races, rest "
+    "days, travel. A day can hold several entries. In `set`, an item without `id` creates a new "
+    "entry (`date` required; `kind` defaults to workout, which needs `workout_type`); an item "
+    "with the `id` shown in the 'Upcoming Planned Workouts' table changes only the fields you "
+    "send on that entry. `delete` takes entry ids. The result lists the id of every entry you "
+    "create so you can edit it later. Always check the 'Upcoming Planned Workouts' and "
+    "'Calendar Constraints' sections of this prompt first so you work around races, blocked-out "
+    "days, and entries already scheduled — never schedule over them without the athlete's go-ahead "
+    "(scheduling on a blocked-out day, or anything but a short easy shakeout on race day, is "
+    "rejected). Also use the 'Training State' section: keep weekly ramp and the projected "
+    "fatigue/fitness ratio inside its guardrails and add a down week after a few rising weeks. "
+    "When the athlete says they can't complete a workout, or a conflict shows up on a date you'd "
+    "otherwise use, delete or move that entry (send its `id` with a new `date`) rather than "
+    "double-booking it. When regenerating a block, `delete` the ids that need to change and `set` "
+    "their replacements in the same call. Only one scored workout per sport per day is allowed. "
+    "Give `distance` and `elevation` in the athlete's units and say which with `distance_unit` / "
+    "`elevation_unit`. " + INDOOR_RIDE_GUIDANCE
 )
 
 # Measurement fields of an update_training_plan workout entry, as JSON Schema (Claude, OpenAI and
@@ -95,6 +110,47 @@ WORKOUT_MEASUREMENT_PROPERTIES = {
     "elevation": {"type": "number", "description": "Planned elevation gain, in elevation_unit"},
     "elevation_unit": {"type": "string", "enum": list(ELEVATION_UNITS)},
     "structure": WORKOUT_STRUCTURE_SCHEMA,
+}
+
+
+PLAN_ENTRY_PROPERTIES = {
+    "id": {
+        "type": "integer",
+        "description": "Entry id to change. Omit to create a new entry.",
+    },
+    "date": {"type": "string", "description": "ISO date, YYYY-MM-DD"},
+    "kind": {"type": "string", "enum": list(KINDS), "description": "Defaults to workout."},
+    "workout_type": {
+        "type": "string",
+        "description": "Workouts only: " + ", ".join(WORKOUT_TYPES),
+    },
+    "title": {"type": "string", "description": "Race name, or a label for travel/other."},
+    "description": {
+        "type": "string",
+        "description": "A workout's objective, or notes for other kinds.",
+    },
+    **WORKOUT_MEASUREMENT_PROPERTIES,
+    "duration_min": {"type": "integer"},
+    "intensity": {"type": "string", "enum": ["easy", "moderate", "hard"]},
+    "sport": {"type": "string", "enum": list(RACE_SPORTS), "description": "Races only."},
+    "goal_time": {"type": "string", "description": "Races only: H:MM:SS or MM:SS."},
+    "priority": {"type": "string", "enum": list(RACE_PRIORITIES), "description": "Races only."},
+}
+
+UPDATE_TRAINING_PLAN_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "set": {
+            "type": "array",
+            "description": "Entries to create (no id) or update (with id).",
+            "items": {"type": "object", "properties": PLAN_ENTRY_PROPERTIES},
+        },
+        "delete": {
+            "type": "array",
+            "description": "Ids of entries to remove from the calendar.",
+            "items": {"type": "integer"},
+        },
+    },
 }
 
 
@@ -112,22 +168,109 @@ def _workout_measurements(workout: dict) -> tuple[float | None, float | None]:
     return distance_km, elevation_m
 
 
-def _normalized_plan_changes(args: dict) -> dict:
-    """update_training_plan args -> {"set": [...distance_km...], "delete": [...]} in stored units."""
-    sets = []
-    for w in args.get("set", []) or []:
-        if not w.get("date"):
+_LEGACY_KINDS = {"Rest": ("rest", None)}
+
+
+def _entry_kind(w: dict, existing: dict | None) -> tuple[str, str | None]:
+    """(kind, race sport) for a tool item. Legacy workout_type strings ("Race", "Running Race",
+    "Rest") still land on the right kind, so older prompts and habits keep working."""
+    if existing:
+        return existing["kind"], existing.get("sport")
+    wtype = w.get("workout_type")
+    if w.get("kind"):
+        return w["kind"], w.get("sport")
+    sport = race_sport_for_legacy_type(wtype)
+    if sport:
+        return "race", sport
+    if wtype in _LEGACY_KINDS:
+        return _LEGACY_KINDS[wtype][0], None
+    return "workout", None
+
+
+def _plan_ops(args: dict, plan_rows: list[dict]) -> tuple[list[dict], dict, list[str]]:
+    """update_training_plan args -> (ops for the calendar, guardrail changes, errors).
+
+    ``ops`` are the create / update / delete operations ``db.apply_calendar_changes`` takes; the
+    guardrail changes describe the same operations for ``training_state.check_plan_changes``."""
+    by_id = {p["id"]: p for p in plan_rows}
+    ops: list[dict] = []
+    creates, updates, deletes, errors = [], [], [], []
+    for entry_id in args.get("delete", []) or []:
+        try:
+            entry_id = int(entry_id)
+        except (TypeError, ValueError):
+            errors.append(f"Not an entry id: {entry_id!r}")
             continue
-        distance_km, _ = _workout_measurements(w)
-        sets.append(
-            {
-                "date": w["date"],
-                "workout_type": w.get("workout_type", "Workout"),
-                "distance_km": distance_km,
-                "intensity": w.get("intensity"),
-            }
-        )
-    return {"set": sets, "delete": list(args.get("delete", []) or [])}
+        ops.append({"op": "delete", "id": entry_id})
+        deletes.append(entry_id)
+    for w in args.get("set", []) or []:
+        entry_id = w.get("id")
+        existing = by_id.get(entry_id) if entry_id is not None else None
+        if entry_id is not None and existing is None:
+            errors.append(f"No calendar entry with id {entry_id}")
+            continue
+        if entry_id is None and not w.get("date"):
+            errors.append("A new entry needs a date")
+            continue
+        kind, sport = _entry_kind(w, existing)
+        data: dict = {}
+        for key in ("date", "title"):
+            if key in w:
+                data[key] = w[key]
+        if "description" in w:
+            data["objective" if kind == "workout" else "notes"] = w["description"]
+            if kind == "race" and "title" not in w and entry_id is None:
+                data["title"] = w["description"]
+        if kind in ("workout", "race"):
+            if "distance" in w or "distance_km" in w:
+                data["distance_km"] = _workout_measurements(w)[0]
+            if "elevation" in w or "elevation_m" in w:
+                data["elevation_m"] = _workout_measurements(w)[1]
+        if kind == "workout":
+            for key in ("workout_type", "duration_min", "intensity", "structure"):
+                if key in w:
+                    data[key] = w[key]
+            if entry_id is None:
+                data.setdefault("workout_type", w.get("workout_type", "Workout"))
+        elif kind == "race":
+            if sport and entry_id is None:
+                data["sport"] = sport
+            elif "sport" in w:
+                data["sport"] = w["sport"]
+            if "goal_time" in w:
+                seconds = parse_goal_time(w["goal_time"])
+                data["goal_time_s"] = seconds
+                data["goal_text"] = None if seconds is not None else w["goal_time"]
+            if "priority" in w:
+                data["priority"] = w["priority"]
+            if entry_id is None and not data.get("title"):
+                data["title"] = "Race"
+        if entry_id is None:
+            data["kind"] = kind
+            ops.append({"op": "create", **data})
+            creates.append(
+                {
+                    "date": data["date"],
+                    "kind": kind,
+                    "workout_type": display_type(kind, data.get("workout_type"), data.get("sport")),
+                    "distance_km": data.get("distance_km"),
+                    "duration_min": data.get("duration_min"),
+                    "intensity": data.get("intensity"),
+                }
+            )
+        else:
+            ops.append({"op": "update", "id": entry_id, **data})
+            updates.append(
+                {
+                    "id": entry_id,
+                    **{
+                        k: v
+                        for k, v in data.items()
+                        if k in ("date", "workout_type", "distance_km", "duration_min", "intensity")
+                    },
+                }
+            )
+    return ops, {"create": creates, "update": updates, "delete": deletes}, errors
 
 
 def _check_proposed_changes(changes: dict, mode: str | None = None) -> list:
@@ -486,17 +629,18 @@ class BaseBackend(ABC):
 
     def _execute_update_training_plan(self, args: dict) -> tuple[str, list[dict]]:
         """
-        Persist an update_training_plan tool call to the DB.
+        Persist an update_training_plan tool call as one atomic change set.
 
-        Applies each `set` entry (upsert) and each `delete` date (removal) from the
-        tool args, and returns (summary_string, changes) so the caller can append
-        summary_string as the tool_result and record changes in plan_changes.
+        ``set`` items create (no id) or patch (id) entries, ``delete`` removes entry ids.
+        Returns (summary, changes): the summary becomes the tool_result and names the id of every
+        entry created, so the model can address it later.
         """
         self._check_cancelled()
         self._budget.tool(args)
         change_start = len(self._budget.changes)
-        set_summaries: list[str] = []
-        proposed = _normalized_plan_changes(args)
+        ops, proposed, errors = _plan_ops(args, db.get_training_plan())
+        if errors:
+            return "Rejected, no changes made. " + "; ".join(errors), []
         violations = _check_proposed_changes(proposed, getattr(self, "mode", None))
         hard = [v for v in violations if v.hard]
         if hard:
@@ -507,56 +651,35 @@ class BaseBackend(ABC):
                 "to unblock the day first.",
                 [],
             )
-        for workout in args.get("set", []) or []:
-            date = workout.get("date")
-            if not date:
-                continue
-            workout_type = workout.get("workout_type", "Workout")
-            distance_km, elevation_m = _workout_measurements(workout)
-            # The tool can't see or set routes, and the upsert overwrites every column, so
-            # carry the athlete's attached route over when the new type can still have one.
-            # A running route is no use to a ride, so it only survives within the same sport.
-            route_url = None
-            if workout_type in ROUTE_CAPABLE_WORKOUT_TYPES:
-                existing = db.get_training_plan(date, date)
-                if existing and classify_workout_type(
-                    existing[0].get("workout_type")
-                ) is classify_workout_type(workout_type):
-                    route_url = existing[0].get("route_url")
-            db.save_planned_workout(
-                date,
-                workout_type,
-                workout.get("description"),
-                distance_km,
-                elevation_m,
-                workout.get("duration_min"),
-                workout.get("intensity"),
-                route_url=route_url,
-                structure=workout.get("structure"),
-            )
-            self._budget.changes.append(
-                {"action": "set", "date": date, "workout_type": workout_type}
-            )
-            set_summaries.append(f"{date} ({workout_type})")
+        try:
+            result = db.apply_calendar_changes(ops)
+        except EntryError as exc:
+            return f"Rejected, no changes made. {exc}", []
 
-        delete_summaries: list[str] = []
-        # `set` already overwrites, so a date in both lists keeps its replacement: models are
-        # told to combine delete + set when regenerating, and deleting last would wipe it.
-        set_dates = {w.get("date") for w in args.get("set", []) or []}
-        for date in args.get("delete", []) or []:
-            if date in set_dates:
-                continue
-            db.delete_planned_workout(date)
-            self._budget.changes.append({"action": "delete", "date": date})
-            delete_summaries.append(date)
+        created_ids = iter(result["created"])
+        created, updated, removed = [], [], []
+        for op in ops:
+            if op["op"] == "create":
+                entry_id = next(created_ids)
+                label = display_type(op["kind"], op.get("workout_type"), op.get("sport"))
+                created.append(f"{op['date']} ({label}) [id {entry_id}]")
+                self._budget.changes.append(
+                    {"action": "set", "id": entry_id, "date": op["date"], "workout_type": label}
+                )
+            elif op["op"] == "update":
+                updated.append(f"[id {op['id']}]")
+                self._budget.changes.append({"action": "set", "id": op["id"]})
+            else:
+                removed.append(f"[id {op['id']}]")
+                self._budget.changes.append({"action": "delete", "id": op["id"]})
 
         parts = []
-        if set_summaries:
-            parts.append(f"Scheduled {len(set_summaries)} workout(s): {', '.join(set_summaries)}")
-        if delete_summaries:
-            parts.append(
-                f"Removed {len(delete_summaries)} workout(s): {', '.join(delete_summaries)}"
-            )
+        if created:
+            parts.append(f"Created {len(created)} entr(ies): {', '.join(created)}")
+        if updated:
+            parts.append(f"Updated {len(updated)} entr(ies): {', '.join(updated)}")
+        if removed:
+            parts.append(f"Removed {len(removed)} entr(ies): {', '.join(removed)}")
         summary = ". ".join(parts) if parts else "No changes made."
         warnings = [v for v in violations if not v.hard]
         if warnings:

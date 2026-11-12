@@ -4,6 +4,7 @@ from datetime import date, timedelta
 
 import pytest
 
+from tests.plan_helpers import save_planned_workout, save_races
 from strides_ai.analytics import cardio
 from strides_ai.analytics.adapters import to_cardio_analytics
 from strides_ai.training_state import (
@@ -149,11 +150,22 @@ def test_recovery_week_flag_after_rising_weeks():
 def test_check_plan_changes_rejects_blocked_and_race_days():
     blocked = TODAY + timedelta(days=2)
     prefs = {"blocked_days": [blocked.isoformat()]}
-    changes = {"set": [{"date": blocked.isoformat(), "workout_type": "Easy Run", "distance_km": 5}]}
+    changes = {
+        "create": [{"date": blocked.isoformat(), "workout_type": "Easy Run", "distance_km": 5}]
+    }
     out = check_plan_changes(steady_rows(), [], prefs, "running", UnitSystem.METRIC, TODAY, changes)
     assert [(v.kind, v.hard) for v in out] == [("blocked_day", True)]
     # Rest is allowed on a blocked day.
-    rest = {"set": [{"date": blocked.isoformat(), "workout_type": "Rest", "intensity": "rest"}]}
+    rest = {
+        "create": [
+            {
+                "date": blocked.isoformat(),
+                "kind": "rest",
+                "workout_type": "Rest",
+                "intensity": "rest",
+            }
+        ]
+    }
     assert not check_plan_changes(
         steady_rows(), [], prefs, "running", UnitSystem.METRIC, TODAY, rest
     )
@@ -161,7 +173,7 @@ def test_check_plan_changes_rejects_blocked_and_race_days():
 
 def test_check_plan_changes_warns_on_new_ramp_but_not_existing():
     big = {
-        "set": [
+        "create": [
             {
                 "date": (TODAY + timedelta(days=i)).isoformat(),
                 "workout_type": "Easy Run",
@@ -176,7 +188,7 @@ def test_check_plan_changes_warns_on_new_ramp_but_not_existing():
     # Applying the same overload on top of a plan that already contains it adds nothing new.
     existing = apply_changes([], big)
     again = check_plan_changes(
-        steady_rows(), existing, {}, "running", UnitSystem.METRIC, TODAY, {"set": []}
+        steady_rows(), existing, {}, "running", UnitSystem.METRIC, TODAY, {"create": []}
     )
     assert again == []
 
@@ -197,7 +209,10 @@ def _exec_plan(mocker, args, prefs=None):
     mocker.patch("strides_ai.backends.base.db.get_training_plan", return_value=[])
     mocker.patch("strides_ai.backends.base.db.get_calendar_prefs", return_value=prefs or {})
     mocker.patch("strides_ai.backends.base.db.get_unit_system", return_value=UnitSystem.METRIC)
-    save = mocker.patch("strides_ai.backends.base.db.save_planned_workout")
+    save = mocker.patch(
+        "strides_ai.backends.base.db.apply_calendar_changes",
+        return_value={"created": [101], "updated": [], "deleted": []},
+    )
     stub = SimpleNamespace(
         _check_cancelled=lambda: None,
         _budget=SimpleNamespace(tool=lambda a: None, changes=[]),
@@ -224,83 +239,88 @@ def test_tool_saves_but_warns_on_overload(mocker):
     (summary, changes), save = _exec_plan(
         mocker, {"set": [{"date": day.isoformat(), "workout_type": "Easy Run", "distance": 5}]}
     )
-    assert summary.startswith("Scheduled 1 workout")
+    assert summary.startswith("Created 1 entr") and "[id 101]" in summary
     save.assert_called_once()
 
 
-def _route_passed(mocker, existing_rows, workout_type):
-    """route_url that one `set` saves when the DB already holds `existing_rows` for the date."""
+def _ops_sent(mocker, args, existing_rows=()):
+    """The operations one tool call hands to the calendar, with `existing_rows` in the plan."""
     from types import SimpleNamespace
 
     from strides_ai.backends.base import BaseBackend
 
-    day = (date.today() + timedelta(days=2)).isoformat()
     mocker.patch("strides_ai.backends.base.db.get_all_activities", return_value=steady_rows())
-    mocker.patch(
-        "strides_ai.backends.base.db.get_training_plan",
-        side_effect=lambda start=None, end=None: existing_rows if start == day else [],
-    )
+    mocker.patch("strides_ai.backends.base.db.get_training_plan", return_value=list(existing_rows))
     mocker.patch("strides_ai.backends.base.db.get_calendar_prefs", return_value={})
     mocker.patch("strides_ai.backends.base.db.get_unit_system", return_value=UnitSystem.METRIC)
-    save = mocker.patch("strides_ai.backends.base.db.save_planned_workout")
-    BaseBackend._execute_update_training_plan(
+    apply = mocker.patch(
+        "strides_ai.backends.base.db.apply_calendar_changes",
+        return_value={"created": [900, 901], "updated": [], "deleted": []},
+    )
+    result = BaseBackend._execute_update_training_plan(
         SimpleNamespace(
             _check_cancelled=lambda: None,
             _budget=SimpleNamespace(tool=lambda a: None, changes=[]),
         ),
-        {"set": [{"date": day, "workout_type": workout_type, "duration_min": 90}]},
+        args,
     )
-    save.assert_called_once()
-    return save.call_args.kwargs["route_url"]
+    return result, (apply.call_args.args[0] if apply.called else None)
 
 
-ROUTE = "https://ridewithgps.com/routes/123"
-
-
-def test_tool_edit_keeps_the_attached_route(mocker):
-    # The tool has no route field; overwriting a ride must not drop the athlete's route.
-    existing = [{"workout_type": "Long Ride", "route_url": ROUTE}]
-    assert _route_passed(mocker, existing, "Long Ride") == ROUTE
-
-
-def test_tool_edit_drops_route_when_new_type_cannot_have_one(mocker):
-    existing = [{"workout_type": "Long Ride", "route_url": ROUTE}]
-    assert _route_passed(mocker, existing, "Yoga") is None
-
-
-def test_tool_set_on_empty_date_has_no_route(mocker):
-    assert _route_passed(mocker, [], "Easy Run") is None
-
-
-def test_tool_edit_drops_route_when_the_sport_changes(mocker):
-    existing = [{"workout_type": "Long Run", "route_url": ROUTE}]
-    assert _route_passed(mocker, existing, "Long Ride") is None
-
-
-def test_tool_delete_and_set_same_date_keeps_the_replacement(mocker):
-    from types import SimpleNamespace
-
-    from strides_ai.backends.base import BaseBackend
-
+def test_tool_update_by_id_sends_only_the_given_fields(mocker):
+    # An update is a patch: the attached route, notes etc. are never in it, so they survive.
     day = (date.today() + timedelta(days=2)).isoformat()
-    other = (date.today() + timedelta(days=3)).isoformat()
-    for name, ret in (
-        ("get_all_activities", steady_rows()),
-        ("get_training_plan", []),
-        ("get_calendar_prefs", {}),
-        ("get_unit_system", UnitSystem.METRIC),
-    ):
-        mocker.patch(f"strides_ai.backends.base.db.{name}", return_value=ret)
-    save = mocker.patch("strides_ai.backends.base.db.save_planned_workout")
-    delete = mocker.patch("strides_ai.backends.base.db.delete_planned_workout")
-    budget = SimpleNamespace(tool=lambda a: None, changes=[])
-    BaseBackend._execute_update_training_plan(
-        SimpleNamespace(_check_cancelled=lambda: None, _budget=budget),
-        {"delete": [day, other], "set": [{"date": day, "workout_type": "Easy Run"}]},
-    )
-    save.assert_called_once()
-    delete.assert_called_once_with(other)  # `day` was replaced, not cleared
-    assert [(c["action"], c["date"]) for c in budget.changes] == [("set", day), ("delete", other)]
+    existing = [{"id": 5, "kind": "workout", "date": day, "workout_type": "Long Ride"}]
+    (summary, _), ops = _ops_sent(mocker, {"set": [{"id": 5, "duration_min": 90}]}, existing)
+    assert ops == [{"op": "update", "id": 5, "duration_min": 90}]
+    assert "Updated 1" in summary and "[id 5]" in summary
+
+
+def test_tool_rejects_unknown_entry_id(mocker):
+    (summary, changes), ops = _ops_sent(mocker, {"set": [{"id": 999, "duration_min": 90}]})
+    assert summary.startswith("Rejected") and changes == [] and ops is None
+
+
+def test_tool_creates_a_race_and_reports_ids(mocker):
+    day = (date.today() + timedelta(days=30)).isoformat()
+    args = {
+        "set": [
+            {
+                "date": day,
+                "kind": "race",
+                "title": "Fall Half",
+                "sport": "run",
+                "goal_time": "1:45:00",
+                "priority": "A",
+            }
+        ]
+    }
+    (summary, _), ops = _ops_sent(mocker, args)
+    assert ops[0]["goal_time_s"] == 6300 and ops[0]["title"] == "Fall Half"
+    assert ops[0]["kind"] == "race" and ops[0]["sport"] == "run"
+    assert "[id 900]" in summary
+
+
+def test_tool_legacy_race_and_rest_types_land_on_the_right_kind(mocker):
+    day = (date.today() + timedelta(days=30)).isoformat()
+    other = (date.today() + timedelta(days=31)).isoformat()
+    args = {
+        "set": [
+            {"date": day, "workout_type": "Running Race", "description": "10K"},
+            {"date": other, "workout_type": "Rest"},
+        ]
+    }
+    _, ops = _ops_sent(mocker, args)
+    assert (ops[0]["kind"], ops[0]["sport"], ops[0]["title"]) == ("race", "run", "10K")
+    assert ops[1]["kind"] == "rest"
+
+
+def test_tool_delete_ids_go_first_so_a_replacement_can_reuse_the_day(mocker):
+    day = (date.today() + timedelta(days=2)).isoformat()
+    existing = [{"id": 5, "kind": "workout", "date": day, "workout_type": "Easy Run"}]
+    args = {"delete": [5], "set": [{"date": day, "workout_type": "Easy Run"}]}
+    _, ops = _ops_sent(mocker, args, existing)
+    assert [o["op"] for o in ops] == ["delete", "create"]
 
 
 def test_recovery_streak_spanning_history_into_plan_is_flagged():
@@ -340,6 +360,17 @@ def test_tool_validation_is_scoped_to_the_active_mode(mocker):
             _check_cancelled=lambda: None,
             _budget=SimpleNamespace(tool=lambda a: None, changes=[]),
         ),
-        {"delete": ["2099-01-01"]},
+        {"delete": [12345]},
     )
     assert seen == {"rows": [], "mode": "running"}  # the ride never reaches running load
+
+
+def test_tool_notes_edit_does_not_rename_a_race(mocker):
+    day = (date.today() + timedelta(days=30)).isoformat()
+    existing = [
+        {"id": 5, "kind": "race", "date": day, "workout_type": "Running Race", "sport": "run"}
+    ]
+    _, ops = _ops_sent(
+        mocker, {"set": [{"id": 5, "description": "Taper week, bring gels"}]}, existing
+    )
+    assert ops == [{"op": "update", "id": 5, "notes": "Taper week, bring gels"}]

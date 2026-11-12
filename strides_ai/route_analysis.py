@@ -3,7 +3,7 @@
 import json
 import re
 
-from .db.models import TrainingPlan
+from .db.models import PlanRow
 from .units import (
     DEFAULT_UNIT_SYSTEM,
     Quantity,
@@ -59,11 +59,7 @@ def build_route_analysis_prompt(
     profile_text: str,
     units: UnitSystem = DEFAULT_UNIT_SYSTEM,
 ) -> str:
-    m = (
-        TrainingPlan.measure_field(workout, "distance_km", units)
-        if workout.get("distance_km")
-        else None
-    )
+    m = PlanRow.measure_field(workout, "distance_km", units) if workout.get("distance_km") else None
     dist = m.formatted if m else "not specified"
     dur = f"{workout['duration_min']} min" if workout.get("duration_min") else "not specified"
     route_lines = [

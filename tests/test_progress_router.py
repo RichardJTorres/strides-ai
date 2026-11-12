@@ -4,6 +4,7 @@ from datetime import date, timedelta
 
 from sqlmodel import Session
 
+from tests.plan_helpers import save_planned_workout, save_races
 from strides_ai import db
 from strides_ai.analytics.aggregation import monday_of
 from strides_ai.api.routers.progress import progress
@@ -31,7 +32,7 @@ def test_empty_database(tmp_db):
 
 def test_reads_plan_and_activities_from_the_db(tmp_db, sample_activity):
     last_week = monday_of(date.today()) - timedelta(days=5)
-    db.save_planned_workout(last_week.isoformat(), "Easy Run", None, 5.0, None, 30, "easy")
+    save_planned_workout(last_week.isoformat(), "Easy Run", None, 5.0, None, 30, "easy")
     db.upsert_activity(
         {**sample_activity, "start_date_local": f"{last_week.isoformat()}T07:00:00Z"}
     )

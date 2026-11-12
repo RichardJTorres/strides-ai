@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from sqlmodel import Session
 
-from strides_ai.db.models import Activity, TrainingPlan
+from strides_ai.db.models import Activity, RaceDetail, WorkoutDetail
 from strides_ai.units import (
     DEFAULT_UNIT_SYSTEM,
     Quantity,
@@ -112,7 +112,7 @@ def test_measurements_skip_missing_fields():
 
 
 def test_training_plan_scales_stored_km():
-    w = TrainingPlan(date="2026-10-20", distance_km=8.04672, elevation_m=100)
+    w = WorkoutDetail(entry_id=1, workout_type="Easy Run", distance_km=8.04672, elevation_m=100)
     assert w.measurement("distance_km", I).formatted == "5.00 mi"
     assert w.measurement("distance_km", M).formatted == "8.05 km"
     assert w.measurement("elevation_m", I).formatted == "328 ft"
@@ -120,11 +120,11 @@ def test_training_plan_scales_stored_km():
 
 def test_measure_field_works_on_plain_dicts():
     row = {"distance_km": 10.0}
-    assert TrainingPlan.measure_field(row, "distance_km", I).formatted == "6.21 mi"
+    assert WorkoutDetail.measure_field(row, "distance_km", I).formatted == "6.21 mi"
 
 
 def test_every_declared_measurement_is_a_real_column():
-    for model in (Activity, TrainingPlan):
+    for model in (Activity, WorkoutDetail, RaceDetail):
         for field in model.__measurements__:
             assert field in model.model_fields, f"{model.__name__}.{field}"
 

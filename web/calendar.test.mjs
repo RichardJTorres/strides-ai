@@ -3,127 +3,125 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 
-// Exercise the components' actual handlers with deferred requests and React-style updates.
-// Each handler is lifted out of its source file by name and run with its free variables bound,
-// so it must stay a `const` declaration in that file and keep those variable names.
-function handler(file, name, bindings) {
-  const source = readFileSync(new URL(`./src/pages/calendar/${file}`, import.meta.url), 'utf8');
-  const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  let declaration;
-  function visit(node) {
-    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === name) declaration = node;
-    ts.forEachChild(node, visit);
-  }
-  visit(ast);
-  assert.ok(declaration, `Missing production handler: ${name} in ${file}`);
-  const compiled = ts.transpile(`const ${declaration.getText(ast)};`, { target: ts.ScriptTarget.ES2022 });
-  return new Function(...Object.keys(bindings), `${compiled}\nreturn ${name};`)(...Object.values(bindings));
-}
+// The calendar's write behaviour is tested through the pure helpers in entryOps.ts: what a move
+// does to the plan, what a drag sends, what each form saves, and what accepting a block changes.
+const source = readFileSync(new URL('./src/pages/calendar/entryOps.ts', import.meta.url), 'utf8')
+  .replace(/import type[^\n]*\n/, '');
+const compiled = ts.transpile(source, { module: ts.ModuleKind.ES2022 });
+const ops = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
 
-function moveHarness(initial) {
-  let plan = initial;
-  const pending = [];
-  const movePending = { current: false };
-  let moveError = null;
-  let refreshes = 0;
-  const setPlan = update => { plan = typeof update === 'function' ? update(plan) : update; };
-  const move = () => handler('CalendarPage.tsx', 'moveWorkout', {
-    plan, movePending, setPlan, selectedDate: null,
-    setSelectedDate() {}, setEditMode() {}, setMoveError(message) { moveError = message; }, refreshDerived() { refreshes += 1; },
-    fetch: (_url, options) => new Promise((resolve, reject) => {
-      pending.push({ body: JSON.parse(options.body), resolve, reject });
-    }),
-  });
-  return { move, pending, setPlan, get plan() { return plan; }, get moveError() { return moveError; }, get refreshes() { return refreshes; } };
-}
+const ride = { id: 1, date: 'A', kind: 'workout', workout_type: 'Indoor Ride', structure: { blocks: [{ kind: 'freeride', duration_s: 600 }] } };
+const run = { id: 2, date: 'B', kind: 'workout', workout_type: 'Easy Run' };
+const race = { id: 3, date: 'B', kind: 'race', workout_type: 'Running Race', title: 'Fall 10K' };
 
-test('failed move preserves unrelated edits and new workouts', async () => {
-  const a = { workout_type: 'Indoor Ride' };
-  const h = moveHarness({ A: a, C: { workout_type: 'Easy Run' } });
-  const request = h.move()('A', 'B');
-  const edited = { workout_type: 'Long Run' };
-  h.setPlan(prev => ({ ...prev, C: edited, D: { workout_type: 'Rest' } }));
-  h.pending[0].resolve({ ok: false });
-  await request;
-  assert.equal(h.plan.A, a);
-  assert.equal(h.plan.B, undefined);
-  assert.equal(h.plan.C, edited);
-  assert.equal(h.plan.D.workout_type, 'Rest');
+test('a move puts the entry on the target day beside what is already there', () => {
+  const plan = ops.applyMove({ A: [ride], B: [run, race] }, 1, 'B');
+  assert.equal(plan.A, undefined); // the emptied day disappears
+  assert.deepEqual(plan.B.map(e => e.id), [1, 2, 3]); // nothing displaced, order by id
+  assert.equal(plan.B[0].date, 'B');
+  assert.equal(plan.B[0].structure, ride.structure); // the rest of the entry is untouched
 });
 
-test('another move is blocked until the pending request settles', async () => {
-  const h = moveHarness({ A: { workout_type: 'Indoor Ride' }, C: { workout_type: 'Easy Run' } });
-  const first = h.move()('A', 'B');
-  await h.move()('C', 'D');
-  assert.equal(h.pending.length, 1);
-  h.pending[0].resolve({ ok: true });
-  await first;
-  const second = h.move()('C', 'D');
-  assert.equal(h.pending.length, 2);
-  h.pending[1].resolve({ ok: true });
-  await second;
-  assert.deepEqual(Object.keys(h.plan).sort(), ['B', 'D']);
+test('moving to the same day or an unknown entry changes nothing', () => {
+  const plan = { A: [ride] };
+  assert.equal(ops.applyMove(plan, 1, 'A'), plan);
+  assert.equal(ops.applyMove(plan, 99, 'B'), plan);
 });
 
-test('network failure restores both swapped workouts and releases the move lock', async () => {
-  const route = 'https://ridewithgps.com/routes/1';
-  const a = { workout_type: 'Indoor Ride', route_url: route, structure: { blocks: [{ kind: 'freeride', duration_s: 600 }] } };
-  const b = { workout_type: 'Easy Run' };
-  const h = moveHarness({ A: a, B: b });
-  const request = h.move()('A', 'B');
-  assert.deepEqual(h.pending[0].body.set[0].structure, a.structure);
-  assert.equal(h.pending[0].body.set[0].route_url, route); // a move carries the route too
-  assert.equal(h.pending[0].body.set[1].route_url, null);
-  h.pending[0].reject(new Error('offline'));
-  await request;
-  assert.deepEqual(h.plan, { A: a, B: b });
-  assert.match(h.moveError, /put back/); // the athlete is told, not left guessing
-  const retry = h.move()('A', 'B');
-  assert.equal(h.pending.length, 2);
-  h.pending[1].resolve({ ok: true });
-  await retry;
-  assert.equal(h.plan.B.structure, a.structure);
-  assert.equal(h.moveError, null); // cleared by the next attempt
-  assert.equal(h.refreshes, 1); // only the confirmed move refreshes the derived figures
+test('a drag is a date-only patch', () => {
+  assert.deepEqual(ops.datePatch('2026-10-30'), { date: '2026-10-30' });
 });
 
-test('editing preserves structure unless the athlete explicitly removes it', async () => {
-  const structure = { blocks: [{ kind: 'steady', duration_s: 3600, pct: 0.75 }] };
-  for (const clear of [false, true]) {
-    let body;
-    const save = handler('DayPanel.tsx', 'saveWorkout', {
-      selectedDate: '2026-10-30', selectedWorkout: { structure },
-      form: { workout_type: 'Indoor Ride', duration_min: clear ? '30' : '60', clear_structure: clear, route_url: 'https://strava.com/routes/2' },
-      NO_DISTANCE_WORKOUT_TYPES: new Set(), ROUTE_CAPABLE_WORKOUT_TYPES: new Set(['Indoor Ride']),
-      keepsStructure: () => true, kmFromInput: () => null, mFromInput: () => null,
-      setPlan() {}, setEditMode() {}, setSaveError() {},
-      fetch: async (_url, options) => {
-        body = JSON.parse(options.body);
-        return { ok: true, json: async () => ({ workout: body }) };
-      },
-    });
-    await save();
-    assert.deepEqual(body.structure, clear ? null : structure);
-    assert.equal(body.duration_min, clear ? 30 : 60);
-    assert.equal(body.route_url, 'https://strava.com/routes/2');
-  }
+test('the server reason is shown for a refused write, else the fallback', async () => {
+  const res = body => ({ json: async () => body });
+  assert.equal(await ops.failureMessage(res({ detail: 'Already has a run' }), 'x'), 'Already has a run');
+  assert.equal(await ops.failureMessage(res({}), 'fallback'), 'fallback');
+  assert.equal(await ops.failureMessage({ json: async () => { throw new Error(); } }, 'fallback'), 'fallback');
+  assert.equal(await ops.failureMessage(undefined, 'fallback'), 'fallback');
 });
 
-test('a failed save keeps the form open and says so', async () => {
-  for (const fail of [async () => ({ ok: false }), async () => { throw new Error('offline'); }]) {
-    const calls = { error: undefined, closed: false, planned: false };
-    const save = handler('DayPanel.tsx', 'saveWorkout', {
-      selectedDate: '2026-10-30', selectedWorkout: null,
-      form: { workout_type: 'Easy Run', duration_min: '', clear_structure: false, route_url: '' },
-      NO_DISTANCE_WORKOUT_TYPES: new Set(), ROUTE_CAPABLE_WORKOUT_TYPES: new Set(),
-      keepsStructure: () => false, kmFromInput: () => null, mFromInput: () => null,
-      setPlan() { calls.planned = true; }, setEditMode() { calls.closed = true; },
-      setSaveError(message) { calls.error = message; },
-      fetch: fail,
-    });
-    await save();
-    assert.match(calls.error, /Couldn't save/);
-    assert.equal(calls.closed, false);
-    assert.equal(calls.planned, false);
-  }
+const form = (over = {}) => ({
+  workout_type: 'Indoor Ride', title: '', sport: 'run', goal_time: '', priority: '',
+  result_activity_id: '', description: '', distance: '', elevation: '', duration_min: '60',
+  intensity: 'easy', route_url: '', clear_structure: false, ...over,
+});
+const ctx = (over = {}) => ({
+  existing: null, kmFromInput: v => (v ? Number(v) : null), mFromInput: v => (v ? Number(v) : null),
+  routeCapable: t => t === 'Indoor Ride', noDistance: t => t === 'Yoga', keepsStructure: t => t === 'Indoor Ride', ...over,
+});
+
+test('editing a workout keeps its structure unless the athlete removes it', () => {
+  const kept = ops.buildEntryBody('workout', 'D', form(), ctx({ existing: ride }));
+  assert.equal('structure' in kept, false); // a patch that omits it leaves it alone
+  assert.equal('duration_min' in kept, false); // the structure decides the duration
+  const cleared = ops.buildEntryBody('workout', 'D', form({ clear_structure: true, duration_min: '30' }), ctx({ existing: ride }));
+  assert.equal(cleared.structure, null);
+  assert.equal(cleared.duration_min, 30);
+});
+
+test('creating sends kind and date; editing does not', () => {
+  const created = ops.buildEntryBody('workout', '2026-10-30', form({ route_url: 'https://strava.com/routes/2' }), ctx());
+  assert.equal(created.kind, 'workout');
+  assert.equal(created.date, '2026-10-30');
+  assert.equal(created.route_url, 'https://strava.com/routes/2');
+  const edited = ops.buildEntryBody('workout', 'D', form(), ctx({ existing: run }));
+  assert.equal('kind' in edited, false);
+  assert.equal('date' in edited, false);
+});
+
+test('a race form saves name, sport, goal and priority', () => {
+  const body = ops.buildEntryBody('race', 'D', form({
+    title: 'Fall Half', sport: 'run', goal_time: '1:45:00', priority: 'A', distance: '21.1',
+    route_url: 'https://strava.com/routes/9',
+  }), ctx());
+  assert.deepEqual(
+    [body.kind, body.title, body.sport, body.goal_time_s, body.priority, body.distance_km],
+    ['race', 'Fall Half', 'run', 6300, 'A', 21.1],
+  );
+  assert.equal(body.route_url, 'https://strava.com/routes/9');
+});
+
+test('an unparseable goal time is kept as text, never dropped', () => {
+  const body = ops.buildEntryBody('race', 'D', form({ goal_time: 'sub 4' }), ctx());
+  assert.equal(body.goal_time_s, null);
+  assert.equal(body.goal_text, 'sub 4');
+  assert.equal(ops.parseGoalTime('3:30:00'), 12600);
+  assert.equal(ops.parseGoalTime('45:00'), 2700);
+  assert.equal(ops.parseGoalTime('1:75:00'), null);
+  assert.equal(ops.formatGoalTime(6300), '1:45:00');
+  assert.equal(ops.formatGoalTime(2700), '45:00');
+});
+
+test('a race result link is only sent when editing', () => {
+  const create = ops.buildEntryBody('race', 'D', form({ result_activity_id: '7' }), ctx());
+  assert.equal('result_activity_id' in create, false);
+  const edit = ops.buildEntryBody('race', 'D', form({ result_activity_id: '7' }), ctx({ existing: race }));
+  assert.equal(edit.result_activity_id, 7);
+  assert.equal(ops.buildEntryBody('race', 'D', form(), ctx({ existing: race })).result_activity_id, null);
+});
+
+test('travel and rest entries save only their label and notes', () => {
+  assert.deepEqual(ops.buildEntryBody('travel', 'D', form({ title: 'Flight', description: ' hotel ' }), ctx()),
+    { kind: 'travel', date: 'D', title: 'Flight', notes: 'hotel' });
+  assert.deepEqual(ops.buildEntryBody('rest', 'D', form(), ctx()), { kind: 'rest', date: 'D', notes: null });
+});
+
+test('accepting a block replaces only the workouts in range, in one change set', () => {
+  const plan = {
+    '2026-11-02': [{ id: 1, kind: 'workout', date: '2026-11-02', workout_type: 'Easy Run' }, { id: 2, kind: 'race', date: '2026-11-02' }],
+    '2026-11-03': [{ id: 3, kind: 'rest', date: '2026-11-03' }],
+    '2026-11-20': [{ id: 4, kind: 'workout', date: '2026-11-20' }], // outside the range
+  };
+  const generated = [{ date: '2026-11-02', workout_type: 'Tempo Run' }];
+  const range = { start: '2026-11-01', end: '2026-11-10' };
+  const replace = ops.generationOps(generated, plan, range, 'replace');
+  assert.deepEqual(replace.replaced.map(e => e.id), [1]);
+  assert.deepEqual(replace.ops, [{ op: 'delete', id: 1 }, { op: 'create', date: '2026-11-02', workout_type: 'Tempo Run' }]);
+  const append = ops.generationOps(generated, plan, range, 'append');
+  assert.deepEqual(append.replaced, []);
+  assert.deepEqual(append.ops.map(o => o.op), ['create']);
+});
+
+test('each accept attempt gets its own idempotency key', () => {
+  assert.notEqual(ops.newRequestId(), ops.newRequestId());
 });

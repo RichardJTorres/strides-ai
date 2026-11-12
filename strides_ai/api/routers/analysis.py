@@ -59,9 +59,13 @@ def _planned_context(activity, units: UnitSystem) -> str:
     if not plan_rows:
         return ""
     scored = compliance_for_range(plan_rows, get_all_activities(), when, when, date.today(), units)
-    day = scored[0] if scored else None
-    is_match = day is not None and day.matched_activity_id == activity.id
-    return planned_workout_block(plan_rows[0], day, units, is_match=is_match)
+    # A date can hold several entries: use the one this activity was matched to, else the first.
+    day = next((d for d in scored if d.matched_activity_id == activity.id), None)
+    is_match = day is not None
+    if day is None:
+        day = scored[0] if scored else None
+    row = next((r for r in plan_rows if day is not None and r.get("id") == day.entry_id), None)
+    return planned_workout_block(row or plan_rows[0], day, units, is_match=is_match)
 
 
 @router.post("/activities/{activity_id}/deep-dive", response_model=DeepDiveResponse)

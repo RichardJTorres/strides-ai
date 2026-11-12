@@ -13,6 +13,12 @@ DB_PATH = DATA_DIR / "activities.db"
 _engine: sa.engine.Engine | None = None
 
 
+def _enable_foreign_keys(dbapi_conn, _record) -> None:
+    cur = dbapi_conn.cursor()
+    cur.execute("PRAGMA foreign_keys=ON")
+    cur.close()
+
+
 def get_engine() -> sa.engine.Engine:
     global _engine
     if _engine is None:
@@ -21,6 +27,8 @@ def get_engine() -> sa.engine.Engine:
             f"sqlite:///{DB_PATH}",
             connect_args={"check_same_thread": False},
         )
+        # SQLite ignores foreign keys unless asked, per connection.
+        sa.event.listen(_engine, "connect", _enable_foreign_keys)
     return _engine
 
 

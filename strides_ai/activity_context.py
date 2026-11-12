@@ -147,15 +147,13 @@ def planned_workout_block(
     day's score then says nothing about this activity, so it is left out and the model is told."""
     if not plan_row:
         return ""
-    from .db.models import TrainingPlan
+    from .db.models import PlanRow
 
     facts = [plan_row.get("workout_type") or "Workout"]
     if plan_row.get("distance_km"):
-        facts.append(TrainingPlan.measure_field(plan_row, "distance_km", units).formatted)
+        facts.append(PlanRow.measure_field(plan_row, "distance_km", units).formatted)
     if plan_row.get("elevation_m"):
-        facts.append(
-            TrainingPlan.measure_field(plan_row, "elevation_m", units).formatted + " climbing"
-        )
+        facts.append(PlanRow.measure_field(plan_row, "elevation_m", units).formatted + " climbing")
     if plan_row.get("duration_min"):
         facts.append(f"{plan_row['duration_min']} min")
     if plan_row.get("intensity"):

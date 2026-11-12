@@ -187,7 +187,7 @@ def measure(
     value: float | None, qty: Quantity, system: UnitSystem, *, scale: float = 1.0
 ) -> Measurement | None:
     """Build a Measurement from a stored value. ``scale`` converts a stored column that isn't
-    in the canonical unit (e.g. ``TrainingPlan.distance_km`` uses scale=1000 to reach meters)."""
+    in the canonical unit (e.g. ``WorkoutDetail.distance_km`` uses scale=1000 to reach meters)."""
     if value is None:
         return None
     si = value * scale

@@ -1,5 +1,5 @@
 // Pure calendar-grid maths: no React, no fetching.
-import type { Activity, ComplianceDay, GridCell, Plan, WeekStart, WeekSummary } from "./types";
+import type { Activity, ComplianceById, ComplianceDay, Entry, GridCell, Plan, WeekStart, WeekSummary } from "./types";
 
 export const dateToStr = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -41,40 +41,73 @@ export function weekFrom(startStr: string): GridCell[] {
   });
 }
 
-/** Split a day's activities into the one matched to its planned workout (merged into the
- *  workout in the UI) and the rest. Without a plan nothing is matched. */
+/** Entries on a date, oldest first. */
+export const entriesOn = (plan: Plan, dateStr: string): Entry[] => plan[dateStr] ?? [];
+
+/** Group a flat entry list by date (the API returns it ordered by date, then id). */
+export function groupByDate(entries: Entry[]): Plan {
+  const plan: Plan = {};
+  for (const e of entries) (plan[e.date] ??= []).push(e);
+  return plan;
+}
+
+const SCORED_STATUSES = ["completed", "modified", "missed", "upcoming"];
+
+/** One status for a whole day, from its scored entries: any miss makes the day a miss, then a
+ *  shortened one, then upcoming; "completed" only when every scored entry was. Races, rest and
+ *  yoga are never scored, so a day with only those has no status. */
+export function dayCompliance(plan: Plan, compliance: ComplianceById, dateStr: string): ComplianceDay | undefined {
+  const scored = entriesOn(plan, dateStr)
+    .map(e => compliance[e.id])
+    .filter((d): d is ComplianceDay => !!d && SCORED_STATUSES.includes(d.status));
+  for (const status of ["missed", "modified", "upcoming"]) {
+    const hit = scored.find(d => d.status === status);
+    if (hit) return hit;
+  }
+  return scored[0];
+}
+
+/** Split a day's activities into those matched to one of its entries (shown merged into that
+ *  entry in the UI) and the rest. Without a plan nothing is matched. */
 export function splitActivities(
   plan: Plan,
   activities: Record<string, Activity[]>,
-  compliance: Record<string, ComplianceDay>,
+  compliance: ComplianceById,
   dateStr: string,
-): { matched: Activity | undefined; others: Activity[] } {
+): { byEntry: Record<number, Activity>; others: Activity[] } {
   const all = activities[dateStr] ?? [];
-  const matchedId = plan[dateStr] ? compliance[dateStr]?.matched_activity_id : null;
-  const matched = matchedId != null ? all.find(a => a.id === matchedId) : undefined;
-  return { matched, others: matched ? all.filter(a => a !== matched) : all };
+  const byEntry: Record<number, Activity> = {};
+  const used = new Set<number>();
+  for (const e of entriesOn(plan, dateStr)) {
+    const id = compliance[e.id]?.matched_activity_id;
+    const hit = id != null ? all.find(a => a.id === id) : undefined;
+    if (hit) { byEntry[e.id] = hit; used.add(hit.id); }
+  }
+  return { byEntry, others: all.filter(a => !used.has(a.id)) };
 }
 
-/** Week totals. The workout counts only tally the backend-computed per-day statuses
+/** Week totals. Planned distance counts workouts only (a race is shown on its own, not as
+ *  training volume). The workout counts only tally the backend-computed per-entry statuses
  *  (strides_ai/compliance.py) — no matching/tolerance logic lives here. */
 export function summarizeWeek(
   cells: GridCell[],
   plan: Plan,
   activities: Record<string, Activity[]>,
-  compliance: Record<string, ComplianceDay>,
+  compliance: ComplianceById,
 ): WeekSummary {
   const summary: WeekSummary = {
     cells, plannedKm: 0, actualKm: 0, completed: 0, modified: 0, missed: 0, upcoming: 0,
   };
   for (const cell of cells) {
-    const w = plan[cell.dateStr];
-    summary.plannedKm += w && w.workout_type !== "Rest" ? (w.distance_km ?? 0) : 0;
+    for (const e of entriesOn(plan, cell.dateStr)) {
+      if (e.kind === "workout") summary.plannedKm += e.distance_km ?? 0;
+      const status = compliance[e.id]?.status;
+      if (status === "completed") summary.completed++;
+      else if (status === "modified") summary.modified++;
+      else if (status === "missed") summary.missed++;
+      else if (status === "upcoming") summary.upcoming++;
+    }
     for (const a of activities[cell.dateStr] ?? []) summary.actualKm += (a.distance_m ?? 0) / 1000;
-    const status = compliance[cell.dateStr]?.status;
-    if (status === "completed") summary.completed++;
-    else if (status === "modified") summary.modified++;
-    else if (status === "missed") summary.missed++;
-    else if (status === "upcoming") summary.upcoming++;
   }
   return summary;
 }
