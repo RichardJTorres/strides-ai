@@ -304,3 +304,50 @@ def test_sport_type_match_is_case_sensitive():
     act = activity(sport_type="run", distance_m=5_000.0)  # lowercase — does not match RUN_TYPES
     result = compute_day_compliance(p, [act], TODAY)
     assert result.status is ComplianceStatus.MISSED
+
+
+# ── several entries on one date ─────────────────────────────────────────────────
+
+
+def test_one_activity_is_never_credited_to_two_workouts():
+    run = PlannedWorkout(date=PAST, workout_type="Easy Run", distance_km=10.0, entry_id=1)
+    intervals = PlannedWorkout(date=PAST, workout_type="Intervals", distance_km=None, entry_id=2)
+    days = compute_range_compliance([intervals, run], [activity(id=7)], TODAY)
+    by_entry = {d.entry_id: d for d in days}
+    assert by_entry[1].status is ComplianceStatus.COMPLETED and by_entry[1].matched_activity_id == 7
+    # The sport-specific workout claimed the only activity; the ambiguous one is not credited.
+    assert by_entry[2].status is ComplianceStatus.MISSED
+    assert [d.entry_id for d in days] == [2, 1]  # output keeps input order
+
+
+def test_race_is_neutral_until_a_result_is_linked_and_keeps_its_activity():
+    race = PlannedWorkout(
+        date=PAST, workout_type="Running Race", distance_km=21.1, entry_id=1, kind="race"
+    )
+    run = PlannedWorkout(date=PAST, workout_type="Easy Run", distance_km=5.0, entry_id=2)
+    acts = [activity(id=7, distance_m=21_100.0), activity(id=8, distance_m=5_000.0)]
+
+    unlinked = {d.entry_id: d for d in compute_range_compliance([race, run], acts, TODAY)}
+    assert unlinked[1].status is ComplianceStatus.UNSCORED  # never a miss
+    assert "link the activity" in unlinked[1].note
+
+    linked_race = PlannedWorkout(
+        date=PAST,
+        workout_type="Running Race",
+        distance_km=21.1,
+        entry_id=1,
+        kind="race",
+        result_activity_id=7,
+    )
+    linked = {d.entry_id: d for d in compute_range_compliance([linked_race, run], acts, TODAY)}
+    assert linked[1].matched_activity_id == 7 and linked[1].actual_distance_km == 21.1
+    assert linked[2].matched_activity_id == 8  # the race's activity is not also the easy run's
+
+
+def test_travel_and_other_entries_are_not_planned_workouts():
+    rows = [
+        {"date": "2026-06-10", "kind": "travel", "workout_type": "Travel", "id": 1},
+        {"date": "2026-06-10", "kind": "other", "workout_type": "Other", "id": 2},
+        {"date": "2026-06-10", "kind": "rest", "workout_type": "Rest", "id": 3},
+    ]
+    assert [p.entry_id for p in planned_workouts_from_rows(rows)] == [3]

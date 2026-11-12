@@ -1,0 +1,38 @@
+{
+  "route_capable": [
+    "Easy Ride",
+    "Easy Run",
+    "Indoor Ride",
+    "Long Ride",
+    "Long Run",
+    "Tempo Ride",
+    "Tempo Run"
+  ],
+  "structure_capable": [
+    "Easy Ride",
+    "Indoor Ride",
+    "Long Ride",
+    "Tempo Ride"
+  ],
+  "unscored_workout_types": [
+    "Yoga"
+  ],
+  "workout_types": {
+    "other": [
+      "Intervals",
+      "Cross-Training",
+      "Yoga"
+    ],
+    "ride": [
+      "Easy Ride",
+      "Indoor Ride",
+      "Long Ride",
+      "Tempo Ride"
+    ],
+    "run": [
+      "Easy Run",
+      "Long Run",
+      "Tempo Run"
+    ]
+  }
+}

@@ -4,7 +4,8 @@ import sqlite3
 from datetime import datetime, timedelta
 
 from . import compliance, db
-from .db.models import TrainingPlan
+from .db.calendar import format_goal
+from .db.models import PlanRow
 from .memory_context import memories_section
 from .modes import MODES
 from .training_state import build_training_state, render_for_prompt
@@ -253,19 +254,29 @@ def _upcoming_workouts_section(units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
     if not upcoming:
         return ""
     detail_until = (datetime.now().date() + timedelta(days=WORKOUT_DETAIL_DAYS)).isoformat()
-    header = "Date       | Type             | Distance  | Elevation | Duration | Intensity"
-    sep = "-" * 78
+    header = "Id    | Date       | Type             | Distance  | Elevation | Duration | Intensity"
+    sep = "-" * 84
     rows = []
     for w in upcoming:
-        m = TrainingPlan.measure_field(w, "distance_km", units) if w.get("distance_km") else None
+        m = PlanRow.measure_field(w, "distance_km", units) if w.get("distance_km") else None
         dist = m.formatted if m else "—"
-        e = TrainingPlan.measure_field(w, "elevation_m", units) if w.get("elevation_m") else None
+        e = PlanRow.measure_field(w, "elevation_m", units) if w.get("elevation_m") else None
         elev = e.formatted if e else "—"
         dur = f"{w['duration_min']} min" if w.get("duration_min") else "—"
         row = (
-            f"{w['date']:10s} | {(w['workout_type'] or '')[:16]:16s} | {dist:9s} | {elev:9s} | "
+            f"{w.get('id') or '':<5} | {w['date']:10s} | {(w['workout_type'] or '')[:16]:16s} | "
+            f"{dist:9s} | {elev:9s} | "
             f"{dur:8s} | {w.get('intensity') or '—'}"
         )
+        if w.get("kind") == "race":
+            bits = [w.get("title") or "Race"]
+            if w.get("goal_time_s"):
+                bits.append(f"goal {format_goal(w['goal_time_s'])}")
+            elif w.get("goal_text"):
+                bits.append(f"goal {w['goal_text']}")
+            if w.get("priority"):
+                bits.append(f"priority {w['priority']}")
+            row += f"\n{'':10s}   race: " + ", ".join(bits)
         structure = structure_from_json(w.get("structure_json"))
         if structure:
             row += f"\n{'':10s}   structure: {render_text(structure)}"
@@ -336,7 +347,14 @@ def _calendar_prefs_section() -> str:
     lines = []
     if races:
         lines.append("Upcoming races:")
-        lines.extend(f"  - {r['date']}: {r.get('name', 'Race')}" for r in races)
+        for r in races:
+            extras = [r["sport"]] if r.get("sport") and r["sport"] != "other" else []
+            if r.get("target_time"):
+                extras.append(f"goal {r['target_time']}")
+            if r.get("priority"):
+                extras.append(f"priority {r['priority']}")
+            suffix = f" ({', '.join(extras)})" if extras else ""
+            lines.append(f"  - {r['date']}: {r.get('name', 'Race')}{suffix}")
     if blocked:
         lines.append("Blocked-out days (do not schedule workouts on these dates):")
         lines.extend(f"  - {d}" for d in blocked)

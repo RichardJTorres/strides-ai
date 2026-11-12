@@ -40,22 +40,43 @@ test('weekFrom crosses month and year boundaries', () => {
   ]);
 });
 
-test('splitActivities matches only on a planned day', () => {
-  const a = { id: 1 }, b = { id: 2 };
-  const acts = { D: [a, b] };
-  const comp = { D: { matched_activity_id: 2 } };
-  assert.deepEqual(grid.splitActivities({ D: {} }, acts, comp, 'D'), { matched: b, others: [a] });
-  assert.deepEqual(grid.splitActivities({}, acts, comp, 'D'), { matched: undefined, others: [a, b] });
-  assert.deepEqual(grid.splitActivities({ D: {} }, acts, {}, 'D'), { matched: undefined, others: [a, b] });
-  assert.deepEqual(grid.splitActivities({}, {}, {}, 'D'), { matched: undefined, others: [] });
+test('splitActivities matches activities to the entries they were scored against', () => {
+  const a = { id: 1 }, b = { id: 2 }, c = { id: 3 };
+  const acts = { D: [a, b, c] };
+  const plan = { D: [{ id: 10 }, { id: 11 }] };
+  const comp = { 10: { matched_activity_id: 2 }, 11: { matched_activity_id: 3 } };
+  assert.deepEqual(grid.splitActivities(plan, acts, comp, 'D'), { byEntry: { 10: b, 11: c }, others: [a] });
+  assert.deepEqual(grid.splitActivities({}, acts, comp, 'D'), { byEntry: {}, others: [a, b, c] });
+  assert.deepEqual(grid.splitActivities(plan, acts, {}, 'D'), { byEntry: {}, others: [a, b, c] });
 });
 
-test('summarizeWeek totals distance and tallies statuses', () => {
+test('dayCompliance summarizes a day from its scored entries only', () => {
+  const plan = { D: [{ id: 1 }, { id: 2 }, { id: 3 }] };
+  const comp = {
+    1: { status: 'completed' }, 2: { status: 'unscored' }, 3: { status: 'modified' },
+  };
+  assert.equal(grid.dayCompliance(plan, comp, 'D').status, 'modified'); // a shortened one outranks
+  assert.equal(grid.dayCompliance(plan, { 1: { status: 'completed' }, 2: { status: 'unscored' } }, 'D').status, 'completed');
+  assert.equal(grid.dayCompliance(plan, { 2: { status: 'unscored' } }, 'D'), undefined);
+  assert.equal(grid.dayCompliance({}, comp, 'D'), undefined);
+});
+
+test('groupByDate keeps several entries per day in order', () => {
+  const plan = grid.groupByDate([{ id: 1, date: 'A' }, { id: 2, date: 'A' }, { id: 3, date: 'B' }]);
+  assert.deepEqual(plan.A.map(e => e.id), [1, 2]);
+  assert.deepEqual(plan.B.map(e => e.id), [3]);
+});
+
+test('summarizeWeek totals workout distance and tallies per-entry statuses', () => {
   const cells = grid.weekFrom('2026-11-02');
   const plan = {
-    '2026-11-02': { workout_type: 'Easy Run', distance_km: 10 },
-    '2026-11-03': { workout_type: 'Rest', distance_km: 99 }, // rest distance never counts
-    '2026-11-04': { workout_type: 'Yoga' }, // no distance
+    '2026-11-02': [
+      { id: 1, kind: 'workout', distance_km: 10 },
+      { id: 7, kind: 'race', distance_km: 21.1 }, // a race is not training volume
+    ],
+    '2026-11-03': [{ id: 2, kind: 'rest', distance_km: 99 }], // rest distance never counts
+    '2026-11-04': [{ id: 3, kind: 'workout' }], // no distance
+    '2026-11-05': [{ id: 4, kind: 'workout', distance_km: 5 }],
   };
   const activities = {
     '2026-11-02': [{ distance_m: 8000 }, { distance_m: null }],
@@ -63,16 +84,13 @@ test('summarizeWeek totals distance and tallies statuses', () => {
     '2026-11-09': [{ distance_m: 50000 }], // outside the week
   };
   const compliance = {
-    '2026-11-02': { status: 'modified' },
-    '2026-11-03': { status: 'unscored' },
-    '2026-11-05': { status: 'completed' },
-    '2026-11-06': { status: 'missed' },
-    '2026-11-07': { status: 'upcoming' },
+    1: { status: 'modified' }, 2: { status: 'unscored' }, 7: { status: 'unscored' },
+    4: { status: 'completed' },
   };
   const s = grid.summarizeWeek(cells, plan, activities, compliance);
-  assert.equal(s.plannedKm, 10);
+  assert.equal(s.plannedKm, 15);
   assert.equal(s.actualKm, 10.5);
-  assert.deepEqual([s.completed, s.modified, s.missed, s.upcoming], [1, 1, 1, 1]);
+  assert.deepEqual([s.completed, s.modified, s.missed, s.upcoming], [1, 1, 0, 0]);
   assert.equal(s.cells, cells);
 });
 

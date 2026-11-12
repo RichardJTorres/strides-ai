@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Button from "../../ui/Button";
 import { formatDate, formatDuration } from "../../ui/format";
 import Modal from "../../ui/Modal";
 import { Notice } from "../../ui/states";
 import { plannedClimbRate } from "../activityLabels";
 import { FALLBACK_WORKOUT_COLOR, WORKOUT_COLORS } from "./constants";
-import type { GeneratePlanResult, Plan, SetPlan } from "./types";
+import { generationOps, newRequestId, type AcceptMode } from "./entryOps";
+import type { GeneratePlanResult, Plan } from "./types";
 import { useDistance } from "./useDistance";
 
 const GEN_STAGES: { after: number; text: string }[] = [
@@ -44,12 +45,12 @@ interface Props {
   initialStart: string;
   initialEnd: string;
   plan: Plan;
-  setPlan: SetPlan;
+  reloadPlan: () => Promise<void>;
   onClose: () => void;
 }
 
 /** Ask the coach for a training block over a date range, review it, then accept or discard. */
-export default function GenerateModal({ initialStart, initialEnd, plan, setPlan, onClose }: Props) {
+export default function GenerateModal({ initialStart, initialEnd, plan, reloadPlan, onClose }: Props) {
   const { units, fmtKm } = useDistance();
   const [genStart, setGenStart] = useState(initialStart);
   const [genEnd, setGenEnd] = useState(initialEnd);
@@ -58,6 +59,12 @@ export default function GenerateModal({ initialStart, initialEnd, plan, setPlan,
   const [genAccepting, setGenAccepting] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
   const [genResult, setGenResult] = useState<GeneratePlanResult | null>(null);
+  const [acceptMode, setAcceptMode] = useState<AcceptMode>("replace");
+  // One key per accept attempt, resent unchanged on a retry so the server applies it only once.
+  const requestId = useRef<string | null>(null);
+  const { replaced, ops } = generationOps(
+    genResult?.workouts ?? [], plan, { start: genStart, end: genEnd }, acceptMode,
+  );
 
   const generatePlan = async () => {
     if (!genStart || !genEnd) return;
@@ -92,17 +99,19 @@ export default function GenerateModal({ initialStart, initialEnd, plan, setPlan,
     setGenAccepting(true);
     setGenError(null);
     try {
-      const res = await fetch("/api/calendar/plan/bulk", {
+      requestId.current ??= newRequestId();
+      const res = await fetch("/api/calendar/entries/bulk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ set: genResult.workouts }),
+        body: JSON.stringify({ ops, request_id: requestId.current }),
       });
-      if (!res.ok) throw new Error();
-      setPlan(prev => {
-        const next = { ...prev };
-        for (const w of genResult.workouts) next[w.date] = w;
-        return next;
-      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        requestId.current = null; // a refused set was not applied, so a fresh attempt is fine
+        setGenError(typeof err.detail === "string" ? err.detail : "Failed to save the training block.");
+        return;
+      }
+      await reloadPlan();
       onClose();
     } catch {
       setGenError("Failed to save the training block. Check your connection and try again.");
@@ -147,6 +156,25 @@ export default function GenerateModal({ initialStart, initialEnd, plan, setPlan,
                     className="w-full text-sm bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-gray-200 resize-none"
                   />
                 </div>
+                <fieldset className="text-xs text-gray-400 space-y-1">
+                  <legend className="sr-only">What to do with existing workouts</legend>
+                  {(["replace", "append"] as const).map(m => (
+                    <label key={m} className="flex items-start gap-2">
+                      <input
+                        type="radio" name="accept-mode" checked={acceptMode === m}
+                        onChange={() => { setAcceptMode(m); requestId.current = null; }}
+                      />
+                      <span>
+                        {m === "replace"
+                          ? `Replace existing workouts in ${formatDate(genStart, "short")} – ${formatDate(genEnd, "short")}`
+                          : "Add alongside existing workouts"}
+                        {m === "replace" && acceptMode === "replace" && (
+                          <span className="text-gray-500"> ({replaced.length} removed; races, rest days and travel are kept)</span>
+                        )}
+                      </span>
+                    </label>
+                  ))}
+                </fieldset>
                 {genLoading && <GeneratingProgress />}
                 {genError && <Notice tone="error">{genError}</Notice>}
                 <Button
@@ -197,9 +225,9 @@ export default function GenerateModal({ initialStart, initialEnd, plan, setPlan,
                         {w.description && (
                           <div className="text-xs opacity-80 mt-0.5">{w.description}</div>
                         )}
-                        {plan[w.date] && (
+                        {replaced.some(r => r.date === w.date) && (
                           <div className="text-xs text-amber-400 mt-0.5">
-                            ⚠ replaces existing "{plan[w.date].workout_type}"
+                            ⚠ replaces {replaced.filter(r => r.date === w.date).map(r => `"${r.workout_type}"`).join(", ")}
                           </div>
                         )}
                       </div>

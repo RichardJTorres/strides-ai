@@ -52,7 +52,7 @@ def charts(
     # shared thresholds, and the days the athlete has ruled out.
     state = build_training_state(
         rows,
-        [w.model_dump() for w in calendar_crud.get_plan(session)],
+        calendar_crud.get_plan_rows(session),
         calendar_crud.get_prefs(session),
         mode,
         UnitSystem.IMPERIAL if unit == "miles" else UnitSystem.METRIC,
@@ -80,7 +80,7 @@ def _insights_inputs(session: Session, mode: str, units: UnitSystem):
         raise HTTPException(status_code=400, detail="Insights are available for cardio modes only")
     today = date.today()
     rows = [r.model_dump() for r in crud.get_for_mode(session, mode)]
-    plan_rows = [w.model_dump() for w in calendar_crud.get_plan(session)]
+    plan_rows = calendar_crud.get_plan_rows(session)
     prefs = calendar_crud.get_prefs(session)
     state = build_training_state(rows, plan_rows, prefs, mode, units, today)
     all_rows = [r.model_dump() for r in crud.get_all(session)]

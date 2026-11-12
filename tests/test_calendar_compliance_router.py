@@ -9,6 +9,7 @@ import pytest
 from fastapi import HTTPException
 from sqlmodel import Session
 
+from tests.plan_helpers import save_planned_workout, save_races
 from strides_ai import compliance, db
 from strides_ai.api.routers.calendar import get_compliance
 from strides_ai.db.engine import get_engine
@@ -33,7 +34,7 @@ def test_start_after_end_raises_400(tmp_db):
 
 def test_compliance_endpoint_shape(tmp_db, sample_activity):
     workout_date = sample_activity["start_date_local"][:10]
-    db.save_planned_workout(workout_date, "Easy Run", None, 5.0, None, 30, "easy")
+    save_planned_workout(workout_date, "Easy Run", None, 5.0, None, 30, "easy")
     db.upsert_activity(sample_activity)
 
     result = _call(start_date="2025-06-01", end_date="2025-06-30")
@@ -42,6 +43,7 @@ def test_compliance_endpoint_shape(tmp_db, sample_activity):
     day = result["days"][0]
     assert set(day.keys()) == {
         "date",
+        "entry_id",
         "workout_type",
         "status",
         "planned_distance_km",
@@ -74,7 +76,7 @@ def test_compliance_endpoint_no_plan_in_range_returns_empty_days(tmp_db):
 
 def test_compliance_endpoint_matches_compute_range_compliance_output(tmp_db, sample_activity):
     missed_date = (date.today() - timedelta(days=3)).isoformat()
-    db.save_planned_workout(missed_date, "Easy Run", None, 5.0, None, 30, "easy")
+    save_planned_workout(missed_date, "Easy Run", None, 5.0, None, 30, "easy")
     db.upsert_activity(sample_activity)  # unrelated date — won't match the planned workout
 
     start = (date.today() - timedelta(days=14)).isoformat()

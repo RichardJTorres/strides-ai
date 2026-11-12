@@ -17,7 +17,10 @@ from .models import (
     Memory,
     Profile,
     Setting,
-    TrainingPlan,
+    CalendarEntry,
+    PlanRow,
+    RaceDetail,
+    WorkoutDetail,
     CYCLE_TYPES,
     LIFT_TYPES,
     RUN_TYPES,
@@ -50,7 +53,10 @@ __all__ = [
     "Memory",
     "Profile",
     "Setting",
-    "TrainingPlan",
+    "CalendarEntry",
+    "PlanRow",
+    "RaceDetail",
+    "WorkoutDetail",
     "CYCLE_TYPES",
     "LIFT_TYPES",
     "RUN_TYPES",
@@ -263,60 +269,25 @@ def get_calendar_prefs() -> dict:
         return _cal.get_prefs(s)
 
 
-def save_calendar_prefs(blocked_days: list, races: list) -> None:
+def save_calendar_prefs(blocked_days: list) -> None:
     with _session() as s:
-        _cal.save_prefs(s, blocked_days, races)
+        _cal.save_prefs(s, blocked_days)
 
 
 def get_training_plan(start_date: str | None = None, end_date: str | None = None) -> list[dict]:
+    """Calendar entries (flattened with their detail), oldest first."""
     with _session() as s:
-        return [r.model_dump() for r in _cal.get_plan(s, start_date, end_date)]
+        return _cal.get_plan_rows(s, start_date, end_date)
 
 
-def save_planned_workout(
-    date: str,
-    workout_type: str,
-    description: str | None,
-    distance_km: float | None,
-    elevation_m: float | None,
-    duration_min: int | None,
-    intensity: str | None,
-    route_url: str | None = None,
-    structure: dict | None = None,
-) -> None:
+def apply_calendar_changes(ops: list[dict], request_id: str | None = None) -> dict:
     with _session() as s:
-        _cal.save_planned_workout(
-            s,
-            date,
-            workout_type,
-            description,
-            distance_km,
-            elevation_m,
-            duration_min,
-            intensity,
-            route_url,
-            structure,
-        )
-
-
-def delete_planned_workout(date: str) -> None:
-    with _session() as s:
-        _cal.delete_planned_workout(s, date)
-
-
-def save_workout_nutrition(date: str, nutrition: dict) -> None:
-    with _session() as s:
-        _cal.save_workout_nutrition(s, date, nutrition)
-
-
-def save_route_analysis(date: str, analysis: dict, analyzed_at: str, model: str) -> None:
-    with _session() as s:
-        _cal.save_route_analysis(s, date, analysis, analyzed_at, model)
+        return _cal.apply_changes(s, ops, request_id)
 
 
 def get_upcoming_planned_workouts(days: int = 14) -> list[dict]:
     with _session() as s:
-        return [r.model_dump() for r in _cal.get_upcoming_workouts(s, days)]
+        return _cal.get_upcoming_workouts(s, days)
 
 
 # ── Exercise templates ────────────────────────────────────────────────────────

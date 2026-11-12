@@ -16,7 +16,7 @@ import json
 import re
 import xml.etree.ElementTree as ET
 
-from .compliance import RIDE_WORKOUT_TYPES
+from .kinds import STRUCTURE_CAPABLE_WORKOUT_TYPES
 
 MIN_PCT, MAX_PCT = 0.30, 2.00
 MIN_SECONDS, MAX_SECONDS = 10, 4 * 3600
@@ -179,7 +179,7 @@ def normalize_structure(raw) -> dict | None:
 
 def structure_for_type(workout_type: str | None, raw) -> dict | None:
     """Normalized structure, or None when the workout type can't carry one (non-cycling)."""
-    if workout_type not in RIDE_WORKOUT_TYPES:
+    if workout_type not in STRUCTURE_CAPABLE_WORKOUT_TYPES:
         return None
     return normalize_structure(raw)
 

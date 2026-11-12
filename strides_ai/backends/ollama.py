@@ -6,7 +6,7 @@ import time
 import httpx
 
 from .base import (
-    WORKOUT_MEASUREMENT_PROPERTIES,
+    UPDATE_TRAINING_PLAN_PARAMETERS,
     SAVE_MEMORY_CATEGORIES,
     SAVE_MEMORY_TIMING_PROPERTIES,
     SAVE_MEMORY_DESCRIPTION,
@@ -66,42 +66,7 @@ UPDATE_TRAINING_PLAN_TOOL = {
     "function": {
         "name": "update_training_plan",
         "description": UPDATE_TRAINING_PLAN_DESCRIPTION,
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "set": {
-                    "type": "array",
-                    "description": "Workouts to create or overwrite, one entry per date.",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "date": {"type": "string", "description": "ISO date, YYYY-MM-DD"},
-                            "workout_type": {
-                                "type": "string",
-                                "description": (
-                                    "e.g. Easy Run, Long Run, Tempo Run, Easy Ride, Long Ride, "
-                                    "Tempo Ride, Indoor Ride, Intervals, Cross-Training, Race, "
-                                    "Rest"
-                                ),
-                            },
-                            "description": {"type": "string"},
-                            **WORKOUT_MEASUREMENT_PROPERTIES,
-                            "duration_min": {"type": "integer"},
-                            "intensity": {
-                                "type": "string",
-                                "enum": ["easy", "moderate", "hard", "rest"],
-                            },
-                        },
-                        "required": ["date", "workout_type"],
-                    },
-                },
-                "delete": {
-                    "type": "array",
-                    "description": "Dates (YYYY-MM-DD) to clear from the calendar.",
-                    "items": {"type": "string"},
-                },
-            },
-        },
+        "parameters": UPDATE_TRAINING_PLAN_PARAMETERS,
     },
 }
 

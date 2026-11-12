@@ -75,6 +75,7 @@ interface Props {
 
 // GET /api/calendar/compliance — the planned workout for a day and how it was scored.
 interface ComplianceDay {
+  entry_id?: number | null;
   workout_type: string;
   status: "completed" | "modified" | "missed" | "upcoming" | "unscored";
   planned_distance_km: number | null;
@@ -98,7 +99,8 @@ function PlannedBlock({ date, activityId }: { date: string; activityId: number }
   const { data } = useApi<{ days: ComplianceDay[] }>(
     date ? `/api/calendar/compliance?start_date=${date}&end_date=${date}` : null,
   );
-  const day = data?.days[0];
+  // A day can hold several entries; show the one matched to this activity, else the first.
+  const day = data?.days.find(d => d.matched_activity_id === activityId) ?? data?.days[0];
   if (!day) return null; // nothing planned that day (or still loading): no block
   const status = PLAN_STATUS[day.status] ?? { text: day.status, tone: "neutral" as const };
   const km = (v: number | null) => (v == null ? null : units.fmt(v * 1000, "distance", { decimals: 1 }));

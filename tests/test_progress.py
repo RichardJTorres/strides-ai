@@ -328,3 +328,25 @@ def test_progress_matches_each_planned_day_against_its_own_sport():
     acts = [run_row(1, MON - timedelta(days=6), km=50, sport_type="Ride")]
     assert build_progress(plan, acts, TODAY, UnitSystem.METRIC).streak.weeks == 1
     assert build_progress(plan, [], TODAY, UnitSystem.METRIC).streak.weeks == 0
+
+
+def test_race_and_rest_entries_never_change_a_weeks_hit_or_miss():
+    from datetime import date
+
+    from strides_ai.compliance import compliance_for_range
+    from strides_ai.progress import _counts, _week_hit
+
+    run_day = {"id": 1, "date": "2026-06-08", "kind": "workout", "workout_type": "Easy Run"}
+    extras = [
+        {"id": 2, "date": "2026-06-08", "kind": "race", "workout_type": "Running Race"},
+        {"id": 3, "date": "2026-06-09", "kind": "rest", "workout_type": "Rest"},
+        {"id": 4, "date": "2026-06-10", "kind": "travel", "workout_type": "Travel"},
+    ]
+    activities = [
+        {"id": 7, "date": "2026-06-08", "sport_type": "Run", "distance_m": 5000.0},
+    ]
+    start, end, today = date(2026, 6, 8), date(2026, 6, 14), date(2026, 6, 15)
+    plain = compliance_for_range([run_day], activities, start, end, today)
+    with_extras = compliance_for_range([run_day, *extras], activities, start, end, today)
+    assert _counts(plain) == _counts(with_extras)
+    assert _week_hit(plain) is _week_hit(with_extras) is True

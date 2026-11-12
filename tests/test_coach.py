@@ -4,6 +4,7 @@ from datetime import date, timedelta
 
 import pytest
 
+from tests.plan_helpers import save_planned_workout, save_races
 from strides_ai import db
 from strides_ai.coach import (
     PLAN_CHUNK_RULE,
@@ -118,7 +119,7 @@ def test_build_system_empty_memories_list(tmp_db):
 
 def test_build_system_injects_upcoming_workouts(tmp_db):
     tomorrow = (date.today() + timedelta(days=1)).isoformat()
-    db.save_planned_workout(tomorrow, "Long Run", None, 20.0, None, 120, "easy")
+    save_planned_workout(tomorrow, "Long Run", None, 20.0, None, 120, "easy")
     result = build_system("", [])
     assert "Upcoming Planned Workouts" in result
     assert "Long Run" in result
@@ -132,7 +133,7 @@ def test_build_system_no_upcoming_workouts_section_when_empty(tmp_db):
 
 def test_build_system_injects_workout_beyond_two_weeks(tmp_db):
     far_out = (date.today() + timedelta(days=45)).isoformat()
-    db.save_planned_workout(far_out, "Long Ride", None, 80.0, None, 240, "moderate")
+    save_planned_workout(far_out, "Long Ride", None, 80.0, None, 240, "moderate")
     result = build_system("", [])
     assert "Upcoming Planned Workouts" in result
     assert far_out in result
@@ -141,7 +142,8 @@ def test_build_system_injects_workout_beyond_two_weeks(tmp_db):
 def test_build_system_injects_calendar_constraints(tmp_db):
     race_date = (date.today() + timedelta(days=10)).isoformat()
     blocked_date = (date.today() + timedelta(days=3)).isoformat()
-    db.save_calendar_prefs([blocked_date], [{"date": race_date, "name": "Fall Century"}])
+    db.save_calendar_prefs([blocked_date])
+    save_races([{"date": race_date, "name": "Fall Century"}])
     result = build_system("", [])
     assert "Calendar Constraints" in result
     assert race_date in result
@@ -156,7 +158,8 @@ def test_build_system_no_calendar_constraints_section_when_empty(tmp_db):
 
 def test_build_system_calendar_constraints_excludes_past_dates(tmp_db):
     past_date = (date.today() - timedelta(days=5)).isoformat()
-    db.save_calendar_prefs([past_date], [{"date": past_date, "name": "Old Race"}])
+    db.save_calendar_prefs([past_date])
+    save_races([{"date": past_date, "name": "Old Race"}])
     result = build_system("", [])
     assert "Calendar Constraints" not in result
 
@@ -175,7 +178,7 @@ def test_build_system_no_compliance_section_when_window_empty(tmp_db):
 
 def test_build_system_injects_compliance_section(tmp_db):
     missed_date = (date.today() - timedelta(days=3)).isoformat()
-    db.save_planned_workout(missed_date, "Easy Run", None, 5.0, None, 30, "easy")
+    save_planned_workout(missed_date, "Easy Run", None, 5.0, None, 30, "easy")
     result = build_system("", [])
     assert "Plan-vs-Actual Compliance" in result
     assert "missed" in result
@@ -186,7 +189,7 @@ def test_build_system_compliance_uses_full_activity_list_not_recent_slice(tmp_db
     """The compliance section must receive the full `activities` param, not the
     RECENT_ACTIVITIES_IN_SYSTEM-sliced `recent` list — regression test for that wiring."""
     completed_date = (date.today() - timedelta(days=5)).isoformat()
-    db.save_planned_workout(completed_date, "Easy Run", None, 5.0, None, 30, "easy")
+    save_planned_workout(completed_date, "Easy Run", None, 5.0, None, 30, "easy")
 
     # 30 filler rows (fill the RECENT_ACTIVITIES_IN_SYSTEM=30 slice) on an unrelated date,
     # followed by the one row that actually matches the planned workout's date — placed at
@@ -205,12 +208,12 @@ def test_upcoming_workout_carries_notes_and_route_verdict_only_when_close(tmp_db
     from sqlmodel import Session
 
     from strides_ai.db.engine import get_engine
-    from strides_ai.db.models import TrainingPlan
+    from strides_ai.db.models import WorkoutDetail
 
     soon = (date.today() + timedelta(days=2)).isoformat()
     far = (date.today() + timedelta(days=30)).isoformat()
     route = "https://ridewithgps.com/routes/1"
-    db.save_planned_workout(
+    save_planned_workout(
         soon,
         "Long Ride",
         "Steady  endurance " + "x" * 300,
@@ -220,9 +223,9 @@ def test_upcoming_workout_carries_notes_and_route_verdict_only_when_close(tmp_db
         "easy",
         route_url=route,
     )
-    db.save_planned_workout(far, "Long Ride", "FAR-OUT-NOTE", 80.0, None, 240, "easy")
+    save_planned_workout(far, "Long Ride", "FAR-OUT-NOTE", 80.0, None, 240, "easy")
     with Session(get_engine()) as session:
-        row = session.get(TrainingPlan, soon)
+        row = session.get(WorkoutDetail, db.get_training_plan(soon, soon)[0]["id"])
         row.route_analysis_json = json.dumps(
             {"verdict": "too_hard", "explanation": "Too much climbing."}
         )
@@ -238,7 +241,7 @@ def test_upcoming_workout_carries_notes_and_route_verdict_only_when_close(tmp_db
 
 def test_upcoming_workout_with_unanalyzed_route_says_so(tmp_db):
     soon = (date.today() + timedelta(days=1)).isoformat()
-    db.save_planned_workout(
+    save_planned_workout(
         soon, "Easy Run", None, 5.0, None, 30, "easy", route_url="https://strava.com/routes/2"
     )
     assert "attached route: not yet analyzed" in build_system("", [])
@@ -253,8 +256,8 @@ def test_progress_section_reports_streak(tmp_db):
 
     monday = monday_of(date.today())
     last_week = monday - timedelta(days=5)
-    db.save_planned_workout(last_week.isoformat(), "Easy Run", None, 5.0, None, 30, "easy")
-    db.save_planned_workout(
+    save_planned_workout(last_week.isoformat(), "Easy Run", None, 5.0, None, 30, "easy")
+    save_planned_workout(
         (monday + timedelta(days=6)).isoformat(), "Long Run", None, 20.0, None, 120, "easy"
     )
     rows = [_make_row(id=1, date=last_week.isoformat(), distance_m=6000)]
@@ -267,7 +270,7 @@ def test_lifting_coach_gets_no_cardio_streak(tmp_db):
     from strides_ai.analytics.aggregation import monday_of
 
     last_week = monday_of(date.today()) - timedelta(days=5)
-    db.save_planned_workout(last_week.isoformat(), "Easy Run", None, 5.0, None, 30, "easy")
+    save_planned_workout(last_week.isoformat(), "Easy Run", None, 5.0, None, 30, "easy")
     rows = [_make_row(id=1, date=last_week.isoformat(), distance_m=6000)]
     assert "Plan streak" in build_system("", [], mode="running", activities=rows)
     assert "Streak and Records" not in build_system("", [], mode="lifting", activities=rows)
@@ -277,7 +280,7 @@ def test_coach_voice_comes_before_the_long_computed_sections(tmp_db):
     # Optional sections are dropped from the first one that does not fit, so the short voice
     # instruction must not sit behind the long ones.
     tomorrow = (date.today() + timedelta(days=1)).isoformat()
-    db.save_planned_workout(tomorrow, "Easy Run", None, 5.0, None, 30, "easy")
+    save_planned_workout(tomorrow, "Easy Run", None, 5.0, None, 30, "easy")
     prompt = build_system("", [], coach_voice="technical")
     voice = next(i for i, p in enumerate(prompt.priority) if "Coaching Voice" in p)
     assert all(

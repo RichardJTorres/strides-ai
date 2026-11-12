@@ -7,7 +7,7 @@ import re
 from datetime import date as date_cls
 
 from .coach import build_training_log, units_section
-from .db.models import TrainingPlan
+from .db.models import PlanRow
 from .modes import MODES
 from .units import DEFAULT_UNIT_SYSTEM, Quantity, UnitSystem, to_si, unit_label
 from .workout_structure import (
@@ -103,9 +103,9 @@ def _plan_table(rows: list[dict], units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> st
     sep = "-" * 76
     lines = []
     for w in rows:
-        m = TrainingPlan.measure_field(w, "distance_km", units) if w.get("distance_km") else None
+        m = PlanRow.measure_field(w, "distance_km", units) if w.get("distance_km") else None
         dist = m.formatted if m else "—"
-        e = TrainingPlan.measure_field(w, "elevation_m", units) if w.get("elevation_m") else None
+        e = PlanRow.measure_field(w, "elevation_m", units) if w.get("elevation_m") else None
         elev = e.formatted if e else "—"
         dur = f"{w['duration_min']} min" if w.get("duration_min") else "—"
         line = (

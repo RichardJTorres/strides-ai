@@ -161,13 +161,16 @@ def test_claude_stream_turn_multiple_tool_calls(mock_anthropic, mocker):
 
 
 def test_claude_stream_turn_updates_training_plan(mock_anthropic, mocker):
-    mock_set = mocker.patch("strides_ai.backends.base.db.save_planned_workout")
-    mock_delete = mocker.patch("strides_ai.backends.base.db.delete_planned_workout")
+    mocker.patch("strides_ai.backends.base.db.get_training_plan", return_value=[])
+    mock_apply = mocker.patch(
+        "strides_ai.backends.base.db.apply_calendar_changes",
+        return_value={"created": [41], "updated": [], "deleted": [7]},
+    )
     tool_block = _claude_tool_block(
         "update_training_plan",
         {
             "set": [{"date": "2026-10-01", "workout_type": "Long Ride", "distance_km": 60}],
-            "delete": ["2026-10-03"],
+            "delete": [7],
         },
     )
     mock_anthropic.return_value.messages.stream.side_effect = [
@@ -179,13 +182,13 @@ def test_claude_stream_turn_updates_training_plan(mock_anthropic, mocker):
 
     text, _, plan_changes = ClaudeBackend("key", []).stream_turn("sys", "plan it", lambda _: None)
 
-    mock_set.assert_called_once_with(
-        "2026-10-01", "Long Ride", None, 60, None, None, None, route_url=None, structure=None
-    )
-    mock_delete.assert_called_once_with("2026-10-03")
+    (ops,), _ = mock_apply.call_args
+    assert ops[0] == {"op": "delete", "id": 7}
+    assert ops[1]["op"] == "create" and ops[1]["date"] == "2026-10-01"
+    assert ops[1]["workout_type"] == "Long Ride"
     assert plan_changes == [
-        {"action": "set", "date": "2026-10-01", "workout_type": "Long Ride"},
-        {"action": "delete", "date": "2026-10-03"},
+        {"action": "delete", "id": 7},
+        {"action": "set", "id": 41, "date": "2026-10-01", "workout_type": "Long Ride"},
     ]
     assert text == "Updated your plan."
 
@@ -310,8 +313,11 @@ def test_gemini_stream_turn_saves_memory(mock_genai, mocker):
 
 
 def test_gemini_stream_turn_updates_training_plan(mock_genai, mocker):
-    mock_set = mocker.patch("strides_ai.backends.base.db.save_planned_workout")
-    mock_delete = mocker.patch("strides_ai.backends.base.db.delete_planned_workout")
+    mocker.patch("strides_ai.backends.base.db.get_training_plan", return_value=[])
+    mock_apply = mocker.patch(
+        "strides_ai.backends.base.db.apply_calendar_changes",
+        return_value={"created": [41], "updated": [], "deleted": [7]},
+    )
     mock_client = mock_genai.return_value
     mock_client.models.generate_content_stream.return_value = iter(
         [
@@ -319,7 +325,7 @@ def test_gemini_stream_turn_updates_training_plan(mock_genai, mocker):
                 "update_training_plan",
                 {
                     "set": [{"date": "2026-10-01", "workout_type": "Long Ride"}],
-                    "delete": ["2026-10-03"],
+                    "delete": [7],
                 },
             )
         ]
@@ -330,13 +336,13 @@ def test_gemini_stream_turn_updates_training_plan(mock_genai, mocker):
 
     text, _, plan_changes = GeminiBackend("key", []).stream_turn("sys", "plan it", lambda _: None)
 
-    mock_set.assert_called_once_with(
-        "2026-10-01", "Long Ride", None, None, None, None, None, route_url=None, structure=None
-    )
-    mock_delete.assert_called_once_with("2026-10-03")
+    (ops,), _ = mock_apply.call_args
+    assert ops[0] == {"op": "delete", "id": 7}
+    assert ops[1]["op"] == "create" and ops[1]["date"] == "2026-10-01"
+    assert ops[1]["workout_type"] == "Long Ride"
     assert plan_changes == [
-        {"action": "set", "date": "2026-10-01", "workout_type": "Long Ride"},
-        {"action": "delete", "date": "2026-10-03"},
+        {"action": "delete", "id": 7},
+        {"action": "set", "id": 41, "date": "2026-10-01", "workout_type": "Long Ride"},
     ]
     assert text == "Updated your plan."
 
@@ -516,13 +522,16 @@ def test_openai_assembles_split_tool_arguments(mock_openai, mocker):
 
 
 def test_openai_stream_turn_updates_training_plan(mock_openai, mocker):
-    mock_set = mocker.patch("strides_ai.backends.base.db.save_planned_workout")
-    mock_delete = mocker.patch("strides_ai.backends.base.db.delete_planned_workout")
+    mocker.patch("strides_ai.backends.base.db.get_training_plan", return_value=[])
+    mock_apply = mocker.patch(
+        "strides_ai.backends.base.db.apply_calendar_changes",
+        return_value={"created": [41], "updated": [], "deleted": [7]},
+    )
     mock_client = mock_openai.return_value
     args = json.dumps(
         {
             "set": [{"date": "2026-10-01", "workout_type": "Long Ride"}],
-            "delete": ["2026-10-03"],
+            "delete": [7],
         }
     )
     tc = _oai_tc_delta(0, "call_plan", "update_training_plan", args)
@@ -535,13 +544,13 @@ def test_openai_stream_turn_updates_training_plan(mock_openai, mocker):
 
     text, _, plan_changes = OpenAIBackend("key", []).stream_turn("sys", "plan it", lambda _: None)
 
-    mock_set.assert_called_once_with(
-        "2026-10-01", "Long Ride", None, None, None, None, None, route_url=None, structure=None
-    )
-    mock_delete.assert_called_once_with("2026-10-03")
+    (ops,), _ = mock_apply.call_args
+    assert ops[0] == {"op": "delete", "id": 7}
+    assert ops[1]["op"] == "create" and ops[1]["date"] == "2026-10-01"
+    assert ops[1]["workout_type"] == "Long Ride"
     assert plan_changes == [
-        {"action": "set", "date": "2026-10-01", "workout_type": "Long Ride"},
-        {"action": "delete", "date": "2026-10-03"},
+        {"action": "delete", "id": 7},
+        {"action": "set", "id": 41, "date": "2026-10-01", "workout_type": "Long Ride"},
     ]
     assert text == "Updated your plan."
 
@@ -665,14 +674,17 @@ def test_ollama_stream_turn_saves_memory(mocker):
 
 
 def test_ollama_stream_turn_updates_training_plan(mocker):
-    mock_set = mocker.patch("strides_ai.backends.base.db.save_planned_workout")
-    mock_delete = mocker.patch("strides_ai.backends.base.db.delete_planned_workout")
+    mocker.patch("strides_ai.backends.base.db.get_training_plan", return_value=[])
+    mock_apply = mocker.patch(
+        "strides_ai.backends.base.db.apply_calendar_changes",
+        return_value={"created": [41], "updated": [], "deleted": [7]},
+    )
     tool_call = {
         "function": {
             "name": "update_training_plan",
             "arguments": {
                 "set": [{"date": "2026-10-01", "workout_type": "Long Ride"}],
-                "delete": ["2026-10-03"],
+                "delete": [7],
             },
         }
     }
@@ -688,13 +700,13 @@ def test_ollama_stream_turn_updates_training_plan(mocker):
         "sys", "plan it", lambda _: None
     )
 
-    mock_set.assert_called_once_with(
-        "2026-10-01", "Long Ride", None, None, None, None, None, route_url=None, structure=None
-    )
-    mock_delete.assert_called_once_with("2026-10-03")
+    (ops,), _ = mock_apply.call_args
+    assert ops[0] == {"op": "delete", "id": 7}
+    assert ops[1]["op"] == "create" and ops[1]["date"] == "2026-10-01"
+    assert ops[1]["workout_type"] == "Long Ride"
     assert plan_changes == [
-        {"action": "set", "date": "2026-10-01", "workout_type": "Long Ride"},
-        {"action": "delete", "date": "2026-10-03"},
+        {"action": "delete", "id": 7},
+        {"action": "set", "id": 41, "date": "2026-10-01", "workout_type": "Long Ride"},
     ]
     assert text == "Updated your plan."
 

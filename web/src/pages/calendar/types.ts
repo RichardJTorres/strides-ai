@@ -1,8 +1,19 @@
 import type { Dispatch, MouseEvent, MutableRefObject, SetStateAction } from "react";
 
-export interface Workout {
+export type EntryKind = "workout" | "race" | "rest" | "travel" | "other";
+
+/** One thing on the calendar (GET /api/calendar/entries): an entry flattened with its workout or
+ *  race detail. `workout_type` is the display label ("Easy Run", "Running Race", "Rest", ...). */
+export interface Entry {
+  id: number;
   date: string;
+  kind: EntryKind;
+  title?: string | null;
+  notes?: string | null;
   workout_type: string;
+  /** What the workout is for (workouts) — the old free-text "description". */
+  objective?: string | null;
+  /** Legacy display text: the objective, race name or notes. */
   description?: string | null;
   distance_km?: number | null;
   elevation_m?: number | null;
@@ -15,7 +26,15 @@ export interface Workout {
   // Structured (Zwift-style) workout, cycling types only; structure_text is the server's rendering.
   structure?: Record<string, unknown> | null;
   structure_text?: string | null;
+  // Races
+  sport?: string | null;
+  goal_time_s?: number | null;
+  goal_text?: string | null;
+  priority?: string | null;
+  result_activity_id?: number | null;
 }
+/** The old name, kept so call sites read the same. */
+export type Workout = Entry;
 
 export interface RouteAnalysis {
   verdict: string;
@@ -25,6 +44,7 @@ export interface RouteAnalysis {
 
 export interface ComplianceDay {
   date: string;
+  entry_id: number | null;
   workout_type: string;
   status: "completed" | "modified" | "missed" | "upcoming" | "unscored";
   planned_distance_km: number | null;
@@ -63,9 +83,12 @@ export interface RoutePreview {
 }
 
 export interface Race {
+  id?: number;
   date: string;
   name: string;
-  target_time?: string;
+  target_time?: string | null;
+  sport?: string | null;
+  priority?: string | null;
 }
 
 export interface Prefs {
@@ -118,7 +141,10 @@ export interface WeekSummary {
   upcoming: number;
 }
 
-export type Plan = Record<string, Workout>;
+/** Entries by date, each day oldest first. */
+export type Plan = Record<string, Entry[]>;
+/** Compliance by entry id. */
+export type ComplianceById = Record<number, ComplianceDay>;
 export type SetPlan = Dispatch<SetStateAction<Plan>>;
 export type DateRange = { start: string; end: string };
 
@@ -129,7 +155,7 @@ export type WeekStart = "monday" | "sunday";
 export interface GridProps {
   plan: Plan;
   activities: Record<string, Activity[]>;
-  compliance: Record<string, ComplianceDay>;
+  compliance: ComplianceById;
   prefs: Prefs;
   trainingState: TrainingState | null;
   todayStr: string;
@@ -137,15 +163,16 @@ export interface GridProps {
   range: DateRange | null;
   /** First hard conflict (blocked day / race day) per date, for the ⚠ badge. */
   conflictByDate: Record<string, string>;
-  dragFrom: string | null;
+  /** The entry being dragged. */
+  dragFrom: number | null;
   dragOver: string | null;
-  setDragFrom: (date: string | null) => void;
+  setDragFrom: (id: number | null) => void;
   setDragOver: (date: string | null) => void;
   movePending: MutableRefObject<boolean>;
   handleDayClick: (e: MouseEvent, date: string) => void;
   /** Open a day, or with `extend` grow the selected range to it (what shift-click does). */
   activateDay: (date: string, extend: boolean) => void;
-  moveWorkout: (from: string, to: string) => void;
+  moveWorkout: (entryId: number, to: string) => void;
   /** Opens the week breakdown for the week whose first grid cell is `weekStart`. */
   openWeek: (weekStart: string) => void;
 }

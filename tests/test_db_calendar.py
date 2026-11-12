@@ -6,6 +6,21 @@ from datetime import date, timedelta
 import pytest
 
 from strides_ai import db
+from sqlmodel import Session
+
+from strides_ai.db import calendar as crud
+from strides_ai.db.engine import get_engine
+from tests.plan_helpers import save_planned_workout, save_races
+
+
+def _nutrition(entry_id, nutrition, expected_hash=None):
+    with Session(get_engine()) as s:
+        return crud.save_workout_nutrition(s, entry_id, nutrition, expected_hash)
+
+
+def _delete(*entry_ids):
+    db.apply_calendar_changes([{"op": "delete", "id": i} for i in entry_ids])
+
 
 # ── get_calendar_prefs / save_calendar_prefs ──────────────────────────────────
 
@@ -16,7 +31,7 @@ def test_get_calendar_prefs_default(tmp_db):
 
 
 def test_save_and_get_calendar_prefs_blocked_days(tmp_db):
-    db.save_calendar_prefs(["2025-07-04", "2025-12-25"], [])
+    db.save_calendar_prefs(["2025-07-04", "2025-12-25"])
     prefs = db.get_calendar_prefs()
     assert "2025-07-04" in prefs["blocked_days"]
     assert "2025-12-25" in prefs["blocked_days"]
@@ -24,17 +39,29 @@ def test_save_and_get_calendar_prefs_blocked_days(tmp_db):
 
 
 def test_save_and_get_calendar_prefs_races(tmp_db):
-    races = [{"date": "2025-10-12", "name": "Chicago Marathon", "target_time": "3:30:00"}]
-    db.save_calendar_prefs([], races)
+    db.apply_calendar_changes(
+        [
+            {
+                "op": "create",
+                "kind": "race",
+                "date": "2025-10-12",
+                "title": "Chicago Marathon",
+                "sport": "run",
+                "goal_time_s": 12600,
+                "priority": "A",
+            }
+        ]
+    )
     prefs = db.get_calendar_prefs()
     assert len(prefs["races"]) == 1
-    assert prefs["races"][0]["name"] == "Chicago Marathon"
-    assert prefs["races"][0]["target_time"] == "3:30:00"
+    race = prefs["races"][0]
+    assert race["name"] == "Chicago Marathon" and race["target_time"] == "3:30:00"
+    assert race["priority"] == "A" and race["sport"] == "run"
 
 
 def test_save_calendar_prefs_overwrites(tmp_db):
-    db.save_calendar_prefs(["2025-01-01"], [])
-    db.save_calendar_prefs(["2025-06-01"], [])
+    db.save_calendar_prefs(["2025-01-01"])
+    db.save_calendar_prefs(["2025-06-01"])
     prefs = db.get_calendar_prefs()
     assert prefs["blocked_days"] == ["2025-06-01"]
 
@@ -43,7 +70,7 @@ def test_save_calendar_prefs_overwrites(tmp_db):
 
 
 def test_save_and_get_planned_workout(tmp_db):
-    db.save_planned_workout("2025-08-01", "Long Run", "Easy long run", 20.0, 300.0, 120, "easy")
+    save_planned_workout("2025-08-01", "Long Run", "Easy long run", 20.0, 300.0, 120, "easy")
     plan = db.get_training_plan()
     assert len(plan) == 1
     w = plan[0]
@@ -57,7 +84,7 @@ def test_save_and_get_planned_workout(tmp_db):
 
 
 def test_save_planned_workout_optional_fields_can_be_none(tmp_db):
-    db.save_planned_workout("2025-08-01", "Rest", None, None, None, None, "rest")
+    save_planned_workout("2025-08-01", "Rest", None, None, None, None, "rest")
     plan = db.get_training_plan()
     assert len(plan) == 1
     w = plan[0]
@@ -68,8 +95,8 @@ def test_save_planned_workout_optional_fields_can_be_none(tmp_db):
 
 
 def test_save_planned_workout_upserts_by_date(tmp_db):
-    db.save_planned_workout("2025-08-01", "Easy Run", None, 8.0, None, 50, "easy")
-    db.save_planned_workout("2025-08-01", "Tempo Run", None, 10.0, None, 60, "hard")
+    save_planned_workout("2025-08-01", "Easy Run", None, 8.0, None, 50, "easy")
+    save_planned_workout("2025-08-01", "Tempo Run", None, 10.0, None, 60, "hard")
     plan = db.get_training_plan()
     assert len(plan) == 1
     assert plan[0]["workout_type"] == "Tempo Run"
@@ -78,27 +105,36 @@ def test_save_planned_workout_upserts_by_date(tmp_db):
 
 def test_save_planned_workout_upsert_clears_nutrition(tmp_db):
     """Re-saving a workout clears any cached nutrition advice."""
-    db.save_planned_workout("2025-08-01", "Long Run", None, 20.0, None, 120, "easy")
-    db.save_workout_nutrition("2025-08-01", {"calories_pre": 300})
+    entry_id = save_planned_workout("2025-08-01", "Long Run", None, 20.0, None, 120, "easy")
+    _nutrition(entry_id, {"calories_pre": 300})
     assert db.get_training_plan()[0]["nutrition_json"] is not None
 
-    db.save_planned_workout("2025-08-01", "Long Run", None, 21.0, None, 125, "easy")
+    # A change to something the nutrition prompt reads drops it...
+    db.apply_calendar_changes([{"op": "update", "id": entry_id, "distance_km": 21.0}])
     assert db.get_training_plan()[0]["nutrition_json"] is None
 
 
+def test_notes_edit_keeps_cached_nutrition(tmp_db):
+    entry_id = save_planned_workout("2025-08-01", "Long Run", None, 20.0, None, 120, "easy")
+    _nutrition(entry_id, {"calories_pre": 300})
+    db.apply_calendar_changes([{"op": "update", "id": entry_id, "notes": "legs felt heavy"}])
+    row = db.get_training_plan()[0]
+    assert row["nutrition_json"] is not None and row["notes"] == "legs felt heavy"
+
+
 def test_get_training_plan_ordered_by_date(tmp_db):
-    db.save_planned_workout("2025-08-15", "Long Run", None, 20.0, None, 120, "easy")
-    db.save_planned_workout("2025-08-01", "Easy Run", None, 8.0, None, 50, "easy")
-    db.save_planned_workout("2025-08-10", "Tempo Run", None, 10.0, None, 60, "hard")
+    save_planned_workout("2025-08-15", "Long Run", None, 20.0, None, 120, "easy")
+    save_planned_workout("2025-08-01", "Easy Run", None, 8.0, None, 50, "easy")
+    save_planned_workout("2025-08-10", "Tempo Run", None, 10.0, None, 60, "hard")
     plan = db.get_training_plan()
     dates = [w["date"] for w in plan]
     assert dates == sorted(dates)
 
 
 def test_get_training_plan_date_range(tmp_db):
-    db.save_planned_workout("2025-08-01", "Easy Run", None, 8.0, None, 50, "easy")
-    db.save_planned_workout("2025-08-15", "Long Run", None, 20.0, None, 120, "easy")
-    db.save_planned_workout("2025-09-01", "Race", None, 42.2, None, 210, "hard")
+    save_planned_workout("2025-08-01", "Easy Run", None, 8.0, None, 50, "easy")
+    save_planned_workout("2025-08-15", "Long Run", None, 20.0, None, 120, "easy")
+    save_planned_workout("2025-09-01", "Race", None, 42.2, None, 210, "hard")
     plan = db.get_training_plan("2025-08-01", "2025-08-31")
     assert len(plan) == 2
     assert all(w["date"].startswith("2025-08") for w in plan)
@@ -112,19 +148,19 @@ def test_get_training_plan_empty(tmp_db):
 
 
 def test_delete_planned_workout(tmp_db):
-    db.save_planned_workout("2025-08-01", "Easy Run", None, 8.0, None, 50, "easy")
-    db.delete_planned_workout("2025-08-01")
+    entry_id = save_planned_workout("2025-08-01", "Easy Run", None, 8.0, None, 50, "easy")
+    _delete(entry_id)
     assert db.get_training_plan() == []
 
 
 def test_delete_planned_workout_missing_is_noop(tmp_db):
-    db.delete_planned_workout("2025-08-01")  # must not raise
+    _delete(12345)  # must not raise
 
 
 def test_delete_planned_workout_only_removes_target(tmp_db):
-    db.save_planned_workout("2025-08-01", "Easy Run", None, 8.0, None, 50, "easy")
-    db.save_planned_workout("2025-08-02", "Long Run", None, 20.0, None, 120, "easy")
-    db.delete_planned_workout("2025-08-01")
+    first = save_planned_workout("2025-08-01", "Easy Run", None, 8.0, None, 50, "easy")
+    save_planned_workout("2025-08-02", "Long Run", None, 20.0, None, 120, "easy")
+    _delete(first)
     plan = db.get_training_plan()
     assert len(plan) == 1
     assert plan[0]["date"] == "2025-08-02"
@@ -134,7 +170,7 @@ def test_delete_planned_workout_only_removes_target(tmp_db):
 
 
 def test_save_workout_nutrition(tmp_db):
-    db.save_planned_workout("2025-08-01", "Long Run", None, 20.0, None, 120, "easy")
+    entry_id = save_planned_workout("2025-08-01", "Long Run", None, 20.0, None, 120, "easy")
     nutrition = {
         "calories_pre": 400,
         "calories_during": 200,
@@ -144,7 +180,7 @@ def test_save_workout_nutrition(tmp_db):
         "hydration_post_ml": 500,
         "notes": "Fuel well before this long run.",
     }
-    db.save_workout_nutrition("2025-08-01", nutrition)
+    _nutrition(entry_id, nutrition)
     saved = json.loads(db.get_training_plan()[0]["nutrition_json"])
     assert saved["calories_pre"] == 400
     assert saved["hydration_during_ml"] == 750
@@ -157,8 +193,8 @@ def test_save_workout_nutrition(tmp_db):
 def test_get_upcoming_planned_workouts_excludes_past(tmp_db):
     yesterday = (date.today() - timedelta(days=1)).isoformat()
     tomorrow = (date.today() + timedelta(days=1)).isoformat()
-    db.save_planned_workout(yesterday, "Easy Run", None, 8.0, None, 50, "easy")
-    db.save_planned_workout(tomorrow, "Long Run", None, 20.0, None, 120, "easy")
+    save_planned_workout(yesterday, "Easy Run", None, 8.0, None, 50, "easy")
+    save_planned_workout(tomorrow, "Long Run", None, 20.0, None, 120, "easy")
     upcoming = db.get_upcoming_planned_workouts()
     dates = [w["date"] for w in upcoming]
     assert tomorrow in dates
@@ -167,7 +203,7 @@ def test_get_upcoming_planned_workouts_excludes_past(tmp_db):
 
 def test_get_upcoming_planned_workouts_includes_today(tmp_db):
     today = date.today().isoformat()
-    db.save_planned_workout(today, "Easy Run", None, 8.0, None, 50, "easy")
+    save_planned_workout(today, "Easy Run", None, 8.0, None, 50, "easy")
     upcoming = db.get_upcoming_planned_workouts()
     assert any(w["date"] == today for w in upcoming)
 
@@ -175,8 +211,8 @@ def test_get_upcoming_planned_workouts_includes_today(tmp_db):
 def test_get_upcoming_planned_workouts_respects_window(tmp_db):
     near = (date.today() + timedelta(days=5)).isoformat()
     far = (date.today() + timedelta(days=20)).isoformat()
-    db.save_planned_workout(near, "Easy Run", None, 8.0, None, 50, "easy")
-    db.save_planned_workout(far, "Long Run", None, 20.0, None, 120, "easy")
+    save_planned_workout(near, "Easy Run", None, 8.0, None, 50, "easy")
+    save_planned_workout(far, "Long Run", None, 20.0, None, 120, "easy")
     upcoming = db.get_upcoming_planned_workouts(days=14)
     dates = [w["date"] for w in upcoming]
     assert near in dates
@@ -196,25 +232,21 @@ STRUCT = {
 
 
 def test_structure_round_trip_and_duration_override(tmp_db):
-    db.save_planned_workout(
-        "2026-10-02", "Indoor Ride", None, 30, 450, 999, "hard", structure=STRUCT
-    )
+    save_planned_workout("2026-10-02", "Indoor Ride", None, 30, 450, 999, "hard", structure=STRUCT)
     row = db.get_training_plan()[0]
     assert row["duration_min"] == 40
     assert json.loads(row["structure_json"]) == STRUCT
 
 
 def test_saving_without_structure_clears_it(tmp_db):
-    db.save_planned_workout(
-        "2026-10-02", "Indoor Ride", None, 30, 450, 40, "hard", structure=STRUCT
-    )
-    db.save_planned_workout("2026-10-02", "Indoor Ride", "edited", 30, 450, 55, "hard")
+    save_planned_workout("2026-10-02", "Indoor Ride", None, 30, 450, 40, "hard", structure=STRUCT)
+    save_planned_workout("2026-10-02", "Indoor Ride", "edited", 30, 450, 55, "hard")
     row = db.get_training_plan()[0]
     assert row["structure_json"] is None
     assert row["duration_min"] == 55  # untouched when there is no structure
 
 
 def test_structure_discarded_for_non_cycling_types(tmp_db):
-    db.save_planned_workout("2026-10-02", "Easy Run", None, 5, None, 30, "easy", structure=STRUCT)
+    save_planned_workout("2026-10-02", "Easy Run", None, 5, None, 30, "easy", structure=STRUCT)
     row = db.get_training_plan()[0]
     assert row["structure_json"] is None and row["duration_min"] == 30

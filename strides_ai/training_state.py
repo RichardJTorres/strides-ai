@@ -105,6 +105,19 @@ def _counts_for_mode(workout_type: Optional[str], mode: Optional[str]) -> bool:
     return True
 
 
+SHAKEOUT_MAX_MIN = 45
+
+
+def _is_shakeout(p: dict) -> bool:
+    """A short easy session that can sit beside a race (warm-up / shakeout)."""
+    minutes = p.get("duration_min")
+    return (
+        (p.get("intensity") or "").lower() == "easy"
+        and minutes is not None
+        and minutes <= SHAKEOUT_MAX_MIN
+    )
+
+
 def _is_race_type(workout_type: Optional[str]) -> bool:
     return "race" in (workout_type or "").lower()
 
@@ -295,15 +308,26 @@ def _find_conflicts(state: TrainingState, plan_rows: list[dict]) -> list[Violati
     for p in sorted(plan_rows, key=lambda p: p.get("date") or ""):
         d = p.get("date") or ""
         wtype = p.get("workout_type")
-        if d < today or (wtype or "") == "Rest" or (p.get("intensity") or "") == "rest":
+        if (
+            d < today
+            or p.get("kind") in ("rest", "travel", "other")
+            or (wtype or "") == "Rest"
+            or (p.get("intensity") or "") == "rest"
+        ):
             continue
         if d in blocked:
             out.append(
                 Violation("blocked_day", d, f"{wtype} is planned on a blocked-out day.", True)
             )
-        if d in race_dates and not _is_race_type(wtype):
+        if d in race_dates and not (p.get("kind") == "race" or _is_race_type(wtype)):
+            # A short easy shakeout next to the race is fine; anything bigger is not.
             out.append(
-                Violation("race_day", d, f"{wtype} is planned on race day ({race_dates[d]}).", True)
+                Violation(
+                    "race_day",
+                    d,
+                    f"{wtype} is planned on race day ({race_dates[d]}).",
+                    not _is_shakeout(p),
+                )
             )
     for wk in state.weeks:
         if "ramp_high" in wk["flags"]:
@@ -343,20 +367,33 @@ def _find_conflicts(state: TrainingState, plan_rows: list[dict]) -> list[Violati
 
 
 def apply_changes(plan_rows: list[dict], changes: dict) -> list[dict]:
-    """Return plan_rows with `changes` ({"set": [{date, workout_type, distance_km, ...}],
-    "delete": [date]}) applied. Does not mutate the input."""
-    by_date = {p["date"]: dict(p) for p in plan_rows if p.get("date")}
-    for d in changes.get("delete") or []:
-        by_date.pop(d, None)
-    for w in changes.get("set") or []:
+    """Return plan_rows with an entry change set applied. Does not mutate the input.
+
+    ``changes``: ``{"create": [{date, workout_type, distance_km, intensity, kind?}],
+    "update": [{id, ...fields}], "delete": [id]}`` — the same shape the calendar applies, so the
+    guardrail preview and the commit see the same plan.
+    """
+    by_id: dict = {p["id"]: dict(p) for p in plan_rows if p.get("id") is not None}
+    anonymous = [dict(p) for p in plan_rows if p.get("id") is None]
+    for entry_id in changes.get("delete") or []:
+        by_id.pop(entry_id, None)
+    for u in changes.get("update") or []:
+        if u.get("id") in by_id:
+            by_id[u["id"]].update({k: v for k, v in u.items() if k != "id"})
+    created = []
+    for w in changes.get("create") or []:
         if w.get("date"):
-            by_date[w["date"]] = {
-                "date": w["date"],
-                "workout_type": w.get("workout_type", "Workout"),
-                "distance_km": w.get("distance_km"),
-                "intensity": w.get("intensity"),
-            }
-    return list(by_date.values())
+            created.append(
+                {
+                    "date": w["date"],
+                    "kind": w.get("kind", "workout"),
+                    "workout_type": w.get("workout_type", "Workout"),
+                    "distance_km": w.get("distance_km"),
+                    "duration_min": w.get("duration_min"),
+                    "intensity": w.get("intensity"),
+                }
+            )
+    return list(by_id.values()) + anonymous + created
 
 
 def check_plan_changes(
@@ -368,7 +405,7 @@ def check_plan_changes(
     today: date,
     changes: dict,
 ) -> list[Violation]:
-    """Violations a proposed change set would introduce.
+    """Violations a proposed entry change set (see apply_changes) would introduce.
 
     Hard: scheduling a non-race workout on a blocked-out day or race day. Soft: weekly ramp,
     projected ratio breach or missing recovery week that the change *creates* (the same problem
@@ -379,7 +416,11 @@ def check_plan_changes(
     after = build_training_state(rows, after_rows, prefs, mode, units, today)
 
     existing = {(v["kind"], v["date"]) for v in before.conflicts}
-    touched = {w["date"] for w in changes.get("set") or [] if w.get("date")}
+    by_id = {p.get("id"): p for p in plan_rows}
+    touched = {w["date"] for w in changes.get("create") or [] if w.get("date")}
+    for u in changes.get("update") or []:
+        touched.add(u.get("date") or (by_id.get(u.get("id")) or {}).get("date"))
+    touched.discard(None)
     out: list[Violation] = []
     for v in after.conflicts:
         v_obj = Violation(v["kind"], v["date"], v["detail"], v["hard"])

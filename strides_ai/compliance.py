@@ -16,7 +16,7 @@ LIMITATIONS (v1):
 - duration_min is never scored. A duration-only plan (distance_km=None) degrades to
   presence-only matching once a same-sport activity exists, however short.
 - Activity.date for HEVY-sourced rows is stamped in UTC (strides_ai/hevy_sync.py), not local
-  time, while Strava/TrainingPlan dates are local. Exact-string-date matching can be off by one
+  time, while Strava/calendar-entry dates are local. Exact-string-date matching can be off by one
   day near local midnight for lifting activities. Pre-existing bug, not fixed by this feature.
 - Matching is exact-date-string only — no "logged a day late" fuzzy matching.
 """
@@ -27,17 +27,16 @@ from datetime import date
 from enum import Enum
 from typing import Optional
 
+from . import kinds
 from .activity_types import CYCLE_TYPES, RUN_TYPES
 from .units import DEFAULT_UNIT_SYSTEM, Quantity, UnitSystem, format_value
 
-# Mirrors web/src/pages/calendar/constants.ts's WORKOUT_TYPE_GROUPS — keep in sync; drift falls back to
-# SportGroup.AMBIGUOUS (presence-only matching), never crashes or misclassifies.
-RUN_WORKOUT_TYPES = frozenset({"Easy Run", "Long Run", "Tempo Run", "Running Race"})
-RIDE_WORKOUT_TYPES = frozenset(
-    {"Easy Ride", "Long Ride", "Tempo Ride", "Indoor Ride", "Cycling Race"}
-)
-# Mirrors web/src/pages/calendar/constants.ts's NO_DISTANCE_WORKOUT_TYPES.
-UNSCORED_WORKOUT_TYPES = frozenset({"Rest", "Yoga"})
+# The taxonomy lives in kinds.py. These are the display strings compliance classifies (a race
+# reads as "Running Race" / "Cycling Race" / "Race"); unknown strings fall back to
+# SportGroup.AMBIGUOUS (presence-only matching), never crash or misclassify.
+RUN_WORKOUT_TYPES = kinds.RUN_DISPLAY_TYPES
+RIDE_WORKOUT_TYPES = kinds.RIDE_DISPLAY_TYPES
+UNSCORED_WORKOUT_TYPES = kinds.UNSCORED_DISPLAY_TYPES
 
 # actual_km >= DISTANCE_SHORTFALL_TOLERANCE * planned_km => COMPLETED (boundary inclusive).
 # No upper bound — overshooting a planned distance is never penalized.
@@ -66,6 +65,9 @@ class PlannedWorkout:
     date: date
     workout_type: str
     distance_km: Optional[float]
+    entry_id: Optional[int] = None
+    kind: str = "workout"  # workout | race | rest (travel / other entries are never scored)
+    result_activity_id: Optional[int] = None  # a race's athlete-confirmed result
 
 
 @dataclass(frozen=True)
@@ -85,6 +87,7 @@ class DayCompliance:
     actual_distance_km: Optional[float]  # None only if no qualifying activity recorded any distance
     matched_activity_id: Optional[int]
     note: str
+    entry_id: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -154,6 +157,24 @@ def compute_day_compliance(
             actual_distance_km=actual_km,
             matched_activity_id=matched.id if matched else None,
             note=note,
+            entry_id=planned.entry_id,
+        )
+
+    # 0. A race is never scored against activity data: it is "done" only when the athlete links
+    #    the activity that was the race. Unlinked, it is neutral (never a miss for the streak).
+    if planned.kind == "race":
+        linked = next((a for a in same_day_activities if a.id == planned.result_activity_id), None)
+        matched = linked
+        if linked is not None:
+            note = "Race result linked"
+        elif planned.date >= today:
+            note = "Race day"
+        else:
+            note = "Race — link the activity to record the result"
+        return day(
+            ComplianceStatus.UNSCORED,
+            linked.distance_m / 1000 if linked and linked.distance_m is not None else None,
+            note,
         )
 
     # 1. UNSCORED — unconditional, regardless of date or match.
@@ -209,16 +230,37 @@ def compute_range_compliance(
     today: date,
     units: UnitSystem = DEFAULT_UNIT_SYSTEM,
 ) -> list[DayCompliance]:
-    """One DayCompliance per input PlannedWorkout. Does not deduplicate by date — correctness
-    for 'at most one planned workout per date' is guaranteed upstream by training_plan.date
-    being the primary key (strides_ai/db/models.py), not enforced here; if ever violated,
-    duplicates produce independent, non-deduplicated output rows rather than crashing."""
+    """One DayCompliance per input PlannedWorkout, in input order.
+
+    A date may hold several planned entries, but an activity is credited to at most one of them:
+    activities linked as a race result are set aside for that race, then sport-specific workouts
+    (run / ride) claim their matching activities, and a sport-ambiguous workout (intervals,
+    cross-training) only sees what is left. The calendar allows one scored workout per sport per
+    day, so two workouts never compete for the same activity."""
     by_date: dict[date, list[ComplianceActivity]] = defaultdict(list)
     for a in activities:
         by_date[a.date].append(a)
-    return [
-        compute_day_compliance(p, by_date.get(p.date, []), today, units) for p in planned_workouts
-    ]
+
+    results: list[Optional[DayCompliance]] = [None] * len(planned_workouts)
+    claimed: dict[date, set[int]] = defaultdict(set)
+    for idx, p in enumerate(planned_workouts):
+        if p.kind == "race" and p.result_activity_id is not None:
+            claimed[p.date].add(p.result_activity_id)
+
+    def order(item):
+        _, p = item
+        group = classify_workout_type(p.workout_type)
+        return 0 if p.kind == "race" else (2 if group is SportGroup.AMBIGUOUS else 1)
+
+    for idx, p in sorted(enumerate(planned_workouts), key=order):
+        pool = by_date.get(p.date, [])
+        if p.kind != "race":
+            pool = [a for a in pool if a.id not in claimed[p.date]]
+        results[idx] = compute_day_compliance(p, pool, today, units)
+        group = classify_workout_type(p.workout_type)
+        if p.kind != "race" and group is not SportGroup.UNSCORED:
+            claimed[p.date] |= {a.id for a in _qualifying(group, pool)}
+    return [r for r in results if r is not None]
 
 
 def compliance_for_range(
@@ -264,7 +306,7 @@ def summarize_compliance(days: list[DayCompliance]) -> ComplianceSummary:
     )
 
 
-# ── Boundary adapters: the only functions here that know TrainingPlan/Activity.model_dump() shapes ──
+# ── Boundary adapters: the only functions here that know plan-row/Activity.model_dump() shapes ──
 
 
 def planned_workouts_from_rows(rows: list[dict]) -> list[PlannedWorkout]:
@@ -276,11 +318,17 @@ def planned_workouts_from_rows(rows: list[dict]) -> list[PlannedWorkout]:
             d = date.fromisoformat(row.get("date") or "")
         except ValueError:
             continue
+        kind = row.get("kind") or "workout"
+        if kind not in ("workout", "race", "rest"):
+            continue  # travel and other entries are not planned training
         out.append(
             PlannedWorkout(
                 date=d,
                 workout_type=row.get("workout_type") or "",
                 distance_km=row.get("distance_km"),
+                entry_id=row.get("id"),
+                kind=kind,
+                result_activity_id=row.get("result_activity_id"),
             )
         )
     return out

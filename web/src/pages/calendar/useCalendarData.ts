@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { useUnits } from "../../UnitsContext";
 import { fetchJson, jsonBody } from "../../ui/api";
-import { buildGrid } from "./grid";
-import type { Activity, ComplianceDay, Plan, Prefs, TrainingState, WeekStart, Workout } from "./types";
+import { buildGrid, groupByDate } from "./grid";
+import type { Activity, ComplianceById, ComplianceDay, Entry, Plan, Prefs, TrainingState, WeekStart } from "./types";
 
 /** Everything the calendar loads, plus the blocked-day mutation. */
 export function useCalendarData(currentMonth: Date) {
@@ -10,7 +10,7 @@ export function useCalendarData(currentMonth: Date) {
   const [prefs, setPrefs] = useState<Prefs>({ blocked_days: [], races: [] });
   const [plan, setPlan] = useState<Plan>({});
   const [activities, setActivities] = useState<Record<string, Activity[]>>({});
-  const [compliance, setCompliance] = useState<Record<string, ComplianceDay>>({});
+  const [compliance, setCompliance] = useState<ComplianceById>({});
   const [trainingState, setTrainingState] = useState<TrainingState | null>(null);
   // The Settings page owns this preference; the Calendar remounts on every visit, so it picks up
   // a change on the next open. Fails soft to Monday. `weekStartLoaded` holds the compliance
@@ -20,7 +20,7 @@ export function useCalendarData(currentMonth: Date) {
   const [loading, setLoading] = useState(true);
   // A failed initial load: without the plan the grid would look like an empty calendar.
   const [loadError, setLoadError] = useState<string | null>(null);
-  // A failed blocked-day / race save (the change is rolled back).
+  // A failed blocked-day save (the change is rolled back).
   const [prefsError, setPrefsError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   // Bumped once a write has been confirmed. The plan-derived figures below are also refetched
@@ -53,15 +53,13 @@ export function useCalendarData(currentMonth: Date) {
     setLoadError(null);
     Promise.all([
       fetchJson<Prefs>("/api/calendar/prefs"),
-      fetchJson<Workout[]>("/api/calendar/plan"),
+      fetchJson<Entry[]>("/api/calendar/entries"),
       fetchJson<Activity[]>("/api/activities"),
     ])
       .then(([loadedPrefs, planRows, activityRows]) => {
         if (cancelled) return;
         setPrefs(loadedPrefs);
-        const planByDate: Plan = {};
-        for (const w of planRows) planByDate[w.date] = w;
-        setPlan(planByDate);
+        setPlan(groupByDate(planRows));
         const byDate: Record<string, Activity[]> = {};
         for (const a of activityRows) (byDate[a.date] ??= []).push(a);
         setActivities(byDate);
@@ -89,9 +87,9 @@ export function useCalendarData(currentMonth: Date) {
     )
       .then(res => {
         if (cancelled) return;
-        const byDate: Record<string, ComplianceDay> = {};
-        for (const d of res.days) byDate[d.date] = d;
-        setCompliance(byDate);
+        const byEntry: ComplianceById = {};
+        for (const d of res.days) if (d.entry_id != null) byEntry[d.entry_id] = d;
+        setCompliance(byEntry);
       })
       .catch(() => {
         // Secondary: the plan still renders; only the status dots are missing.
@@ -100,6 +98,14 @@ export function useCalendarData(currentMonth: Date) {
     return () => { cancelled = true; };
     // units.system: compliance notes are rendered server-side in the current units.
   }, [currentMonth, units.system, plan, confirmed, weekStart, weekStartLoaded]);
+
+  // Re-read the entries after a write the server may have adjusted (a structure sets the
+  // duration, a race link changes the day). Cheaper to reason about than patching local copies.
+  const reloadPlan = useCallback(() => {
+    return fetchJson<Entry[]>("/api/calendar/entries")
+      .then(rows => { setPlan(groupByDate(rows)); refreshDerived(); })
+      .catch(() => {});
+  }, [refreshDerived]);
 
   // Optimistic: show the change at once. If the save fails, show what the server actually has
   // (several quick changes can overlap, so "the previous value" is not reliably the saved one).
@@ -124,7 +130,7 @@ export function useCalendarData(currentMonth: Date) {
   };
 
   return {
-    prefs, plan, setPlan, activities, compliance, trainingState, toggleBlocked, weekStart,
+    prefs, plan, setPlan, reloadPlan, activities, compliance, trainingState, toggleBlocked, weekStart,
     loading, loadError, prefsError, reload: () => setAttempt(n => n + 1), confirmed, refreshDerived,
   };
 }
