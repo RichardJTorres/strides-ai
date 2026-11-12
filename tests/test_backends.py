@@ -74,6 +74,34 @@ def test_claude_stream_turn_text(mock_anthropic):
     assert memories == []
 
 
+@pytest.mark.parametrize(
+    "budget, expected",
+    [
+        (3000, {"type": "enabled", "budget_tokens": 3000}),
+        (0, {"type": "disabled"}),
+        (500, {"type": "disabled"}),  # below the API minimum
+        (8976, {"type": "enabled", "budget_tokens": 8976}),  # exactly 1024 left for the reply
+        (8977, {"type": "disabled"}),  # no room left for the reply
+    ],
+)
+def test_claude_stream_turn_bounds_thinking(mock_anthropic, monkeypatch, budget, expected):
+    # Reasoning tokens count against the per-round output cap and can starve the reply.
+    from strides_ai import config
+
+    monkeypatch.setattr(
+        config, "get_settings", lambda: config.Settings(claude_thinking_budget=budget)
+    )
+    mock_anthropic.return_value.messages.stream.return_value = _claude_stream(["ok"])
+
+    from strides_ai.backends.claude import ClaudeBackend
+
+    ClaudeBackend("key", []).stream_turn("sys", "hi", _collect()[0])
+
+    kwargs = mock_anthropic.return_value.messages.stream.call_args.kwargs
+    assert kwargs["thinking"] == expected
+    assert kwargs["max_tokens"] == 10000
+
+
 def test_claude_stream_turn_appends_history(mock_anthropic):
     mock_anthropic.return_value.messages.stream.return_value = _claude_stream(["reply"])
 

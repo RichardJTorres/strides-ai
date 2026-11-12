@@ -119,6 +119,20 @@ class ClaudeBackend(BaseBackend):
                 return None
             raise
 
+    def _thinking_param(self):
+        """Bounded thinking for chat turns.
+
+        Newer models think by default and reasoning counts against max_tokens, so an unbounded
+        default can starve the reply. Give it a fixed budget instead, and fall back to disabled
+        when the budget is off, below the API minimum, or would leave no room for the reply.
+        """
+        from ..config import get_settings
+
+        budget = get_settings().claude_thinking_budget
+        if budget < 1024 or self._budget.output_remaining < budget + 1024:
+            return {"type": "disabled"}
+        return {"type": "enabled", "budget_tokens": budget}
+
     def stream_turn(self, system, user_input, on_token, attachments=None):
         if attachments:
             content = [*attachments, {"type": "text", "text": user_input}]
@@ -135,6 +149,7 @@ class ClaudeBackend(BaseBackend):
                 lambda: self._client.messages.stream(
                     model=self._model,
                     max_tokens=self._budget.output_remaining,
+                    thinking=self._thinking_param(),
                     system=system,
                     messages=self._history,
                     tools=[SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL, UPDATE_PROFILE_TOOL],

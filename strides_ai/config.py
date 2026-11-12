@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     ollama_model: str = ""
     ollama_host: str = "http://localhost:11434"
 
+    # Claude extended-thinking allowance per request, in tokens. 0 turns thinking off; values
+    # under 1024 (the API minimum) also turn it off. It counts against the per-round output cap.
+    claude_thinking_budget: int = 3000
+
     # JSON overrides keyed by default, provider, or provider/model label.
     chat_limits: dict[str, dict[str, int]] = {}
 
