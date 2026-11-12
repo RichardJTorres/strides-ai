@@ -1,4 +1,7 @@
-import { useEffect, useState } from "react";
+import { hrefFor } from "../../nav";
+import { useApi } from "../../ui/api";
+import { formatDate } from "../../ui/format";
+import { Notice } from "../../ui/states";
 import { useUnits } from "../../UnitsContext";
 import type { ThemeConfig } from "../../App";
 import { Field, HeightInput, MeasuredInput, PLACEHOLDERS, SnacksList, TextArea, inputClass } from "./fields";
@@ -18,64 +21,31 @@ const WEEKDAYS: [string, string][] = [
 ];
 const ALL = "All modes";
 
-/** Races live in the calendar prefs (shared with the Calendar page), not the profile row. */
-function RaceList({ theme, focusClass }: { theme: ThemeConfig; focusClass: string }) {
-  const [prefs, setPrefs] = useState<{ blocked_days: string[]; races: Race[] } | null>(null);
-  const [form, setForm] = useState({ date: "", name: "", target_time: "" });
-
-  useEffect(() => {
-    fetch("/api/calendar/prefs").then((r) => r.json()).then(setPrefs).catch(() => setPrefs(null));
-  }, []);
-
-  async function persist(races: Race[]) {
-    if (!prefs) return;
-    const next = { ...prefs, races };
-    setPrefs(next);
-    await fetch("/api/calendar/prefs", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(next),
-    });
-  }
-
-  function add() {
-    if (!prefs || !form.date || !form.name) return;
-    const race: Race = { date: form.date, name: form.name };
-    if (form.target_time) race.target_time = form.target_time;
-    persist([...prefs.races, race].sort((a, b) => a.date.localeCompare(b.date)));
-    setForm({ date: "", name: "", target_time: "" });
-  }
-
-  if (!prefs) return null;
+/** Races live in the calendar prefs, not the profile row, and are edited on the Calendar only. */
+function RaceList() {
+  const { data, error } = useApi<{ races: Race[] }>("/api/calendar/prefs");
+  if (error) return <Notice tone="error">Couldn't load your races: {error}</Notice>;
+  if (!data) return null;
   return (
     <div className="flex flex-col gap-2">
-      <label className="text-xs font-medium text-gray-400">
-        Upcoming races — shared with the Calendar; saved as soon as you add or remove one
-      </label>
-      {prefs.races.map((r) => (
-        <div key={`${r.date}-${r.name}`} className="flex items-center justify-between rounded-md border border-gray-800 px-3 py-1.5 text-sm text-gray-200">
-          <span>
-            <span className="text-gray-500 mr-2">{r.date}</span>
-            {r.name}
-            {r.target_time && <span className="text-gray-500"> · target {r.target_time}</span>}
-          </span>
-          <button
-            onClick={() => persist(prefs.races.filter((x) => !(x.date === r.date && x.name === r.name)))}
-            className="text-gray-500 hover:text-red-400"
-            aria-label={`Remove ${r.name}`}
-          >
-            ×
-          </button>
-        </div>
-      ))}
-      <div className="flex gap-2 flex-wrap">
-        <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} className={`${inputClass} ${focusClass}`} aria-label="Race date" />
-        <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Race name" className={`${inputClass} ${focusClass} flex-1 min-w-32`} />
-        <input type="text" value={form.target_time} onChange={(e) => setForm({ ...form, target_time: e.target.value })} placeholder="Target time" className={`${inputClass} ${focusClass} w-28`} />
-        <button onClick={add} disabled={!form.date || !form.name} className={`px-3 py-2 rounded-md ${theme.accentButton} text-white text-sm disabled:opacity-40`}>
-          Add race
-        </button>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-xs font-medium text-gray-400">Upcoming races</span>
+        <a href={hrefFor("calendar")} className="text-xs text-gray-400 underline hover:text-gray-200">
+          Add or remove races on the Calendar →
+        </a>
       </div>
+      {data.races.length === 0 && <p className="text-sm text-gray-500">No races yet.</p>}
+      {data.races.map((r) => (
+        <a
+          key={`${r.date}-${r.name}`}
+          href={hrefFor("calendar", r.date)}
+          className="rounded-md border border-gray-800 px-3 py-1.5 text-sm text-gray-200 hover:border-gray-600"
+        >
+          <span className="text-gray-500 mr-2">{formatDate(r.date)}</span>
+          {r.name}
+          {r.target_time && <span className="text-gray-500"> · target {r.target_time}</span>}
+        </a>
+      ))}
     </div>
   );
 }
@@ -120,7 +90,7 @@ export default function SharedSections({ fields, saved, updated, theme, focusCla
       <SectionCard {...common} id="profile-goals" title="Goals & schedule" usedIn={ALL} keys={["goals", "availability"]}>
         <div className="space-y-4">
           <TextArea label="Long-term goals" value={fields.goals ?? ""} onChange={(v) => setPath(["goals"], v)} placeholder="e.g. Sub-4 marathon at Berlin in September, then a 200 km gravel event…" rows={3} focusClass={focusClass} />
-          <RaceList theme={theme} focusClass={focusClass} />
+          <RaceList />
           <div className="grid grid-cols-2 gap-4">
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-gray-400">Sessions per week (all sports)</label>

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "test": "node --test chatAdmission.test.mjs units.test.mjs activityLabels.test.mjs calendar.test.mjs",
+    "test": "node --test chatAdmission.test.mjs units.test.mjs activityLabels.test.mjs calendar.test.mjs calendarGrid.test.mjs nav.test.mjs format.test.mjs",
     "typecheck": "tsc --noEmit",
     "build": "tsc && vite build",
     "preview": "vite preview"

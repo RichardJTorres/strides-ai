@@ -160,10 +160,9 @@ def get_compliance(
         for r in act_crud.get_all(session)
         if start_date <= (r.date or "") <= end_date
     ]
-
-    planned = compliance.planned_workouts_from_rows(plan_rows)
-    acts = compliance.compliance_activities_from_rows(activity_rows)
-    days = compliance.compute_range_compliance(planned, acts, date_cls.today(), units)
+    days = compliance.compliance_for_range(
+        plan_rows, activity_rows, start, end, date_cls.today(), units
+    )
     summary = compliance.summarize_compliance(days)
 
     return {

@@ -322,7 +322,7 @@ web/
     ├── Chat.tsx        # Streaming chat UI, mode-aware history
     ├── Activities.tsx  # Activity table (Strava + HEVY), mode-filtered
     ├── Charts.tsx      # Weekly volume, ATL/CTL, aerobic efficiency
-    ├── Calendar.tsx    # Planned workouts, Strava overlay, nutrition advice
+    ├── calendar/       # Planned workouts, Strava overlay, nutrition advice (CalendarPage + parts)
     ├── Profile.tsx     # Athlete profile editor (per-mode)
     └── Settings.tsx    # Mode selector (Running / Cycling / Hybrid / Lifting)
 ```

@@ -3,17 +3,19 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 
-// Exercise the component's actual handlers with deferred requests and React-style updates.
-const source = readFileSync(new URL('./src/pages/Calendar.tsx', import.meta.url), 'utf8');
-const ast = ts.createSourceFile('Calendar.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-function handler(name, bindings) {
+// Exercise the components' actual handlers with deferred requests and React-style updates.
+// Each handler is lifted out of its source file by name and run with its free variables bound,
+// so it must stay a `const` declaration in that file and keep those variable names.
+function handler(file, name, bindings) {
+  const source = readFileSync(new URL(`./src/pages/calendar/${file}`, import.meta.url), 'utf8');
+  const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   let declaration;
   function visit(node) {
     if (ts.isVariableDeclaration(node) && node.name.getText(ast) === name) declaration = node;
     ts.forEachChild(node, visit);
   }
   visit(ast);
-  assert.ok(declaration, `Missing production handler: ${name}`);
+  assert.ok(declaration, `Missing production handler: ${name} in ${file}`);
   const compiled = ts.transpile(`const ${declaration.getText(ast)};`, { target: ts.ScriptTarget.ES2022 });
   return new Function(...Object.keys(bindings), `${compiled}\nreturn ${name};`)(...Object.values(bindings));
 }
@@ -22,15 +24,17 @@ function moveHarness(initial) {
   let plan = initial;
   const pending = [];
   const movePending = { current: false };
+  let moveError = null;
+  let refreshes = 0;
   const setPlan = update => { plan = typeof update === 'function' ? update(plan) : update; };
-  const move = () => handler('moveWorkout', {
+  const move = () => handler('CalendarPage.tsx', 'moveWorkout', {
     plan, movePending, setPlan, selectedDate: null,
-    setSelectedDate() {}, setEditMode() {},
+    setSelectedDate() {}, setEditMode() {}, setMoveError(message) { moveError = message; }, refreshDerived() { refreshes += 1; },
     fetch: (_url, options) => new Promise((resolve, reject) => {
       pending.push({ body: JSON.parse(options.body), resolve, reject });
     }),
   });
-  return { move, pending, setPlan, get plan() { return plan; } };
+  return { move, pending, setPlan, get plan() { return plan; }, get moveError() { return moveError; }, get refreshes() { return refreshes; } };
 }
 
 test('failed move preserves unrelated edits and new workouts', async () => {
@@ -62,31 +66,37 @@ test('another move is blocked until the pending request settles', async () => {
 });
 
 test('network failure restores both swapped workouts and releases the move lock', async () => {
-  const a = { workout_type: 'Indoor Ride', structure: { blocks: [{ kind: 'freeride', duration_s: 600 }] } };
+  const route = 'https://ridewithgps.com/routes/1';
+  const a = { workout_type: 'Indoor Ride', route_url: route, structure: { blocks: [{ kind: 'freeride', duration_s: 600 }] } };
   const b = { workout_type: 'Easy Run' };
   const h = moveHarness({ A: a, B: b });
   const request = h.move()('A', 'B');
   assert.deepEqual(h.pending[0].body.set[0].structure, a.structure);
+  assert.equal(h.pending[0].body.set[0].route_url, route); // a move carries the route too
+  assert.equal(h.pending[0].body.set[1].route_url, null);
   h.pending[0].reject(new Error('offline'));
   await request;
   assert.deepEqual(h.plan, { A: a, B: b });
+  assert.match(h.moveError, /put back/); // the athlete is told, not left guessing
   const retry = h.move()('A', 'B');
   assert.equal(h.pending.length, 2);
   h.pending[1].resolve({ ok: true });
   await retry;
   assert.equal(h.plan.B.structure, a.structure);
+  assert.equal(h.moveError, null); // cleared by the next attempt
+  assert.equal(h.refreshes, 1); // only the confirmed move refreshes the derived figures
 });
 
 test('editing preserves structure unless the athlete explicitly removes it', async () => {
   const structure = { blocks: [{ kind: 'steady', duration_s: 3600, pct: 0.75 }] };
   for (const clear of [false, true]) {
     let body;
-    const save = handler('saveWorkout', {
+    const save = handler('DayPanel.tsx', 'saveWorkout', {
       selectedDate: '2026-10-30', selectedWorkout: { structure },
-      form: { workout_type: 'Indoor Ride', duration_min: clear ? '30' : '60', clear_structure: clear },
+      form: { workout_type: 'Indoor Ride', duration_min: clear ? '30' : '60', clear_structure: clear, route_url: 'https://strava.com/routes/2' },
       NO_DISTANCE_WORKOUT_TYPES: new Set(), ROUTE_CAPABLE_WORKOUT_TYPES: new Set(['Indoor Ride']),
       keepsStructure: () => true, kmFromInput: () => null, mFromInput: () => null,
-      setPlan() {}, setEditMode() {},
+      setPlan() {}, setEditMode() {}, setSaveError() {},
       fetch: async (_url, options) => {
         body = JSON.parse(options.body);
         return { ok: true, json: async () => ({ workout: body }) };
@@ -95,5 +105,25 @@ test('editing preserves structure unless the athlete explicitly removes it', asy
     await save();
     assert.deepEqual(body.structure, clear ? null : structure);
     assert.equal(body.duration_min, clear ? 30 : 60);
+    assert.equal(body.route_url, 'https://strava.com/routes/2');
+  }
+});
+
+test('a failed save keeps the form open and says so', async () => {
+  for (const fail of [async () => ({ ok: false }), async () => { throw new Error('offline'); }]) {
+    const calls = { error: undefined, closed: false, planned: false };
+    const save = handler('DayPanel.tsx', 'saveWorkout', {
+      selectedDate: '2026-10-30', selectedWorkout: null,
+      form: { workout_type: 'Easy Run', duration_min: '', clear_structure: false, route_url: '' },
+      NO_DISTANCE_WORKOUT_TYPES: new Set(), ROUTE_CAPABLE_WORKOUT_TYPES: new Set(),
+      keepsStructure: () => false, kmFromInput: () => null, mFromInput: () => null,
+      setPlan() { calls.planned = true; }, setEditMode() { calls.closed = true; },
+      setSaveError(message) { calls.error = message; },
+      fetch: fail,
+    });
+    await save();
+    assert.match(calls.error, /Couldn't save/);
+    assert.equal(calls.closed, false);
+    assert.equal(calls.planned, false);
   }
 });

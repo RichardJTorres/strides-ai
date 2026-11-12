@@ -1,3 +1,4 @@
+import { HR_ZONE_COLORS } from "../../ui/colors";
 import type { ChartDataset, LoadContext } from "../api";
 import AerobicEfficiencyCard from "./AerobicEfficiencyCard";
 import AtlCtlCard from "./AtlCtlCard";
@@ -13,14 +14,6 @@ interface RenderProps {
   unit: "miles" | "km";
   loadContext?: LoadContext;
 }
-
-const HR_ZONE_COLORS: Record<string, string> = {
-  Z1: "#60a5fa",
-  Z2: "#4ade80",
-  Z3: "#facc15",
-  Z4: "#f97316",
-  Z5: "#ef4444",
-};
 
 const ALLOCATION_COLORS: Record<string, string> = {
   Run: "#4ade80",

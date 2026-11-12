@@ -68,7 +68,7 @@ Select backend with `PROVIDER=claude` (default), `PROVIDER=gemini`, `PROVIDER=op
 
 ### System prompt assembly (`strides_ai/coach.py`)
 
-On every turn `build_system()` assembles: mode-specific base prompt → units section (the athlete's `unit_system`) → current date/time → athlete profile text → coaching memories → calendar constraints (upcoming races and blocked-out days from `calendar_prefs`) → upcoming planned workouts (next `PLANNED_WORKOUTS_WINDOW_DAYS` days, default 60) → recent activities training log (last 30, `RECENT_ACTIVITIES_IN_SYSTEM`).
+On every turn `build_system()` assembles: mode-specific base prompt → units section (the athlete's `unit_system`) → current date/time → athlete profile text → coaching memories → calendar constraints (upcoming races and blocked-out days from `calendar_prefs`) → upcoming planned workouts (next `PLANNED_WORKOUTS_WINDOW_DAYS` days, default 60; the next `WORKOUT_DETAIL_DAYS` also carry the athlete's notes and route-fit verdict) → training state, with the Analytics digest's deterministic flags and, when fresh, the cached readout → streak, quests and new records (`progress.py`) → recent activities training log (last 30, `RECENT_ACTIVITIES_IN_SYSTEM`).
 
 At session start, `build_initial_history()` seeds the full activity log (all activities) as the first exchange in `_history`, so older runs are accessible even though the system prompt only carries the 30 most recent. Last 40 messages (`RECALL_MESSAGES`) from the DB are appended after.
 
@@ -106,7 +106,7 @@ Every stored measurement is SI-based: meters, s/km, m/km, kg, ml (`TrainingPlan.
 
 Two stages:
 1. **Metric computation** (run automatically on sync): fetches Strava streams (heartrate, velocity, cadence, altitude), computes cardiac decoupling %, HR zone distribution (Z1–Z5), pace fade, cadence std dev, effort efficiency score (0–100), and elevation flags. Writes results back to the `activities` table. Produces a rule-based NL summary (no LLM) stored as `analysis_summary`.
-2. **Deep dive** (on-demand via `/api/activities/{id}/deep-dive`): calls `backend.stateless_turn()` with downsampled stream data (60-sec intervals + inflection points). Result cached in `deep_dive_report`; re-triggerable.
+2. **Deep dive** (on-demand via `/api/activities/{id}/deep-dive`): calls `backend.stateless_turn()` with downsampled stream data (60-sec intervals + inflection points). The prompt also carries the planned workout for that day and how it was scored (`activity_context.planned_workout_block`), so the report can judge the session against its intent. Result cached in `deep_dive_report`; re-triggerable.
 
 Sync backfills up to 10 pending/unanalyzed activities per cycle. Strava 429 responses mark activities `analysis_status='pending'` for retry.
 
@@ -118,6 +118,8 @@ The chat coach can also write to this calendar directly via the `update_training
 
 Cycling workouts can also carry a structured (ERG-style) workout in `training_plan.structure_json`, defined and validated only in `strides_ai/workout_structure.py` (`normalize_structure`; intensities are fractions of FTP, so no FTP is needed). A valid structure is authoritative for `duration_min`; it is discarded on non-cycling types and cleared by any save that omits it, so every writer (edit form, drag-to-move, bulk accept, `update_training_plan`) must pass it through. `GET /calendar/plan/{date}/zwo` exports it as a Zwift `.zwo`. Indoor Rides are prompted to carry distance + elevation (Zwift simulated climbing); the UI derives the climb ratio on read (`plannedClimbRate`), never stored.
 
+The Calendar UI lives in `web/src/pages/calendar/`. The grid is Monday-first, so each row is exactly one backend week (ramp, streak, quests). The selected day is the URL (`#calendar/<date>`), not component state. `CalendarPage` owns range, drag state and `moveWorkout`; `useCalendarData` owns every fetch and the preference mutations; `DayPanel` owns the edit form and `saveWorkout` and is remounted (by key) on each selection, which is what resets it; `grid.ts` is pure and unit-tested. `web/calendar.test.mjs` lifts `moveWorkout` and `saveWorkout` out of their files **by name** and runs them with their free variables bound, so they must stay `const` declarations there with the same variable names.
+
 A planned workout can also have a route URL attached (`route_url`) — either a Strava or a RideWithGPS route, only shown/accepted for Running and Cycling workout types. `strides_ai/sources/routes.py` dispatches by domain to `sources/ridewithgps.py` (unauthenticated legacy `routes/{id}.json` endpoint, public routes only, no API key) or `sources/strava_routes.py` (authenticated with this app's existing Strava `read` scope — confirmed to work for *any* public route, not just the connected athlete's own; distinct from `sources/strava.py`, which handles activity sync/deep-dive). `POST /calendar/plan/{date}/analyze-route` fetches the route and asks the LLM (`strides_ai/route_analysis.py`) whether its distance/elevation/terrain actually fits the workout's stated goal, returning a `verdict`/`explanation`/`suggestion`. Cached in `route_analysis_json`; cleared whenever the workout is edited, same as `nutrition_json`; `?force=true` regenerates.
 
 ### Charts insights (`strides_ai/insights.py`, `web/src/charts/InsightsCard.tsx`)
@@ -125,6 +127,12 @@ A planned workout can also have a route URL attached (`route_url`) — either a 
 The Analytics page (formerly Charts; legacy `#charts` hashes still resolve) has an "Insights" tab, shown first, holding an analytical "Training Insights" card (cardio modes only). `build_digest()` deterministically computes the metrics (last 4 full weeks vs the prior 8, in-progress week excluded, values formatted in the athlete's units), rule-based flags, next race and recent plan compliance — reusing `analytics.cardio` and `compliance`. The LLM (`stateless_turn`, user-selected backend) only interprets the digest into structured JSON (`status`, `headline`, `findings`, `recommendations`, each citing digest metric ids; unknown ids are dropped by `parse_insights_response`). The UI renders figures from the digest, never from model text.
 
 `GET /api/charts/insights` returns the live digest + cached report + `stale` (never calls the LLM); `POST` generates (`?force=true` to bypass a fresh cache). The cache lives in the `settings` table under `charts_insights:{mode}:{unit_system}` and is invalidated by `digest_fingerprint` (activity count/latest id/date, unit system, ISO week). ATL/CTL are distance-based, so the load flag uses the ATL/CTL ratio rather than a TSB threshold.
+
+### Progress: streak, quests, records (`strides_ai/progress.py`)
+
+`GET /api/progress` is computed on read (nothing stored, no mode parameter) from every planned workout and every activity; `build_progress(plan_rows, activity_rows, today, units)` is pure. Weeks are Monday–Sunday. **Streak:** a week is hit when at least one scored plan day was done (completed or shortened) and at most `MAX_MISSES` (1) was missed; weeks with nothing scored pause it, more than two paused weeks in a row end it, and the in-progress week never counts (`this_week.status` says where it is heading). **Quests:** this week's Long / Tempo+Intervals / Rest days; a Rest day is only broken by a run or ride with distance. **Records:** per sport (`run`, `ride`, `lift`), only once that sport has 6 activities and 28 days of history; ties go to the earliest; no pace records (Strava best efforts aren't fetched).
+
+Plan compliance has one entry point, `compliance.compliance_for_range(...)`, and always takes **all** activities, never a mode-filtered list — the plan is shared across modes, so filtering would turn a completed planned ride into "missed" in running mode. The coach, Calendar, Insights digest and progress all go through it.
 
 ### Strava sync (`strides_ai/sync.py`)
 
@@ -148,6 +156,10 @@ Copy `.env.example` to `.env` to get started.
 
 ### Frontend (`web/`)
 
-React 18 + TypeScript + Tailwind CSS + Vite + recharts. Navigation uses `location.hash` (`#chat`, `#activities`, `#analytics`, `#calendar`, `#profile`, `#settings`) — no router dependency. Vite HMR picks up React changes instantly; Python changes require a server restart.
+React 18 + TypeScript + Tailwind CSS + Vite + recharts. Navigation uses `location.hash` — no router dependency. `web/src/nav.ts` owns the grammar `#<tab>[/<param>]` (`#activities/<id>`, `#calendar/<YYYY-MM-DD>`, `#analytics/<section>`; invalid params are dropped): link with `hrefFor` / `navigate`, never a hand-written hash.
+
+Shared UI lives in `web/src/ui/` — use it instead of hand-rolling Tailwind per page: `Button` (primary takes the mode accent), `Modal` (labelled, Escape, focus handling), `Spinner`, `LoadingState` / `ErrorState` / `EmptyState` / `Notice` (`states.tsx`), `PageHeader`, `formatDate` / `formatDuration` (`format.ts`), and `fetchJson` / `useApi` (`api.ts`), which throw on non-2xx so a failed request can't render as empty data. The mode theme is defined once in `ui/theme.tsx` and read with `useTheme()`; it is also exposed as the `--accent` CSS variable.
+
+Streak, quests and records reach the UI through `web/src/progress/` (`useProgress`, `ProgressStrip` on the Calendar, `ProgressCard` in Analytics → Progress, `NewRecordBanner` in chat). Pages hand things to the chat through `pages/chatActivityHandoff.ts` (one-shot sessionStorage, never a URL, so a reload cannot re-fire it). Vite HMR picks up React changes instantly; Python changes require a server restart.
 
 File attachments (images as base64, text as UTF-8) are uploaded to `~/.strides_ai/uploads/` and forwarded to `stream_turn` as `attachments`.

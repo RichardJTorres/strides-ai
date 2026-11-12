@@ -19,6 +19,7 @@ from .routers import (
     history,
     memories,
     profile,
+    progress,
     settings,
     status,
     sync,
@@ -55,6 +56,7 @@ app.include_router(sync.router, prefix="/api")
 app.include_router(history.router, prefix="/api")
 app.include_router(analysis.router, prefix="/api")
 app.include_router(calendar.router, prefix="/api")
+app.include_router(progress.router, prefix="/api")
 app.include_router(status.router, prefix="/api")
 
 

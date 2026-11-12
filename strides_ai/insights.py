@@ -20,12 +20,7 @@ from .analytics import cardio
 from .analytics.adapters import to_cardio_analytics
 from .analytics.aggregation import monday_of
 from .analytics.models import CardioAnalyticsActivity
-from .compliance import (
-    compliance_activities_from_rows,
-    compute_range_compliance,
-    planned_workouts_from_rows,
-    summarize_compliance,
-)
+from .compliance import compliance_for_range, summarize_compliance
 from .route_analysis import _strip_json_fences
 from .training_state import (
     ACWR_DANGER,
@@ -247,8 +242,12 @@ def build_digest(
     plan_rows: Optional[list[dict]] = None,
     races: Optional[list[dict]] = None,
     state: Optional[TrainingState] = None,
+    compliance_rows: Optional[list[dict]] = None,
 ) -> dict:
     """DB activity rows -> deterministic digest. Same inputs always produce the same output.
+
+    `rows` are the mode's activities. `compliance_rows` are ALL activities, used only to score
+    plan adherence (see compliance.compliance_for_range); it defaults to `rows`.
 
     `state` (see training_state.py) adds the forward-looking `plan.*` metrics and the `upcoming`
     context so the readout is written against the calendar, not just the past."""
@@ -437,11 +436,15 @@ def build_digest(
         }
 
     since = today - timedelta(days=COMPLIANCE_LOOKBACK_DAYS)
-    planned = [p for p in planned_workouts_from_rows(plan_rows or []) if since <= p.date <= today]
-    if planned:
-        days = compute_range_compliance(
-            planned, compliance_activities_from_rows(rows), today, units
-        )
+    days = compliance_for_range(
+        plan_rows or [],
+        rows if compliance_rows is None else compliance_rows,
+        since,
+        today,
+        today,
+        units,
+    )
+    if days:
         s = summarize_compliance(days)
         if s.total_scored:
             digest["context"]["compliance"] = {
@@ -599,7 +602,7 @@ def _flags(digest: dict) -> list[dict]:
             add(
                 "low_easy_share",
                 "info",
-                f"{m['label']} is {m['formatted']}; most training is above easy intensity.",
+                f"{m['label']} is {m['formatted']}, below the 70% that keeps most training easy.",
                 [m["id"]],
             )
 
@@ -640,9 +643,11 @@ def digest_fingerprint(
     today: date,
     plan_rows: Optional[list[dict]] = None,
     prefs: Optional[dict] = None,
+    compliance_rows: Optional[list[dict]] = None,
 ) -> str:
     """Changes when activities are added, the athlete's units change, the day rolls over, or
-    the calendar (planned workouts, races, blocked days) is edited."""
+    the calendar (planned workouts, races, blocked days) is edited. `compliance_rows` (all
+    activities) are counted too, since another sport's activity can change plan adherence."""
     ids = [r.get("id") or 0 for r in rows]
     dates = [r.get("date") or "" for r in rows]
     iso = today.isocalendar()
@@ -662,6 +667,7 @@ def digest_fingerprint(
         ),
         sorted([r.get("date"), r.get("name")] for r in (prefs or {}).get("races", [])),
         sorted((prefs or {}).get("blocked_days", [])),
+        len(rows if compliance_rows is None else compliance_rows),
     ]
     return hashlib.sha1(json.dumps(payload).encode()).hexdigest()[:16]
 

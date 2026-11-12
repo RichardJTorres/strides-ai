@@ -4,11 +4,11 @@ No DB/session access. Every function takes `today: date` explicitly — never ca
 date.today() internally — mirroring strides_ai/analytics/cardio.py's determinism rule.
 
 The workout-type taxonomy below is a second, independently-maintained copy of the sport
-groupings web/src/pages/Calendar.tsx uses for its planner dropdown (WORKOUT_TYPE_GROUPS /
+groupings web/src/pages/calendar/constants.ts uses for its planner dropdown (WORKOUT_TYPE_GROUPS /
 NO_DISTANCE_WORKOUT_TYPES). See LIMITATIONS below for why, and the drift mitigation.
 
 LIMITATIONS (v1):
-- workout_type taxonomy is duplicated with web/src/pages/Calendar.tsx's WORKOUT_TYPE_GROUPS /
+- workout_type taxonomy is duplicated with web/src/pages/calendar/constants.ts's WORKOUT_TYPE_GROUPS /
   NO_DISTANCE_WORKOUT_TYPES. If they drift, a newly-added frontend type falls back to
   SportGroup.AMBIGUOUS here (presence-only match) rather than crashing or misclassifying into
   the wrong sport bucket — safe but less precise. No shared-constants mechanism exists across
@@ -30,13 +30,13 @@ from typing import Optional
 from .activity_types import CYCLE_TYPES, RUN_TYPES
 from .units import DEFAULT_UNIT_SYSTEM, Quantity, UnitSystem, format_value
 
-# Mirrors web/src/pages/Calendar.tsx's WORKOUT_TYPE_GROUPS — keep in sync; drift falls back to
+# Mirrors web/src/pages/calendar/constants.ts's WORKOUT_TYPE_GROUPS — keep in sync; drift falls back to
 # SportGroup.AMBIGUOUS (presence-only matching), never crashes or misclassifies.
 RUN_WORKOUT_TYPES = frozenset({"Easy Run", "Long Run", "Tempo Run", "Running Race"})
 RIDE_WORKOUT_TYPES = frozenset(
     {"Easy Ride", "Long Ride", "Tempo Ride", "Indoor Ride", "Cycling Race"}
 )
-# Mirrors web/src/pages/Calendar.tsx's NO_DISTANCE_WORKOUT_TYPES.
+# Mirrors web/src/pages/calendar/constants.ts's NO_DISTANCE_WORKOUT_TYPES.
 UNSCORED_WORKOUT_TYPES = frozenset({"Rest", "Yoga"})
 
 # actual_km >= DISTANCE_SHORTFALL_TOLERANCE * planned_km => COMPLETED (boundary inclusive).
@@ -219,6 +219,26 @@ def compute_range_compliance(
     return [
         compute_day_compliance(p, by_date.get(p.date, []), today, units) for p in planned_workouts
     ]
+
+
+def compliance_for_range(
+    plan_rows: list[dict],
+    activity_rows: list[dict],
+    start: date,
+    end: date,
+    today: date,
+    units: UnitSystem = DEFAULT_UNIT_SYSTEM,
+) -> list[DayCompliance]:
+    """Compliance for the planned workouts dated start..end (inclusive), from DB rows.
+
+    The single entry point every feature uses, so they cannot disagree: `activity_rows` must be
+    ALL activities, never a mode-filtered subset. The plan is shared across modes and each day is
+    matched by its own workout type's sport, so filtering by mode would turn a completed planned
+    ride into "missed" whenever the athlete is in running mode."""
+    planned = [p for p in planned_workouts_from_rows(plan_rows) if start <= p.date <= end]
+    return compute_range_compliance(
+        planned, compliance_activities_from_rows(activity_rows), today, units
+    )
 
 
 def summarize_compliance(days: list[DayCompliance]) -> ComplianceSummary:
