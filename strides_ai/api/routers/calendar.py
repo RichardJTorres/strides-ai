@@ -276,6 +276,10 @@ def create_calendar_entry(body: EntryBody, session: Session = Depends(get_sessio
 @router.patch("/calendar/entries/{entry_id}")
 def patch_calendar_entry(entry_id: int, body: EntryBody, session: Session = Depends(get_session)):
     existing = _entry_or_404(session, entry_id)
+    if body.kind is not None and body.kind != existing["kind"]:
+        raise HTTPException(
+            status_code=400, detail="An entry's kind cannot change; delete it and add a new one"
+        )
     patch = _normalize_entry_data(
         {**body.model_dump(exclude_unset=True), "kind": existing["kind"]}, False
     )
@@ -345,7 +349,7 @@ async def generate_plan(
     units: UnitSystem = Depends(get_units),
 ):
     """Generate a suggested training block for a date range. Does not write to the calendar —
-    the frontend accepts the result via POST /calendar/plan/bulk."""
+    the frontend accepts the result via POST /calendar/entries/bulk."""
     try:
         start = date_cls.fromisoformat(body.start_date)
         end = date_cls.fromisoformat(body.end_date)
@@ -446,7 +450,9 @@ def analyze_workout_nutrition(
 
     nutrition = analyze_nutrition(workout, profile_text, api_key, units)
     # Rejected (not saved) if the entry changed while the model was working.
-    crud.save_workout_nutrition(session, entry_id, nutrition, workout.get("inputs_hash"))
+    crud.save_workout_nutrition(
+        session, entry_id, nutrition, workout.get("inputs_hash") or crud.inputs_hash(workout)
+    )
     return nutrition
 
 
@@ -528,6 +534,11 @@ async def analyze_workout_route(
 
     analyzed_at = datetime.now(timezone.utc).isoformat()
     crud.save_route_analysis(
-        session, entry_id, analysis, analyzed_at, backend.label, workout.get("inputs_hash")
+        session,
+        entry_id,
+        analysis,
+        analyzed_at,
+        backend.label,
+        workout.get("inputs_hash") or crud.inputs_hash(workout),
     )
     return {"cached": False, "analyzed_at": analyzed_at, "model": backend.label, **analysis}

@@ -255,6 +255,21 @@ def _check_one_scored_per_group(
             )
 
 
+def _check_result_link(session: Session, entry_id: int, date: str, activity_id: int) -> None:
+    from .models import Activity
+
+    activity = session.get(Activity, activity_id)
+    if activity is None or (activity.date or "") != date:
+        raise EntryError("A race result must be an activity from the race day")
+    taken = session.exec(
+        select(RaceDetail).where(
+            RaceDetail.result_activity_id == activity_id, RaceDetail.entry_id != entry_id
+        )
+    ).first()
+    if taken is not None:
+        raise EntryError("That activity is already linked to another race")
+
+
 def _normalize_workout(fields: dict) -> dict:
     wtype = fields.get("workout_type")
     if not is_valid_workout_type(wtype):
@@ -356,6 +371,8 @@ def _update(session: Session, entry_id: int, patch: dict) -> None:
         session.add(detail)
     elif entry.kind == KIND_RACE:
         detail = session.get(RaceDetail, entry_id)
+        if patch.get("result_activity_id") is not None:
+            _check_result_link(session, entry_id, entry.date, patch["result_activity_id"])
         before = detail.inputs_hash or inputs_hash(
             {**detail.model_dump(), "kind": entry.kind, "title": title_before}
         )
@@ -415,10 +432,17 @@ def apply_changes(session: Session, ops: list[dict], request_id: str | None = No
     ``request_id`` returns the first result without applying anything again.
     Returns ``{"created": [ids], "updated": [ids], "deleted": [ids]}``.
     """
+    ops_hash = hashlib.sha1(json.dumps(ops, sort_keys=True, default=str).encode()).hexdigest()
     if request_id:
         prior = session.get(ChangeRequest, request_id)
         if prior is not None:
-            return json.loads(prior.result_json)
+            stored = json.loads(prior.result_json)
+            if stored.get("ops_hash") != ops_hash:
+                raise EntryError("This request id was already used for different changes")
+            return stored["result"]
+    for op in ops:
+        if op.get("op") in ("update", "delete") and op.get("id") is None:
+            raise EntryError(f"A {op.get('op')} operation needs an entry id")
     result: dict = {"created": [], "updated": [], "deleted": []}
     try:
         # Deletes first, so a replace (delete + create on the same date) never trips the
@@ -440,7 +464,12 @@ def apply_changes(session: Session, ops: list[dict], request_id: str | None = No
             else:
                 raise EntryError(f"Unknown operation: {kind!r}")
         if request_id:
-            session.add(ChangeRequest(request_id=request_id, result_json=json.dumps(result)))
+            session.add(
+                ChangeRequest(
+                    request_id=request_id,
+                    result_json=json.dumps({"ops_hash": ops_hash, "result": result}),
+                )
+            )
         session.commit()
     except Exception:
         session.rollback()
@@ -455,11 +484,20 @@ def _cache_row(session: Session, entry_id: int):
     return session.get(WorkoutDetail, entry_id) or session.get(RaceDetail, entry_id)
 
 
+def _stale(session: Session, row, entry_id: int, expected_hash: str | None) -> bool:
+    """True when the entry's prompt inputs changed since ``expected_hash`` was read. Rows from
+    before migration 015 have no stored hash, so theirs is computed from the current entry."""
+    if not expected_hash:
+        return False
+    current = row.inputs_hash or inputs_hash(get_entry(session, entry_id) or {})
+    return current != expected_hash
+
+
 def save_workout_nutrition(
     session: Session, entry_id: int, nutrition: dict, expected_hash: str | None = None
 ) -> bool:
     row = _cache_row(session, entry_id)
-    if row is None or (expected_hash and row.inputs_hash != expected_hash):
+    if row is None or _stale(session, row, entry_id, expected_hash):
         return False
     row.nutrition_json = json.dumps(nutrition)
     session.add(row)
@@ -476,7 +514,7 @@ def save_route_analysis(
     expected_hash: str | None = None,
 ) -> bool:
     row = _cache_row(session, entry_id)
-    if row is None or (expected_hash and row.inputs_hash != expected_hash):
+    if row is None or _stale(session, row, entry_id, expected_hash):
         return False
     row.route_analysis_json = json.dumps(analysis)
     row.route_analyzed_at = analyzed_at

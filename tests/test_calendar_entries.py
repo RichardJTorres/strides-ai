@@ -165,3 +165,58 @@ def test_taxonomy_fixture_matches_kinds():
     fixture = json.loads((Path(__file__).parent / "fixtures" / "taxonomy.json").read_text())
     t = taxonomy()
     assert fixture == {k: t[k] for k in fixture}
+
+
+# ── review fixes ────────────────────────────────────────────────────────────────
+
+
+def test_request_id_reused_for_different_changes_is_refused(tmp_db):
+    one = [{"op": "create", "kind": "rest", "date": DAY}]
+    two = [{"op": "create", "kind": "travel", "date": DAY}]
+    db.apply_calendar_changes(one, "k")
+    with pytest.raises(crud.EntryError, match="already used"):
+        db.apply_calendar_changes(two, "k")
+    assert len(db.get_training_plan()) == 1
+
+
+def test_update_or_delete_without_an_id_is_a_clean_error(tmp_db):
+    for op in ({"op": "delete"}, {"op": "update", "notes": "x"}):
+        with pytest.raises(crud.EntryError):
+            db.apply_calendar_changes([op])
+
+
+def test_stale_write_is_caught_for_rows_with_no_stored_hash(tmp_db):
+    entry = _workout(distance_km=10)
+    with Session(get_engine()) as s:  # simulate a pre-migration row
+        detail = s.get(crud.WorkoutDetail, entry["id"])
+        detail.inputs_hash = None
+        s.add(detail)
+        s.commit()
+        row = crud.get_entry(s, entry["id"])
+        read_hash = crud.inputs_hash(row)
+        crud.update_entry(s, entry["id"], {"distance_km": 12})
+        assert crud.save_workout_nutrition(s, entry["id"], {"x": 1}, read_hash) is False
+
+
+def test_race_result_must_be_a_same_day_activity_used_once(tmp_db):
+    act = {
+        "id": 7,
+        "name": "Race",
+        "start_date_local": f"{DAY}T07:00:00Z",
+        "distance": 10_000.0,
+        "moving_time": 2700,
+        "elapsed_time": 2700,
+        "total_elevation_gain": 0.0,
+        "sport_type": "Run",
+    }
+    db.upsert_activity(act)
+    db.upsert_activity({**act, "id": 8, "start_date_local": "2026-10-11T07:00:00Z"})
+    a = _create(kind="race", title="A", sport="run")
+    b = _create(kind="race", title="B", sport="run")
+    assert _update(a["id"], result_activity_id=7)["result_activity_id"] == 7
+    with pytest.raises(crud.EntryError, match="already linked"):
+        _update(b["id"], result_activity_id=7)
+    with pytest.raises(crud.EntryError, match="race day"):
+        _update(b["id"], result_activity_id=8)
+    with pytest.raises(crud.EntryError, match="race day"):
+        _update(b["id"], result_activity_id=999)

@@ -140,7 +140,7 @@ export default function DayPanel({
             entry={activeEntry}
             kind={activeEntry ? activeEntry.kind : newKind}
             matched={activeEntry ? split.byEntry[activeEntry.id] : undefined}
-            dayActivities={split.others}
+            dayActivities={activeEntry && split.byEntry[activeEntry.id] ? [split.byEntry[activeEntry.id], ...split.others] : split.others}
             reloadPlan={reloadPlan}
             editMode={editMode}
             setEditMode={setEditMode}
@@ -229,7 +229,7 @@ function EntryEditor({
       distance,
       elevation,
       duration_min: w?.duration_min?.toString() || "",
-      intensity: w?.intensity && w.intensity !== "rest" ? w.intensity : "easy",
+      intensity: w ? (w.intensity && w.intensity !== "rest" ? w.intensity : "") : "easy",
       route_url: w?.route_url || "",
       clear_structure: false,
     };
@@ -744,6 +744,7 @@ function EntryEditor({
                   onChange={e => setForm(f => ({ ...f, intensity: e.target.value }))}
                   className={field}
                 >
+                  <option value="">—</option>
                   {INTENSITIES.map(i => (
                     <option key={i} value={i}>{i.charAt(0).toUpperCase() + i.slice(1)}</option>
                   ))}

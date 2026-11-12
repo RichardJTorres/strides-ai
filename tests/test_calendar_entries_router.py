@@ -101,3 +101,13 @@ def test_delete_entry(tmp_db):
         made = create_calendar_entry(EntryBody(date=DAY, kind="rest"), session=s)
         delete_calendar_entry(made["id"], session=s)
         assert get_calendar_entries(session=s) == []
+
+
+def test_patch_with_a_different_kind_is_refused(tmp_db):
+    with _session() as s:
+        made = create_calendar_entry(
+            EntryBody(date=DAY, kind="workout", workout_type="Easy Run"), session=s
+        )
+        with pytest.raises(HTTPException) as exc:
+            patch_calendar_entry(made["id"], EntryBody(kind="race"), session=s)
+        assert exc.value.status_code == 400

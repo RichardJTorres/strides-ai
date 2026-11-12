@@ -269,6 +269,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
+    # Entries written after the upgrade are not in training_plan_legacy and are lost here.
+    _backup(bind)
     op.drop_table("change_request")
     op.drop_table("race_detail")
     op.drop_table("workout_detail")

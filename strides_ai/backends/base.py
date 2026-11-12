@@ -219,7 +219,7 @@ def _plan_ops(args: dict, plan_rows: list[dict]) -> tuple[list[dict], dict, list
                 data[key] = w[key]
         if "description" in w:
             data["objective" if kind == "workout" else "notes"] = w["description"]
-            if kind == "race" and "title" not in w:
+            if kind == "race" and "title" not in w and entry_id is None:
                 data["title"] = w["description"]
         if kind in ("workout", "race"):
             if "distance" in w or "distance_km" in w:

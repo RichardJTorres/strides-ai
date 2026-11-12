@@ -71,6 +71,7 @@ export default function GenerateModal({ initialStart, initialEnd, plan, reloadPl
     setGenLoading(true);
     setGenError(null);
     setGenResult(null);
+    requestId.current = null; // a regenerated block is a different change set
     try {
       const res = await fetch("/api/calendar/generate-plan", {
         method: "POST",

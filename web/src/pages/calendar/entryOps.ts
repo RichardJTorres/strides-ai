@@ -110,7 +110,7 @@ export function buildEntryBody(
       objective: notes,
       distance_km: noDistance ? null : ctx.kmFromInput(form.distance),
       elevation_m: noDistance ? null : ctx.mFromInput(form.elevation),
-      intensity: form.intensity,
+      intensity: form.intensity || null,
       route_url: ctx.routeCapable(form.workout_type) && form.route_url ? form.route_url : null,
     });
     // A structure decides the duration, so it is not sent while one is kept.

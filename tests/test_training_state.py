@@ -363,3 +363,14 @@ def test_tool_validation_is_scoped_to_the_active_mode(mocker):
         {"delete": [12345]},
     )
     assert seen == {"rows": [], "mode": "running"}  # the ride never reaches running load
+
+
+def test_tool_notes_edit_does_not_rename_a_race(mocker):
+    day = (date.today() + timedelta(days=30)).isoformat()
+    existing = [
+        {"id": 5, "kind": "race", "date": day, "workout_type": "Running Race", "sport": "run"}
+    ]
+    _, ops = _ops_sent(
+        mocker, {"set": [{"id": 5, "description": "Taper week, bring gels"}]}, existing
+    )
+    assert ops == [{"op": "update", "id": 5, "notes": "Taper week, bring gels"}]
