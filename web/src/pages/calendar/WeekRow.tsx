@@ -1,5 +1,5 @@
 import DayCell from "./DayCell";
-import { isPerfectWeek, summarizeWeek } from "./grid";
+import { isPerfectWeek, summarizeWeek, weekLives } from "./grid";
 import type { GridCell, GridProps } from "./types";
 import { useDistance } from "./useDistance";
 
@@ -12,6 +12,9 @@ export default function WeekRow({ weekCells, grid }: { weekCells: GridCell[]; gr
   const weekDone = weekCompliance.completed + weekCompliance.modified;
   const weekPlannedWorkouts = weekDone + weekCompliance.missed + weekCompliance.upcoming;
   const perfect = isPerfectWeek(weekCompliance);
+  // Hearts: shown once a miss has landed, or for the week in progress.
+  const lives = weekLives(weekCompliance.missed, grid.maxMisses ?? 0);
+  const showLives = grid.maxMisses !== null && weekPlannedWorkouts > 0 && (weekCompliance.missed > 0 || weekCells.some(c => c.dateStr === grid.todayStr));
 
   // Ramp vs the prior 4-week average for this row's week. Past weeks have no entry (the backend
   // only returns the current and upcoming weeks).
@@ -57,6 +60,18 @@ export default function WeekRow({ weekCells, grid }: { weekCells: GridCell[]; gr
         {perfect && (
           <div className="badge-pop flex items-center gap-1 text-[11px] font-bold text-amber-300 leading-tight">
             <span aria-hidden="true">★</span>Perfect week
+          </div>
+        )}
+        {showLives && (
+          <div
+            className="flex items-center gap-0.5 text-[11px] leading-tight"
+            title={lives.lost ? "Too many misses: this week won't count toward the streak" : `${lives.left} of ${grid.maxMisses} misses left before this week stops counting`}
+            role="img"
+            aria-label={lives.lost ? "Week lost" : `${lives.left} of ${grid.maxMisses} lives left`}
+          >
+            {Array.from({ length: lives.left }, (_, i) => <span key={`l${i}`} aria-hidden="true" className="text-red-400">♥</span>)}
+            {Array.from({ length: lives.spent }, (_, i) => <span key={`s${i}`} aria-hidden="true" className="badge-pop text-gray-600">♡</span>)}
+            {lives.lost && <span className="ml-1 text-red-400 font-semibold">Week lost</span>}
           </div>
         )}
         <div className="flex items-baseline justify-between gap-1">
