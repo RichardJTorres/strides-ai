@@ -1,4 +1,7 @@
 import { useState } from "react";
+import Button from "../../ui/Button";
+import { formatDate } from "../../ui/format";
+import { useTheme } from "../../ui/theme";
 import { WORKOUT_COLORS, WORKOUT_TYPE_GROUPS } from "./constants";
 import type { Prefs, Race } from "./types";
 
@@ -11,6 +14,8 @@ interface Props {
 
 /** Left rail: generate a block, races, and the colour legend. */
 export default function Sidebar({ prefs, onGenerate, onAddRace, removeRace }: Props) {
+  const theme = useTheme();
+  const [showDetails, setShowDetails] = useState(false);
   const [showRaceForm, setShowRaceForm] = useState(false);
   const [raceForm, setRaceForm] = useState({ date: "", name: "", target_time: "" });
 
@@ -24,35 +29,45 @@ export default function Sidebar({ prefs, onGenerate, onAddRace, removeRace }: Pr
   };
 
   return (
-  <aside className="w-56 flex-shrink-0 border-r border-zinc-800 overflow-y-auto p-4 space-y-6">
+  <aside className="md:w-56 flex-shrink-0 border-b md:border-b-0 md:border-r border-gray-800 md:overflow-y-auto p-3 md:p-4 space-y-3 md:space-y-6">
 
-    <div>
+    <div className="flex gap-2">
       <button
         onClick={onGenerate}
-        className="w-full text-left bg-gradient-to-br from-green-700/90 to-green-800/90 hover:from-green-600/90 hover:to-green-700/90 text-white rounded-lg px-3 py-2.5 flex items-center gap-2.5 transition-colors border border-green-600/40"
+        className={`flex-1 text-left text-white rounded-lg px-3 py-2.5 flex items-center gap-2.5 transition-colors ${theme.accentButton}`}
       >
-        <span className="text-lg leading-none">✨</span>
+        <span className="text-lg leading-none" aria-hidden="true">✨</span>
         <span className="min-w-0">
           <div className="text-sm font-semibold leading-tight">Generate Training Block</div>
-          <div className="text-[11px] text-green-100/75 leading-tight">AI-suggested plan for a date range</div>
+          <div className="text-[11px] text-white/75 leading-tight">AI-suggested plan for a date range</div>
         </span>
+      </button>
+      {/* Phones: races and the legend fold away so the grid gets the screen. */}
+      <button
+        onClick={() => setShowDetails(open => !open)}
+        aria-expanded={showDetails}
+        className="md:hidden rounded-lg border border-gray-700 px-3 text-xs text-gray-300"
+      >
+        {showDetails ? "Hide" : "Races & legend"}
       </button>
     </div>
 
+    <div className={`${showDetails ? "" : "hidden"} md:block space-y-6`}>
     <div>
-      <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">Races</h3>
+      <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Races</h3>
       <div className="space-y-2 mb-2">
         {prefs.races.map(race => (
           <div key={race.date} className="flex items-start justify-between gap-1">
             <div className="text-xs">
               <div className="text-amber-300 font-medium">{race.name}</div>
-              <div className="text-zinc-500">
-                {race.date}{race.target_time ? ` · ${race.target_time}` : ""}
+              <div className="text-gray-500">
+                {formatDate(race.date)}{race.target_time ? ` · ${race.target_time}` : ""}
               </div>
             </div>
             <button
               onClick={() => removeRace(race.date)}
-              className="text-zinc-600 hover:text-zinc-300 text-xs mt-0.5 leading-none"
+              aria-label={`Remove ${race.name}`}
+              className="text-gray-600 hover:text-gray-300 text-xs mt-0.5 leading-none"
             >✕</button>
           </div>
         ))}
@@ -62,41 +77,41 @@ export default function Sidebar({ prefs, onGenerate, onAddRace, removeRace }: Pr
           <input
             type="date" value={raceForm.date}
             onChange={e => setRaceForm(f => ({ ...f, date: e.target.value }))}
-            className="w-full text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-200"
+            className="w-full text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-200"
           />
           <input
             type="text" placeholder="Race name" value={raceForm.name}
             onChange={e => setRaceForm(f => ({ ...f, name: e.target.value }))}
-            className="w-full text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-200"
+            className="w-full text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-200"
           />
           <input
             type="text" placeholder="Target time (optional)" value={raceForm.target_time}
             onChange={e => setRaceForm(f => ({ ...f, target_time: e.target.value }))}
-            className="w-full text-xs bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-zinc-200"
+            className="w-full text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-200"
           />
           <div className="flex gap-1">
-            <button onClick={addRace} className="flex-1 text-xs bg-amber-600 hover:bg-amber-500 text-white rounded px-2 py-1">Add</button>
-            <button onClick={() => setShowRaceForm(false)} className="flex-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded px-2 py-1">Cancel</button>
+            <Button size="sm" className="flex-1" onClick={addRace}>Add</Button>
+            <Button size="sm" variant="secondary" className="flex-1" onClick={() => setShowRaceForm(false)}>Cancel</Button>
           </div>
         </div>
       ) : (
-        <button onClick={() => setShowRaceForm(true)} className="text-xs text-zinc-500 hover:text-zinc-300">
+        <button onClick={() => setShowRaceForm(true)} className="text-xs text-gray-500 hover:text-gray-300">
           + Add race
         </button>
       )}
     </div>
 
     <div>
-      <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">Legend</h3>
+      <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Legend</h3>
       <div className="space-y-2 mb-3">
         {WORKOUT_TYPE_GROUPS.map(group => (
           <div key={group.label}>
-            <div className="text-[10px] text-zinc-600 uppercase tracking-wider mb-0.5">{group.label}</div>
+            <div className="text-[10px] text-gray-600 uppercase tracking-wider mb-0.5">{group.label}</div>
             <div className="space-y-1">
               {group.types.map(type => (
                 <div key={type} className="flex items-center gap-2">
                   <span className={`w-2 h-2 rounded-full ${WORKOUT_COLORS[type].split(" ")[0]}`} />
-                  <span className="text-xs text-zinc-400">{type}</span>
+                  <span className="text-xs text-gray-400">{type}</span>
                 </div>
               ))}
             </div>
@@ -104,25 +119,26 @@ export default function Sidebar({ prefs, onGenerate, onAddRace, removeRace }: Pr
         ))}
       </div>
       <div className="flex items-center gap-2">
-        <span className="w-2 h-2 rounded-full bg-zinc-500" />
-        <span className="text-xs text-zinc-400">Strava activity</span>
+        <span className="w-2 h-2 rounded-full bg-gray-500" />
+        <span className="text-xs text-gray-400">Strava activity</span>
       </div>
-      <div className="mt-3 pt-3 border-t border-zinc-800 space-y-1">
-        <div className="text-[10px] text-zinc-600 uppercase tracking-wider mb-0.5">Plan compliance</div>
+      <div className="mt-3 pt-3 border-t border-gray-800 space-y-1">
+        <div className="text-[10px] text-gray-600 uppercase tracking-wider mb-0.5">Plan compliance</div>
         <div className="flex items-center gap-2">
           <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
-          <span className="text-xs text-zinc-400">Completed as planned</span>
+          <span className="text-xs text-gray-400">Completed as planned</span>
         </div>
         <div className="flex items-center gap-2">
           <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-          <span className="text-xs text-zinc-400">Shortened (fell short of target)</span>
+          <span className="text-xs text-gray-400">Shortened (fell short of target)</span>
         </div>
         <div className="flex items-center gap-2">
           <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
-          <span className="text-xs text-zinc-400">Missed</span>
+          <span className="text-xs text-gray-400">Missed</span>
         </div>
-        <div className="text-[10px] text-zinc-600">No dot = upcoming or not scorable (rest/yoga)</div>
+        <div className="text-[10px] text-gray-600">No dot = upcoming or not scorable (rest/yoga)</div>
       </div>
+    </div>
     </div>
   </aside>
   );

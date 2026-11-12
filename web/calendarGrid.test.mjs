@@ -7,18 +7,29 @@ const source = readFileSync(new URL('./src/pages/calendar/grid.ts', import.meta.
 const compiled = ts.transpile(source, { module: ts.ModuleKind.ES2022 });
 const grid = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
 
-test('buildGrid renders whole weeks around the month', () => {
+test('buildGrid renders whole Monday-Sunday weeks around the month', () => {
   const cells = grid.buildGrid(new Date(2026, 10, 1)); // November 2026 starts on a Sunday
-  assert.equal(cells.length % 7, 0);
-  assert.equal(cells[0].dateStr, '2026-11-01');
-  assert.equal(cells.at(-1).dateStr, '2026-12-05');
+  assert.equal(cells.length, 42);
+  assert.equal(cells[0].dateStr, '2026-10-26'); // the Monday before
+  assert.equal(cells.at(-1).dateStr, '2026-12-06');
   assert.equal(cells.filter(c => c.inCurrentMonth).length, 30);
-  assert.deepEqual(grid.chunkWeeks(cells).map(w => w.length), [7, 7, 7, 7, 7]);
+  for (const week of grid.chunkWeeks(cells)) {
+    assert.equal(week.length, 7);
+    assert.equal(week[0].date.getDay(), 1);
+    assert.equal(week[6].date.getDay(), 0);
+  }
+});
+
+test('buildGrid needs no padding when the month starts on a Monday', () => {
+  const cells = grid.buildGrid(new Date(2026, 5, 1)); // June 2026 starts on a Monday
+  assert.equal(cells[0].dateStr, '2026-06-01');
+  assert.equal(cells.at(-1).dateStr, '2026-07-05');
+  assert.equal(cells.length, 35);
 });
 
 test('buildGrid pads the start of a month that begins mid-week', () => {
   const cells = grid.buildGrid(new Date(2026, 9, 1)); // October 2026 starts on a Thursday
-  assert.equal(cells[0].dateStr, '2026-09-27');
+  assert.equal(cells[0].dateStr, '2026-09-28');
   assert.equal(cells[0].inCurrentMonth, false);
   assert.equal(cells.find(c => c.inCurrentMonth).dateStr, '2026-10-01');
 });

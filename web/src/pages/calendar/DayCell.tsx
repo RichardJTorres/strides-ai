@@ -1,5 +1,9 @@
-import { COMPLIANCE_DOT_COLORS, FALLBACK_WORKOUT_COLOR, WORKOUT_COLORS } from "./constants";
-import { splitActivities as splitDay } from "./grid";
+import type { KeyboardEvent } from "react";
+import { formatDate } from "../../ui/format";
+import {
+  COMPLIANCE_DOT_COLORS, COMPLIANCE_STATUS_LABELS, FALLBACK_WORKOUT_COLOR, WORKOUT_COLORS,
+} from "./constants";
+import { dateToStr, splitActivities as splitDay } from "./grid";
 import type { GridCell, GridProps } from "./types";
 import { useDistance } from "./useDistance";
 
@@ -8,7 +12,8 @@ export default function DayCell({ cell, grid }: { cell: GridCell; grid: GridProp
   const { units, fmtKm } = useDistance();
   const {
     plan, activities, compliance, prefs, todayStr, selectedDate, range, conflictByDate,
-    dragFrom, dragOver, setDragFrom, setDragOver, movePending, handleDayClick, moveWorkout,
+    dragFrom, dragOver, setDragFrom, setDragOver, movePending, handleDayClick, activateDay,
+    moveWorkout,
   } = grid;
   const splitActivities = (date: string) => splitDay(plan, activities, compliance, date);
   const raceOnDate = (date: string) => prefs.races.find(r => r.date === date);
@@ -25,9 +30,39 @@ export default function DayCell({ cell, grid }: { cell: GridCell; grid: GridProp
   const complianceStatus = compliance[dateStr]?.status;
   const dotColor = complianceStatus ? COMPLIANCE_DOT_COLORS[complianceStatus] : undefined;
 
+  // What a screen reader hears for the cell: the day and everything marked on it.
+  const label = [
+    formatDate(dateStr, "weekday"),
+    isToday && "today",
+    workout && `planned ${workout.workout_type}`,
+    complianceStatus && complianceStatus !== "upcoming" && COMPLIANCE_STATUS_LABELS[complianceStatus],
+    race && `race: ${race.name}`,
+    isBlocked && "blocked",
+  ].filter(Boolean).join(", ");
+
+  // Enter/Space opens the day, Shift+Enter extends the range, arrows move between days.
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.target !== e.currentTarget) return;
+    const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 }[e.key];
+    if (step !== undefined) {
+      e.preventDefault();
+      const d = cell.date;
+      const target = dateToStr(new Date(d.getFullYear(), d.getMonth(), d.getDate() + step));
+      document.querySelector<HTMLElement>(`[data-date="${target}"]`)?.focus();
+    } else if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      activateDay(dateStr, e.shiftKey);
+    }
+  };
+
   return (
     <div
-      key={dateStr}
+      role="button"
+      tabIndex={0}
+      aria-label={label}
+      aria-pressed={isSelected}
+      data-date={dateStr}
+      onKeyDown={onKeyDown}
       onClick={e => handleDayClick(e, dateStr)}
       onMouseDown={e => { if (e.shiftKey) e.preventDefault(); }}
       onDragOver={e => {
@@ -46,15 +81,16 @@ export default function DayCell({ cell, grid }: { cell: GridCell; grid: GridProp
       }}
       className={[
         dragOver === dateStr ? "ring-2 ring-inset ring-sky-400/80" : "",
-        "flex-1 min-w-0 min-h-16 p-1.5 rounded cursor-pointer border transition-colors select-none",
-        inRange ? "border-green-500/70 bg-green-500/10" : isSelected ? "border-zinc-400 bg-zinc-700/60" : "border-zinc-800 hover:border-zinc-600",
+        "flex-1 min-w-0 min-h-12 md:min-h-16 p-1 md:p-1.5 rounded cursor-pointer border transition-colors select-none",
+        "focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400",
+        inRange ? "border-green-500/70 bg-green-500/10" : isSelected ? "border-gray-400 bg-gray-700/60" : "border-gray-800 hover:border-gray-600",
         isToday ? "ring-2 ring-inset ring-green-400/80 border-green-400/60" : "",
         isBlocked ? "opacity-40" : "",
         !cell.inCurrentMonth ? "opacity-55" : "",
-        "bg-zinc-800/20",
+        "bg-gray-800/20",
       ].join(" ")}
     >
-      <div className={`text-xs font-medium mb-1 flex items-center gap-1 ${isToday ? "text-green-400" : cell.inCurrentMonth ? "text-zinc-400" : "text-zinc-600"}`}>
+      <div className={`text-xs font-medium mb-1 flex items-center gap-1 ${isToday ? "text-green-400" : cell.inCurrentMonth ? "text-gray-400" : "text-gray-600"}`}>
         {showMonthLabel
           ? `${cell.date.toLocaleString("default", { month: "short" })} ${cell.dayNum}`
           : cell.dayNum}
@@ -69,8 +105,18 @@ export default function DayCell({ cell, grid }: { cell: GridCell; grid: GridProp
           />
         )}
       </div>
+      {/* Phones: no room for chips, so one dot per thing on the day. */}
+      <div className="md:hidden flex flex-wrap gap-0.5" aria-hidden="true">
+        {race && <span className="w-2 h-2 rounded-full bg-amber-400" />}
+        {workout && (
+          <span className={`w-2 h-2 rounded-full border ${WORKOUT_COLORS[workout.workout_type] ?? FALLBACK_WORKOUT_COLOR}`} />
+        )}
+        {(matchedActivity ? [matchedActivity, ...dayActivities] : dayActivities).map(a => (
+          <span key={a.id} className="w-2 h-2 rounded-full bg-gray-400" />
+        ))}
+      </div>
       {race && (
-        <div className="text-xs px-1 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 truncate mb-0.5">
+        <div className="hidden md:block text-xs px-1 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 truncate mb-0.5">
           🏁 {race.name}
         </div>
       )}
@@ -84,7 +130,7 @@ export default function DayCell({ cell, grid }: { cell: GridCell; grid: GridProp
             setDragFrom(dateStr);
           }}
           onDragEnd={() => { setDragFrom(null); setDragOver(null); }}
-          className={`text-xs px-1 py-0.5 rounded border truncate mb-0.5 cursor-grab active:cursor-grabbing ${dragFrom === dateStr ? "opacity-40" : ""} ${WORKOUT_COLORS[workout.workout_type] ?? FALLBACK_WORKOUT_COLOR}`}>
+          className={`hidden md:block text-xs px-1 py-0.5 rounded border truncate mb-0.5 cursor-grab active:cursor-grabbing ${dragFrom === dateStr ? "opacity-40" : ""} ${WORKOUT_COLORS[workout.workout_type] ?? FALLBACK_WORKOUT_COLOR}`}>
           {matchedActivity && "✓ "}
           {workout.workout_type}
           {matchedActivity ? (
@@ -102,7 +148,7 @@ export default function DayCell({ cell, grid }: { cell: GridCell; grid: GridProp
         </div>
       )}
       {dayActivities.map(a => (
-        <div key={a.id} className="text-xs px-1 py-0.5 rounded bg-zinc-600/40 text-zinc-300 border border-zinc-600/40 truncate mb-0.5">
+        <div key={a.id} className="hidden md:block text-xs px-1 py-0.5 rounded bg-gray-600/40 text-gray-300 border border-gray-600/40 truncate mb-0.5">
           ✓ {units.fmt(a.distance_m ?? 0, "distance", { decimals: 1 })} {a.sport_type}
         </div>
       ))}

@@ -24,15 +24,17 @@ function moveHarness(initial) {
   let plan = initial;
   const pending = [];
   const movePending = { current: false };
+  let moveError = null;
+  let refreshes = 0;
   const setPlan = update => { plan = typeof update === 'function' ? update(plan) : update; };
   const move = () => handler('CalendarPage.tsx', 'moveWorkout', {
     plan, movePending, setPlan, selectedDate: null,
-    setSelectedDate() {}, setEditMode() {},
+    setSelectedDate() {}, setEditMode() {}, setMoveError(message) { moveError = message; }, refreshDerived() { refreshes += 1; },
     fetch: (_url, options) => new Promise((resolve, reject) => {
       pending.push({ body: JSON.parse(options.body), resolve, reject });
     }),
   });
-  return { move, pending, setPlan, get plan() { return plan; } };
+  return { move, pending, setPlan, get plan() { return plan; }, get moveError() { return moveError; }, get refreshes() { return refreshes; } };
 }
 
 test('failed move preserves unrelated edits and new workouts', async () => {
@@ -75,11 +77,14 @@ test('network failure restores both swapped workouts and releases the move lock'
   h.pending[0].reject(new Error('offline'));
   await request;
   assert.deepEqual(h.plan, { A: a, B: b });
+  assert.match(h.moveError, /put back/); // the athlete is told, not left guessing
   const retry = h.move()('A', 'B');
   assert.equal(h.pending.length, 2);
   h.pending[1].resolve({ ok: true });
   await retry;
   assert.equal(h.plan.B.structure, a.structure);
+  assert.equal(h.moveError, null); // cleared by the next attempt
+  assert.equal(h.refreshes, 1); // only the confirmed move refreshes the derived figures
 });
 
 test('editing preserves structure unless the athlete explicitly removes it', async () => {
@@ -91,7 +96,7 @@ test('editing preserves structure unless the athlete explicitly removes it', asy
       form: { workout_type: 'Indoor Ride', duration_min: clear ? '30' : '60', clear_structure: clear, route_url: 'https://strava.com/routes/2' },
       NO_DISTANCE_WORKOUT_TYPES: new Set(), ROUTE_CAPABLE_WORKOUT_TYPES: new Set(['Indoor Ride']),
       keepsStructure: () => true, kmFromInput: () => null, mFromInput: () => null,
-      setPlan() {}, setEditMode() {},
+      setPlan() {}, setEditMode() {}, setSaveError() {},
       fetch: async (_url, options) => {
         body = JSON.parse(options.body);
         return { ok: true, json: async () => ({ workout: body }) };
@@ -101,5 +106,24 @@ test('editing preserves structure unless the athlete explicitly removes it', asy
     assert.deepEqual(body.structure, clear ? null : structure);
     assert.equal(body.duration_min, clear ? 30 : 60);
     assert.equal(body.route_url, 'https://strava.com/routes/2');
+  }
+});
+
+test('a failed save keeps the form open and says so', async () => {
+  for (const fail of [async () => ({ ok: false }), async () => { throw new Error('offline'); }]) {
+    const calls = { error: undefined, closed: false, planned: false };
+    const save = handler('DayPanel.tsx', 'saveWorkout', {
+      selectedDate: '2026-10-30', selectedWorkout: null,
+      form: { workout_type: 'Easy Run', duration_min: '', clear_structure: false, route_url: '' },
+      NO_DISTANCE_WORKOUT_TYPES: new Set(), ROUTE_CAPABLE_WORKOUT_TYPES: new Set(),
+      keepsStructure: () => false, kmFromInput: () => null, mFromInput: () => null,
+      setPlan() { calls.planned = true; }, setEditMode() { calls.closed = true; },
+      setSaveError(message) { calls.error = message; },
+      fetch: fail,
+    });
+    await save();
+    assert.match(calls.error, /Couldn't save/);
+    assert.equal(calls.closed, false);
+    assert.equal(calls.planned, false);
   }
 });
