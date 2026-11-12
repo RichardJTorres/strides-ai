@@ -33,9 +33,9 @@ def estimate(value):
 @dataclass(frozen=True)
 class Limits:
     input_tokens: int = 24000
-    output_tokens: int = 4000
-    total_output_tokens: int = 12000
-    context_window: int = 28000
+    output_tokens: int = 10000
+    total_output_tokens: int = 24000
+    context_window: int = 36000
     rounds: int = 6
     tools: int = 16
     retries: int = 2
