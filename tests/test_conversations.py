@@ -230,24 +230,23 @@ def test_refresh_does_not_replace_coordinator_or_active_backend(tmp_db, monkeypa
     coordinator.release(next_turn)
 
 
-def test_stream_close_signals_cancellation_and_waits_for_provider_cleanup(tmp_db):
+def test_stream_close_does_not_cancel_and_turn_completes(tmp_db):
     import asyncio
     from strides_ai.api.routers.chat import _sse_event_stream
+    from strides_ai.db import chat_turns
+    from sqlmodel import Session
 
-    entered, cleanup, finish_cleanup = (threading.Event() for _ in range(3))
+    entered, finish = threading.Event(), threading.Event()
 
     class Backend:
         label = "fake"
 
         def stream_turn(self, system, message, on_token, attachments=None):
-            try:
-                on_token("first")
-                entered.set()
-                assert self.cancel_event.wait(3)
-                on_token("after disconnect")
-            finally:
-                cleanup.set()
-                assert finish_cleanup.wait(3)
+            on_token("first")
+            entered.set()
+            assert finish.wait(3)
+            on_token(" second")
+            return "first second", [("fact", "likes hills")], []
 
     coordinator = ConversationCoordinator(lambda mode: Backend())
     turn = coordinator.acquire("running")
@@ -255,16 +254,102 @@ def test_stream_close_signals_cancellation_and_waits_for_provider_cleanup(tmp_db
     assert entered.wait(2)
 
     async def disconnect():
-        stream = _sse_event_stream(turn.tokens, turn.cancel, None)
+        stream = _sse_event_stream(turn.tokens, None)
         assert await anext(stream) == "data: first\n\n"
         await stream.aclose()
 
     asyncio.run(disconnect())
-    assert cleanup.wait(2)
-    with pytest.raises(HTTPException) as exc:
-        coordinator.acquire("running")
-    assert exc.value.status_code == 409
-    finish_cleanup.set()
+    assert not turn.cancel.is_set()
+    finish.set()
     turn.worker.join(3)
-    assert db.get_recent_messages(mode="running")[-1]["content"] == INTERRUPTED
-    coordinator.release(coordinator.acquire("running"))
+    assert db.get_recent_messages(mode="running")[-1]["content"] == "first second"
+    with Session(db.get_engine()) as session:
+        row = chat_turns.latest(session, "running")
+        info = chat_turns.to_dict(row)
+    assert info["status"] == "done" and not info["delivered"]
+    assert info["events"]["memories"] == [{"category": "fact", "content": "likes hills"}]
+    assert info["assistant_message_id"] is not None
+
+
+def test_explicit_cancel_keeps_partial_text(tmp_db):
+    entered = threading.Event()
+
+    class Backend:
+        label = "fake"
+
+        def stream_turn(self, system, message, on_token, attachments=None):
+            on_token("partial")
+            entered.set()
+            assert self.cancel_event.wait(3)
+            on_token("more")
+
+    coordinator = ConversationCoordinator(lambda mode: Backend())
+    turn = coordinator.acquire("running")
+    coordinator.start(turn, "prompt", "hello", "hello", None)
+    assert entered.wait(2)
+    assert coordinator.cancel("running") is True
+    turn.worker.join(3)
+    assert db.get_recent_messages(mode="running")[-1]["content"] == f"partial\n\n{INTERRUPTED}"
+    assert coordinator.cancel("running") is False
+
+
+def test_startup_recovery_marks_running_turns_interrupted(tmp_db):
+    from sqlmodel import Session
+    from strides_ai.api.conversations import recover_interrupted_turns
+    from strides_ai.db import chat_turns
+
+    with Session(db.get_engine()) as session:
+        turn_id = chat_turns.create(session, "running", None)
+        chat_turns.update(session, turn_id, partial_text="half a reply")
+    recover_interrupted_turns()
+    with Session(db.get_engine()) as session:
+        assert chat_turns.to_dict(chat_turns.latest(session, "running"))["status"] == "interrupted"
+    assert db.get_recent_messages(mode="running")[-1]["content"] == f"half a reply\n\n{INTERRUPTED}"
+
+
+def test_active_endpoint_returns_finished_turn_once(tmp_db):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from strides_ai.api.routers import chat
+
+    app = FastAPI()
+    app.include_router(chat.router, prefix="/api")
+    app.state.conversations = ConversationCoordinator(
+        lambda mode: FakeBackend(*(threading.Event() for _ in range(2)))
+    )
+    client = TestClient(app)
+    assert client.get("/api/chat/active?mode=running").json() == {"turn": None}
+
+    entered, finish = threading.Event(), threading.Event()
+    finish.set()
+    coordinator = ConversationCoordinator(lambda mode: FakeBackend(entered, finish))
+    turn = coordinator.acquire("running")
+    coordinator.start(turn, "p", "hi", "hi", None)
+    turn.worker.join(3)
+    first = client.get("/api/chat/active?mode=running").json()["turn"]
+    assert first["status"] == "done" and first["events"]["model"] == "captured-model"
+    assert client.get("/api/chat/active?mode=running").json() == {"turn": None}
+
+
+def test_pending_modes_lists_running_and_unseen_turns(tmp_db):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from strides_ai.api.routers import chat
+
+    entered, finish = threading.Event(), threading.Event()
+    coordinator = ConversationCoordinator(lambda mode: FakeBackend(entered, finish))
+    app = FastAPI()
+    app.include_router(chat.router, prefix="/api")
+    app.state.conversations = coordinator
+    client = TestClient(app)
+    assert client.get("/api/chat/pending").json() == {"modes": []}
+
+    turn = coordinator.acquire("cycling")
+    coordinator.start(turn, "p", "hi", "hi", None)
+    assert entered.wait(2)
+    assert client.get("/api/chat/pending").json() == {"modes": ["cycling"]}
+    finish.set()
+    turn.worker.join(3)
+    assert client.get("/api/chat/pending").json() == {"modes": ["cycling"]}  # done, not yet seen
+    client.get("/api/chat/active?mode=cycling")  # reading it marks it delivered
+    assert client.get("/api/chat/pending").json() == {"modes": []}

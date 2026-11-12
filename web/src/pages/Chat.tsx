@@ -257,6 +257,24 @@ function formatDate(created_at: string): string {
   }
 }
 
+type TurnEvents = {
+  memories?: Memory[];
+  plan_changes?: PlanChange[];
+  profile_proposals?: ProfileProposal[];
+};
+type ActiveTurn = { id: number; status: string; partial_text: string; events: TurnEvents };
+
+// null = no turn; undefined = the request failed (callers retry rather than assume "finished").
+async function fetchActiveTurn(mode: string): Promise<ActiveTurn | null | undefined> {
+  try {
+    const r = await fetch(`/api/chat/active?mode=${mode}`);
+    if (!r.ok) return undefined;
+    return (await r.json()).turn ?? null;
+  } catch {
+    return undefined;
+  }
+}
+
 export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onSynced }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [oldestLoadedId, setOldestLoadedId] = useState<number | null>(null);
@@ -271,6 +289,8 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
   const [savedMemories, setSavedMemories] = useState<Memory[]>([]);
   const [planChanges, setPlanChanges] = useState<PlanChange[]>([]);
   const [profileProposals, setProfileProposals] = useState<ProfileProposal[]>([]);
+  // True while we are following a turn that kept running after this page was left or reloaded.
+  const [reattached, setReattached] = useState(false);
 
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
@@ -297,7 +317,8 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
   const abortControllerRef = useRef<AbortController | null>(null);
   const blobUrlsInMessagesRef = useRef<string[]>([]);
 
-  // Abort any in-flight request on unmount (e.g. page refresh mid-stream)
+  // Closing the stream is safe: the server keeps generating and stores the reply, and the
+  // remount below picks the turn back up (GET /api/chat/active).
   useEffect(() => {
     return () => {
       abortControllerRef.current?.abort();
@@ -334,10 +355,24 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
     setSearchOpen(false);
     sessionStorage.removeItem(SCROLL_KEY);
 
-    fetch(`/api/history?limit=${PAGE_SIZE}&mode=${mode}`)
-      .then((r) => r.json())
-      .then(({ messages: msgs, total }: { messages: Message[]; total: number }) => {
-        setMessages(msgs);
+    // Read the turn before history: if it finishes in between, history already has the reply and
+    // the first poll tick clears the placeholder.
+    fetchActiveTurn(mode)
+      .then(async (turn) => {
+        const r = await fetch(`/api/history?limit=${PAGE_SIZE}&mode=${mode}`);
+        return { turn, ...(await r.json()) };
+      })
+      .then(async ({ turn, messages: msgs, total }: { turn: ActiveTurn | null | undefined; messages: Message[]; total: number }) => {
+        let shown = msgs;
+        // A turn that kept running (or finished unseen) while this page was away.
+        if (turn?.status === "running") {
+          shown = [...msgs, { role: "assistant", content: turn.partial_text }];
+          setStreamingIndex(shown.length - 1);
+          setReattached(true);
+        } else if (turn) {
+          applyTurnEvents(turn.events);
+        }
+        setMessages(shown);
         if (msgs.length > 0) {
           setOldestLoadedId(msgs[0].id ?? null);
         }
@@ -349,6 +384,44 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
       })
       .catch(() => {/* leave messages empty on error */});
   }, [mode]);
+
+  function applyTurnEvents(events: TurnEvents) {
+    setSavedMemories(events.memories ?? []);
+    setPlanChanges(events.plan_changes ?? []);
+    setProfileProposals(events.profile_proposals ?? []);
+  }
+
+  // Follow a reattached turn until it finishes, then show the stored reply and its events.
+  useEffect(() => {
+    if (!reattached) return;
+    const timer = setInterval(async () => {
+      const turn = await fetchActiveTurn(mode);
+      if (turn === undefined) return;
+      if (turn?.status === "running") {
+        setMessages((prev) =>
+          prev.map((m, i) => (i === prev.length - 1 ? { ...m, content: turn.partial_text } : m))
+        );
+        if (isNearBottom()) scrollToBottom();
+        return;
+      }
+      clearInterval(timer);
+      try {
+        const r = await fetch(`/api/history?limit=${PAGE_SIZE}&mode=${mode}`);
+        const { messages: msgs } = await r.json();
+        setMessages(msgs);
+      } catch {
+        // keep the partial text on screen
+      }
+      if (turn) applyTurnEvents(turn.events);
+      setStreamingIndex(null);
+      setReattached(false);
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [reattached, mode]);
+
+  function stop() {
+    fetch(`/api/chat/cancel?mode=${mode}`, { method: "POST" }).catch(() => {});
+  }
 
   // Persist scroll position on every scroll
   useEffect(() => {
@@ -601,6 +674,7 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
     // The text leaves the box as soon as it is sent; it comes back if the server refuses it.
     setInput("");
     let admitted = false;
+    let handedOff = false;
 
     setSendError("");
     setSavedMemories([]);
@@ -722,14 +796,20 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
       }
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") return;
-      if (!admitted) setInput((cur) => cur || text);
+      if (admitted) {
+        // The connection dropped but the server is still generating: follow it by polling.
+        handedOff = true;
+        setReattached(true);
+        return;
+      }
+      setInput((cur) => cur || text);
       setMessages((prev) =>
         prev.map((m, i) =>
           i === assistantIndex ? { ...m, content: "_Error: could not reach the server._" } : m
         )
       );
     } finally {
-      setStreamingIndex(null);
+      if (!handedOff) setStreamingIndex(null);
       scrollToBottom();
     }
   }
@@ -1025,12 +1105,13 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
 
             {/* Send button */}
             <button
-              onClick={send}
-              disabled={streamingIndex !== null || (!input.trim() && attachedFiles.length === 0 && attachedActivities.length === 0)}
+              onClick={streamingIndex !== null ? stop : send}
+              aria-label={streamingIndex !== null ? "Stop" : "Send"}
+              disabled={streamingIndex === null && !input.trim() && attachedFiles.length === 0 && attachedActivities.length === 0}
               className={`absolute right-2.5 bottom-2.5 w-8 h-8 rounded-xl ${theme.accentButton} text-white flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed transition-all`}
             >
               {streamingIndex !== null ? (
-                <span className="text-xs leading-none">●</span>
+                <span className="text-xs leading-none">■</span>
               ) : (
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                   <path

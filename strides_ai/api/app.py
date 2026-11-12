@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from .. import db
 from ..config import UPLOADS_DIR, get_settings
 from ..modes import MODES
+from .conversations import recover_interrupted_turns
 from .deps import init_backend
 from .routers import (
     activities,
@@ -32,6 +33,7 @@ async def lifespan(app: FastAPI):
     saved_mode = db.get_setting("mode", "running")
     saved_provider = db.get_setting("provider", get_settings().provider)
     init_backend(app, mode=saved_mode, provider=saved_provider)
+    recover_interrupted_turns()
     yield
 
 

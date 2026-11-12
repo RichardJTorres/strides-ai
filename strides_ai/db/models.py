@@ -115,6 +115,31 @@ class Conversation(SQLModel, table=True):
     )
 
 
+class ChatTurn(SQLModel, table=True):
+    """One chat turn's lifecycle, so a reply survives the client leaving mid-stream."""
+
+    __tablename__ = "chat_turns"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    mode: str
+    status: str = "running"  # running | done | failed | cancelled | interrupted
+    user_message_id: Optional[int] = None
+    assistant_message_id: Optional[int] = None
+    partial_text: str = Field(
+        default="", sa_column=Column(sa.Text, nullable=False, server_default="")
+    )
+    events_json: str = Field(
+        default="{}", sa_column=Column(sa.Text, nullable=False, server_default="{}")
+    )
+    delivered: bool = Field(default=False)
+    started_at: Optional[str] = Field(
+        default=None, sa_column=Column(sa.Text, server_default=sa.text("datetime('now')"))
+    )
+    updated_at: Optional[str] = Field(
+        default=None, sa_column=Column(sa.Text, server_default=sa.text("datetime('now')"))
+    )
+
+
 class Memory(SQLModel, table=True):
     __tablename__ = "memories"
 
