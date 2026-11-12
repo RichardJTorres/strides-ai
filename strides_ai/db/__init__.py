@@ -12,6 +12,7 @@ from .engine import DB_PATH, get_engine, get_session, init_db, reset_engine
 from .models import (
     Activity,
     CalendarPref,
+    ChatTurn,
     Conversation,
     ExerciseTemplate,
     Memory,
@@ -48,6 +49,7 @@ __all__ = [
     # models
     "Activity",
     "CalendarPref",
+    "ChatTurn",
     "Conversation",
     "ExerciseTemplate",
     "Memory",

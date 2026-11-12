@@ -129,6 +129,25 @@ export default function App() {
   // Load backend capabilities on mount
   useEffect(refreshStatus, []);
 
+  // Replies still generating, or finished and not yet seen (turns outlive the Chat page).
+  const [pendingModes, setPendingModes] = useState<string[]>([]);
+  useEffect(() => {
+    let live = true;
+    const poll = () =>
+      fetch("/api/chat/pending")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => live && d && setPendingModes(d.modes ?? []))
+        .catch(() => {});
+    poll();
+    const timer = setInterval(poll, 4000);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, []);
+  // The reply you are watching in the open Chat tab is not "away".
+  const chatDot = pendingModes.some((m) => !(tab === "chat" && m === mode));
+
   const theme = THEMES[mode];
 
   const hiddenTabs = new Set<Tab>((modeMeta[mode]?.hidden_tabs ?? []) as Tab[]);
@@ -180,6 +199,13 @@ export default function App() {
               >
                 {ICONS[t.id]}
                 {t.label}
+                {t.id === "chat" && chatDot && (
+                  <span
+                    className="ml-auto h-2 w-2 rounded-full bg-[var(--accent)]"
+                    title="A reply is in progress or waiting"
+                    aria-label="Coach reply in progress or waiting"
+                  />
+                )}
               </button>
             </li>
           ))}
@@ -263,7 +289,15 @@ export default function App() {
               tab === t.id ? `${theme.accentClass}` : "text-gray-500"
             }`}
           >
-            {ICONS[t.id]}
+            <span className="relative">
+              {ICONS[t.id]}
+              {t.id === "chat" && chatDot && (
+                <span
+                  className="absolute -right-1 -top-0.5 h-2 w-2 rounded-full bg-[var(--accent)]"
+                  aria-label="Coach reply in progress or waiting"
+                />
+              )}
+            </span>
             <span className="text-[10px] leading-none mt-0.5">{t.label}</span>
           </button>
         ))}

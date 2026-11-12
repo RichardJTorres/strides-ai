@@ -12,9 +12,11 @@ def save(
     content: str,
     mode: str = "running",
     model: str | None = None,
-) -> None:
-    session.add(Conversation(role=role, content=content, mode=mode, model=model))
+) -> int:
+    row = Conversation(role=role, content=content, mode=mode, model=model)
+    session.add(row)
     session.commit()
+    return row.id
 
 
 def get_recent(session: Session, n: int = 40, mode: str | None = None) -> list[Conversation]:

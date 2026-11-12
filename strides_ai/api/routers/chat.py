@@ -3,7 +3,6 @@
 import asyncio
 import base64
 import queue
-import threading
 from pathlib import Path
 from typing import AsyncIterator
 from uuid import uuid4
@@ -16,10 +15,11 @@ from ...activity_context import build_activity_card
 from ...coach import build_system
 from ...config import MAX_FILE_BYTES, SUPPORTED_IMAGE_TYPES, UPLOADS_DIR
 from ...db import activities as act_crud
+from ...db import chat_turns
 from ...db import memories as mem_crud
 from ...db import profiles as prof_crud
 from ...db import settings as settings_crud
-from ...db.engine import get_session
+from ...db.engine import get_engine, get_session
 from ...profile import profile_to_text
 from ..conversations import ConversationCoordinator
 
@@ -82,25 +82,25 @@ def _build_chat_system(session: Session, mode: str) -> str:
 
 async def _sse_event_stream(
     token_queue: "queue.Queue[str | None]",
-    cancel_event: threading.Event,
     request: Request,
+    on_complete=None,
 ) -> AsyncIterator[str]:
-    """Async generator that drains token_queue and yields SSE-encoded events."""
+    """Drain token_queue as SSE. Leaving does NOT cancel the turn: it keeps running and its result
+    is stored, so the client can come back for it (``GET /chat/active``)."""
     loop = asyncio.get_event_loop()
-    try:
-        while True:
-            try:
-                chunk = await loop.run_in_executor(None, lambda: token_queue.get(timeout=1.0))
-            except queue.Empty:
-                if await request.is_disconnected():
-                    break
-                continue
-            if chunk is None:
-                break
-            yield f"data: {chunk.replace(chr(10), chr(92) + 'n')}\n\n"
-        yield "data: [DONE]\n\n"
-    finally:
-        cancel_event.set()
+    while True:
+        try:
+            chunk = await loop.run_in_executor(None, lambda: token_queue.get(timeout=1.0))
+        except queue.Empty:
+            if request is not None and await request.is_disconnected():
+                return
+            continue
+        if chunk is None:
+            break
+        yield f"data: {chunk.replace(chr(10), chr(92) + 'n')}\n\n"
+    if on_complete is not None:
+        on_complete()
+    yield "data: [DONE]\n\n"
 
 
 @router.post("/chat")
@@ -162,7 +162,38 @@ async def chat(
         coordinator.release(turn)
         raise
 
+    def mark_delivered():
+        with Session(get_engine()) as db_session:
+            chat_turns.mark_delivered(db_session, turn.turn_id)
+
     return StreamingResponse(
-        _sse_event_stream(turn.tokens, turn.cancel, request),
+        _sse_event_stream(turn.tokens, request, mark_delivered),
         media_type="text/event-stream",
     )
+
+
+@router.get("/chat/active")
+def active_turn(mode: str = "running", session: Session = Depends(get_session)) -> dict:
+    """The mode's running turn, or its latest finished turn if the client never received it.
+
+    Reading a finished turn marks it delivered, so its events are shown once.
+    """
+    row = chat_turns.latest(session, mode)
+    if row is None or (row.status != "running" and row.delivered):
+        return {"turn": None}
+    result = chat_turns.to_dict(row)
+    if row.status != "running":
+        chat_turns.mark_delivered(session, row.id)
+    return {"turn": result}
+
+
+@router.get("/chat/pending")
+def pending_turns(session: Session = Depends(get_session)) -> dict:
+    """Modes with a reply in progress or waiting to be seen (drives the Chat tab dot)."""
+    return {"modes": chat_turns.pending_modes(session)}
+
+
+@router.post("/chat/cancel")
+def cancel_turn(request: Request, mode: str = "running") -> dict:
+    coordinator: ConversationCoordinator = request.app.state.conversations
+    return {"cancelled": coordinator.cancel(mode)}
