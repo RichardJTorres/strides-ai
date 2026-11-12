@@ -133,3 +133,47 @@ def build_activity_card(activity: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM)
         lines.append("Deep dive analysis: not yet run for this activity.")
 
     return "\n".join(lines)
+
+
+def planned_workout_block(
+    plan_row: dict | None,
+    day=None,
+    units: UnitSystem = DEFAULT_UNIT_SYSTEM,
+    is_match: bool = True,
+) -> str:
+    """What was planned for an activity's day, for the deep-dive prompt. `plan_row` is the
+    training_plan row for that date (None -> ""), `day` its compliance.DayCompliance if scored.
+    `is_match` is False when the plan was matched to a different activity (or to none): the
+    day's score then says nothing about this activity, so it is left out and the model is told."""
+    if not plan_row:
+        return ""
+    from .db.models import TrainingPlan
+
+    facts = [plan_row.get("workout_type") or "Workout"]
+    if plan_row.get("distance_km"):
+        facts.append(TrainingPlan.measure_field(plan_row, "distance_km", units).formatted)
+    if plan_row.get("elevation_m"):
+        facts.append(
+            TrainingPlan.measure_field(plan_row, "elevation_m", units).formatted + " climbing"
+        )
+    if plan_row.get("duration_min"):
+        facts.append(f"{plan_row['duration_min']} min")
+    if plan_row.get("intensity"):
+        facts.append(f"{plan_row['intensity']} intensity")
+    lines = ["## Planned workout for this day", "Planned: " + " · ".join(facts)]
+    if plan_row.get("description"):
+        lines.append(f"Goal / notes: {plan_row['description']}")
+    if not is_match:
+        lines.append(
+            "This activity is NOT the one matched to that plan (different sport, or another "
+            "activity that day was). Mention the plan only if it helps explain this session; do "
+            "not judge this activity against it."
+        )
+        return "\n".join(lines)
+    if day is not None:
+        lines.append(f"Plan-vs-actual: {day.status.value} — {day.note}")
+    lines.append(
+        "In your report, say whether the activity did what this plan intended (effort, distance, "
+        "terrain). If it was clearly a different session, say so instead of forcing a comparison."
+    )
+    return "\n".join(lines)

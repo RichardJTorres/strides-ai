@@ -194,6 +194,107 @@ def test_build_system_compliance_uses_full_activity_list_not_recent_slice(tmp_db
     assert "1 completed, 0 modified, 0 missed" in result
 
 
+def test_upcoming_workout_carries_notes_and_route_verdict_only_when_close(tmp_db):
+    import json
+
+    from sqlmodel import Session
+
+    from strides_ai.db.engine import get_engine
+    from strides_ai.db.models import TrainingPlan
+
+    soon = (date.today() + timedelta(days=2)).isoformat()
+    far = (date.today() + timedelta(days=30)).isoformat()
+    route = "https://ridewithgps.com/routes/1"
+    db.save_planned_workout(
+        soon,
+        "Long Ride",
+        "Steady  endurance " + "x" * 300,
+        80.0,
+        None,
+        240,
+        "easy",
+        route_url=route,
+    )
+    db.save_planned_workout(far, "Long Ride", "FAR-OUT-NOTE", 80.0, None, 240, "easy")
+    with Session(get_engine()) as session:
+        row = session.get(TrainingPlan, soon)
+        row.route_analysis_json = json.dumps(
+            {"verdict": "too_hard", "explanation": "Too much climbing."}
+        )
+        session.add(row)
+        session.commit()
+
+    result = build_system("", [])
+    assert "notes: Steady endurance x" in result  # whitespace collapsed
+    assert "x" * 200 not in result  # long notes are cut
+    assert "attached route: too hard — Too much climbing." in result
+    assert "FAR-OUT-NOTE" not in result  # beyond the detail window: just the row
+
+
+def test_upcoming_workout_with_unanalyzed_route_says_so(tmp_db):
+    soon = (date.today() + timedelta(days=1)).isoformat()
+    db.save_planned_workout(
+        soon, "Easy Run", None, 5.0, None, 30, "easy", route_url="https://strava.com/routes/2"
+    )
+    assert "attached route: not yet analyzed" in build_system("", [])
+
+
+def test_progress_section_absent_without_plan_or_records(tmp_db):
+    assert "Streak, Quests and Records" not in build_system("", [])
+
+
+def test_progress_section_reports_streak_and_quests(tmp_db):
+    from strides_ai.analytics.aggregation import monday_of
+
+    monday = monday_of(date.today())
+    last_week = monday - timedelta(days=5)
+    db.save_planned_workout(last_week.isoformat(), "Easy Run", None, 5.0, None, 30, "easy")
+    db.save_planned_workout(
+        (monday + timedelta(days=6)).isoformat(), "Long Run", None, 20.0, None, 120, "easy"
+    )
+    rows = [_make_row(id=1, date=last_week.isoformat(), distance_m=6000)]
+    result = build_system("", [], activities=rows)
+    assert "## Streak, Quests and Records" in result
+    assert "Plan streak: 1 week(s) (best 1)" in result
+    assert f"{(monday + timedelta(days=6)).isoformat()} Long Run:" in result
+
+
+def test_lifting_coach_gets_no_cardio_streak(tmp_db):
+    from strides_ai.analytics.aggregation import monday_of
+
+    last_week = monday_of(date.today()) - timedelta(days=5)
+    db.save_planned_workout(last_week.isoformat(), "Easy Run", None, 5.0, None, 30, "easy")
+    rows = [_make_row(id=1, date=last_week.isoformat(), distance_m=6000)]
+    assert "Plan streak" in build_system("", [], mode="running", activities=rows)
+    assert "Streak, Quests and Records" not in build_system("", [], mode="lifting", activities=rows)
+
+
+def test_coach_voice_comes_before_the_long_computed_sections(tmp_db):
+    # Optional sections are dropped from the first one that does not fit, so the short voice
+    # instruction must not sit behind the long ones.
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    db.save_planned_workout(tomorrow, "Easy Run", None, 5.0, None, 30, "easy")
+    prompt = build_system("", [], coach_voice="technical")
+    voice = next(i for i, p in enumerate(prompt.priority) if "Coaching Voice" in p)
+    assert all(
+        "Streak, Quests" not in p and "Training State" not in p for p in prompt.priority[:voice]
+    )
+
+
+def test_digest_flags_reach_the_coach_without_a_cached_readout(tmp_db):
+    # Nothing for 10 days after steady training: the rule-based gap flag must be in the prompt
+    # even though no Analytics readout was ever generated.
+    today = date.today()
+    rows = [
+        _make_row(id=i, date=(today - timedelta(days=10 + 2 * i)).isoformat(), distance_m=8000)
+        for i in range(40)
+    ]
+    result = build_system("", [], activities=rows)
+    assert "Flags (rule-based" in result
+    assert "consecutive days without activity" in result
+    assert "Dashboard readout" not in result
+
+
 # ── build_training_log ────────────────────────────────────────────────────────
 
 
