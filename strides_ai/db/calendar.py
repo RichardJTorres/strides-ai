@@ -10,29 +10,42 @@ from sqlmodel import Session, select
 from ..workout_structure import structure_for_type, structure_to_json, total_seconds
 from .models import CalendarPref, TrainingPlan
 
+# Race-type planned workouts are the only source of "races". Mirrors the race entries in
+# web/src/pages/calendar/constants.ts (WORKOUT_TYPE_GROUPS); "Race" is the legacy generic type.
+RACE_WORKOUT_TYPES = frozenset({"Running Race", "Cycling Race", "Race"})
+
+
+def races_from_plan(plan_rows: list[dict]) -> list[dict]:
+    """``{date, name}`` for every race-type workout, sorted by date. The name is the workout
+    description (``"Race"`` when blank). There is no target-time column, so none is returned."""
+    races = [
+        {"date": w["date"], "name": (w.get("description") or "").strip() or "Race"}
+        for w in plan_rows
+        if w.get("workout_type") in RACE_WORKOUT_TYPES
+    ]
+    return sorted(races, key=lambda r: r["date"])
+
+
+def get_races(session: Session) -> list[dict]:
+    stmt = select(TrainingPlan).where(TrainingPlan.workout_type.in_(RACE_WORKOUT_TYPES))
+    return races_from_plan([w.model_dump() for w in session.exec(stmt).all()])
+
 
 def get_prefs(session: Session) -> dict:
+    """Blocked days plus ``races`` derived from the plan (all of them, past included; consumers
+    filter). The legacy ``calendar_prefs.races`` column is no longer read."""
     row = session.get(CalendarPref, 1)
-    if row is None:
-        return {"blocked_days": [], "races": []}
     return {
-        "blocked_days": json.loads(row.blocked_days),
-        "races": json.loads(row.races),
+        "blocked_days": json.loads(row.blocked_days) if row else [],
+        "races": get_races(session),
     }
 
 
-def save_prefs(session: Session, blocked_days: list, races: list) -> None:
-    stmt = sqlite_insert(CalendarPref).values(
-        id=1,
-        blocked_days=json.dumps(blocked_days),
-        races=json.dumps(races),
-    )
+def save_prefs(session: Session, blocked_days: list) -> None:
+    stmt = sqlite_insert(CalendarPref).values(id=1, blocked_days=json.dumps(blocked_days))
     stmt = stmt.on_conflict_do_update(
         index_elements=["id"],
-        set_={
-            "blocked_days": json.dumps(blocked_days),
-            "races": json.dumps(races),
-        },
+        set_={"blocked_days": json.dumps(blocked_days)},
     )
     session.execute(stmt)
     session.commit()

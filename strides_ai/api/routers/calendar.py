@@ -46,7 +46,7 @@ router = APIRouter()
 
 class CalendarPrefsBody(BaseModel):
     blocked_days: list[str] = []
-    races: list[dict] = []
+    races: list[dict] = []  # ignored: races come from race-type workouts (kept for old clients)
 
 
 class WorkoutBody(BaseModel):
@@ -100,7 +100,7 @@ def get_calendar_prefs(session: Session = Depends(get_session)):
 
 @router.put("/calendar/prefs")
 def put_calendar_prefs(body: CalendarPrefsBody, session: Session = Depends(get_session)):
-    crud.save_prefs(session, body.blocked_days, body.races)
+    crud.save_prefs(session, body.blocked_days)
     return {"status": "ok"}
 
 

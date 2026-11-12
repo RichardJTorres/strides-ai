@@ -136,7 +136,8 @@ def test_build_system_injects_workout_beyond_two_weeks(tmp_db):
 def test_build_system_injects_calendar_constraints(tmp_db):
     race_date = (date.today() + timedelta(days=10)).isoformat()
     blocked_date = (date.today() + timedelta(days=3)).isoformat()
-    db.save_calendar_prefs([blocked_date], [{"date": race_date, "name": "Fall Century"}])
+    db.save_calendar_prefs([blocked_date])
+    db.save_planned_workout(race_date, "Cycling Race", "Fall Century", 160.0, None, None, "hard")
     result = build_system("", [])
     assert "Calendar Constraints" in result
     assert race_date in result
@@ -151,7 +152,8 @@ def test_build_system_no_calendar_constraints_section_when_empty(tmp_db):
 
 def test_build_system_calendar_constraints_excludes_past_dates(tmp_db):
     past_date = (date.today() - timedelta(days=5)).isoformat()
-    db.save_calendar_prefs([past_date], [{"date": past_date, "name": "Old Race"}])
+    db.save_calendar_prefs([past_date])
+    db.save_planned_workout(past_date, "Running Race", "Old Race", 10.0, None, None, "hard")
     result = build_system("", [])
     assert "Calendar Constraints" not in result
 

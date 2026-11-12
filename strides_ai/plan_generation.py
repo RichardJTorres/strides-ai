@@ -153,7 +153,10 @@ def build_plan_generation_prompt(
     if context:
         sections.append(context)
 
-    races = sorted(prefs.get("races", []), key=lambda r: r["date"])
+    races = sorted(
+        (r for r in prefs.get("races", []) if r["date"] >= date_cls.today().isoformat()),
+        key=lambda r: r["date"],
+    )
     blocked = sorted(prefs.get("blocked_days", []))
     if races or blocked:
         lines = []

@@ -263,9 +263,9 @@ def get_calendar_prefs() -> dict:
         return _cal.get_prefs(s)
 
 
-def save_calendar_prefs(blocked_days: list, races: list) -> None:
+def save_calendar_prefs(blocked_days: list) -> None:
     with _session() as s:
-        _cal.save_prefs(s, blocked_days, races)
+        _cal.save_prefs(s, blocked_days)
 
 
 def get_training_plan(start_date: str | None = None, end_date: str | None = None) -> list[dict]:

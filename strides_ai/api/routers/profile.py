@@ -1,5 +1,6 @@
 """Profile routes — one unified profile, edited section by section."""
 
+from datetime import date
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -113,7 +114,9 @@ def get_profile(
         },
         "completeness": profile_completeness(stored, m),
         "updated": crud.get_updated(session),
-        "races": calendar_crud.get_prefs(session)["races"],
+        "races": [
+            r for r in calendar_crud.get_races(session) if r["date"] >= date.today().isoformat()
+        ],
     }
 
 

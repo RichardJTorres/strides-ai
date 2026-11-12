@@ -21,7 +21,7 @@ const WEEKDAYS: [string, string][] = [
 ];
 const ALL = "All modes";
 
-/** Races live in the calendar prefs, not the profile row, and are edited on the Calendar only. */
+/** Races are race-type workouts on the Calendar, not part of the profile row. */
 function RaceList() {
   const { data, error } = useApi<{ races: Race[] }>("/api/calendar/prefs");
   if (error) return <Notice tone="error">Couldn't load your races: {error}</Notice>;
@@ -31,10 +31,10 @@ function RaceList() {
       <div className="flex items-baseline justify-between gap-2">
         <span className="text-xs font-medium text-gray-400">Upcoming races</span>
         <a href={hrefFor("calendar")} className="text-xs text-gray-400 underline hover:text-gray-200">
-          Add or remove races on the Calendar →
+          Plan a race workout on the Calendar →
         </a>
       </div>
-      {data.races.length === 0 && <p className="text-sm text-gray-500">No races yet.</p>}
+      {data.races.length === 0 && <p className="text-sm text-gray-500">No races yet. Plan a Running Race or Cycling Race workout on the Calendar.</p>}
       {data.races.map((r) => (
         <a
           key={`${r.date}-${r.name}`}

@@ -298,3 +298,11 @@ def test_plan_table_shows_elevation_and_structure():
     )
     assert "450 m" in table
     assert "4×(4:00 @ 105%, 3:00 @ 55%)" in table
+
+
+def test_prompt_omits_past_races():
+    prefs = {"races": [{"date": "2020-01-01", "name": "Ancient 10K"}], "blocked_days": []}
+    prompt = build_plan_generation_prompt(
+        "cycling", "", [], prefs, [], [], "2026-10-01", "2026-10-14", ""
+    )
+    assert "Ancient 10K" not in prompt

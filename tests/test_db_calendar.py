@@ -16,25 +16,42 @@ def test_get_calendar_prefs_default(tmp_db):
 
 
 def test_save_and_get_calendar_prefs_blocked_days(tmp_db):
-    db.save_calendar_prefs(["2025-07-04", "2025-12-25"], [])
+    db.save_calendar_prefs(["2025-07-04", "2025-12-25"])
     prefs = db.get_calendar_prefs()
     assert "2025-07-04" in prefs["blocked_days"]
     assert "2025-12-25" in prefs["blocked_days"]
     assert prefs["races"] == []
 
 
-def test_save_and_get_calendar_prefs_races(tmp_db):
-    races = [{"date": "2025-10-12", "name": "Chicago Marathon", "target_time": "3:30:00"}]
-    db.save_calendar_prefs([], races)
-    prefs = db.get_calendar_prefs()
-    assert len(prefs["races"]) == 1
-    assert prefs["races"][0]["name"] == "Chicago Marathon"
-    assert prefs["races"][0]["target_time"] == "3:30:00"
+def test_prefs_races_come_from_race_workouts(tmp_db):
+    db.save_planned_workout(
+        "2025-10-12", "Running Race", "Chicago Marathon", 42.2, None, 210, "hard"
+    )
+    db.save_planned_workout("2025-09-01", "Cycling Race", None, 100.0, None, None, "hard")
+    db.save_planned_workout("2025-09-15", "Race", "  ", None, None, None, None)
+    db.save_planned_workout("2025-09-20", "Long Run", "Not a race", 20.0, None, None, "easy")
+    assert db.get_calendar_prefs()["races"] == [
+        {"date": "2025-09-01", "name": "Race"},
+        {"date": "2025-09-15", "name": "Race"},
+        {"date": "2025-10-12", "name": "Chicago Marathon"},
+    ]
+
+
+def test_races_follow_workout_edits_and_deletes(tmp_db):
+    db.save_planned_workout("2025-10-12", "Running Race", "A", 10.0, None, None, "hard")
+    db.save_planned_workout("2025-10-12", "Easy Run", "A", 10.0, None, None, "easy")
+    assert db.get_calendar_prefs()["races"] == []
+
+
+def test_save_prefs_does_not_touch_races(tmp_db):
+    db.save_planned_workout("2025-10-12", "Running Race", "A", 10.0, None, None, "hard")
+    db.save_calendar_prefs(["2025-01-01"])
+    assert len(db.get_calendar_prefs()["races"]) == 1
 
 
 def test_save_calendar_prefs_overwrites(tmp_db):
-    db.save_calendar_prefs(["2025-01-01"], [])
-    db.save_calendar_prefs(["2025-06-01"], [])
+    db.save_calendar_prefs(["2025-01-01"])
+    db.save_calendar_prefs(["2025-06-01"])
     prefs = db.get_calendar_prefs()
     assert prefs["blocked_days"] == ["2025-06-01"]
 
@@ -218,3 +235,40 @@ def test_structure_discarded_for_non_cycling_types(tmp_db):
     db.save_planned_workout("2026-10-02", "Easy Run", None, 5, None, 30, "easy", structure=STRUCT)
     row = db.get_training_plan()[0]
     assert row["structure_json"] is None and row["duration_min"] == 30
+
+
+def test_race_workout_change_changes_insights_fingerprint(tmp_db):
+    from strides_ai.insights import digest_fingerprint
+    from strides_ai.units import UnitSystem
+
+    def fp():
+        return digest_fingerprint(
+            [],
+            "running",
+            UnitSystem.METRIC,
+            date(2026, 6, 1),
+            db.get_training_plan(),
+            db.get_calendar_prefs(),
+        )
+
+    db.save_planned_workout("2026-07-01", "Running Race", "10K", 10.0, None, None, "hard")
+    before = fp()
+    db.save_planned_workout("2026-07-01", "Running Race", "Half", 10.0, None, None, "hard")
+    assert fp() != before
+
+
+def test_prefs_api_returns_races_and_ignores_put_races(tmp_db):
+    from fastapi.testclient import TestClient
+
+    from strides_ai.api.app import app
+
+    db.save_planned_workout("2026-07-01", "Cycling Race", "Gran Fondo", 100.0, None, None, "hard")
+    client = TestClient(app)
+    r = client.put(
+        "/api/calendar/prefs", json={"blocked_days": ["2026-07-02"], "races": [{"date": "x"}]}
+    )
+    assert r.status_code == 200
+    assert client.get("/api/calendar/prefs").json() == {
+        "blocked_days": ["2026-07-02"],
+        "races": [{"date": "2026-07-01", "name": "Gran Fondo"}],
+    }
