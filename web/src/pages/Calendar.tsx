@@ -39,7 +39,7 @@ const COMPLIANCE_DOT_COLORS: Record<string, string> = {
 
 const COMPLIANCE_STATUS_LABELS: Record<string, string> = {
   completed: "Completed",
-  modified: "Modified",
+  modified: "Shortened",
   missed: "Missed",
   upcoming: "Upcoming",
   unscored: "Not scored",
@@ -209,8 +209,17 @@ interface WeekSummary {
   completed: number;
   modified: number;
   missed: number;
-  consistencyPct: number | null;
-  onTargetPct: number | null;
+  upcoming: number;
+}
+
+/** "3 as planned · 1 shortened · 1 missed" — only the non-zero parts. "Done" elsewhere means
+ *  completed + shortened; "shortened" is the UI name for the API status `modified`. */
+function weekBreakdown(w: { completed: number; modified: number; missed: number }): string {
+  return [
+    w.completed > 0 && `${w.completed} as planned`,
+    w.modified > 0 && `${w.modified} shortened`,
+    w.missed > 0 && `${w.missed} missed`,
+  ].filter(Boolean).join(" · ");
 }
 
 // distance/elevation hold what the athlete sees and types, in their unit system; they are
@@ -988,7 +997,7 @@ export default function Calendar() {
             </div>
             <div className="flex items-center gap-2">
               <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-              <span className="text-xs text-zinc-400">Modified (fell short of target)</span>
+              <span className="text-xs text-zinc-400">Shortened (fell short of target)</span>
             </div>
             <div className="flex items-center gap-2">
               <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
@@ -1047,26 +1056,21 @@ export default function Calendar() {
                   (s, a) => s + (a.distance_m ?? 0) / 1000, 0
                 );
               }, 0);
-              // Weekly consistency/on-target %: counts the already-backend-computed per-day
-              // statuses and reapplies the same two formulas strides_ai/compliance.py uses —
-              // duplicates two arithmetic lines only, never the matching/tolerance logic.
+              // Weekly workout counts: tallies the backend-computed per-day statuses
+              // (strides_ai/compliance.py) — no matching/tolerance logic lives here.
               const weekCompliance = weekCells.reduce(
                 (acc, cell) => {
                   const status = compliance[cell.dateStr]?.status;
                   if (status === "completed") acc.completed++;
                   else if (status === "modified") acc.modified++;
                   else if (status === "missed") acc.missed++;
+                  else if (status === "upcoming") acc.upcoming++;
                   return acc;
                 },
-                { completed: 0, modified: 0, missed: 0 }
+                { completed: 0, modified: 0, missed: 0, upcoming: 0 }
               );
-              const weekScored = weekCompliance.completed + weekCompliance.modified + weekCompliance.missed;
-              const consistencyPct = weekScored > 0
-                ? Math.round((100 * (weekCompliance.completed + weekCompliance.modified)) / weekScored)
-                : null;
-              const onTargetPct = weekScored > 0
-                ? Math.round((100 * weekCompliance.completed) / weekScored)
-                : null;
+              const weekDone = weekCompliance.completed + weekCompliance.modified;
+              const weekPlannedWorkouts = weekDone + weekCompliance.missed + weekCompliance.upcoming;
 
               return (
                 <div key={wi} className="flex gap-1 mb-3">
@@ -1178,8 +1182,7 @@ export default function Calendar() {
                         completed: weekCompliance.completed,
                         modified: weekCompliance.modified,
                         missed: weekCompliance.missed,
-                        consistencyPct,
-                        onTargetPct,
+                        upcoming: weekCompliance.upcoming,
                       })
                     }
                     className="w-20 flex-shrink-0 flex flex-col justify-center gap-3 px-3 ml-1 rounded bg-zinc-800/40 border border-zinc-700/50 hover:border-zinc-500 hover:bg-zinc-800/70 transition-colors text-left cursor-pointer"
@@ -1199,11 +1202,13 @@ export default function Calendar() {
                       </div>
                       {actualKm > 0 && <div className="text-[10px] text-zinc-500">{distLabel}</div>}
                     </div>
-                    {weekScored > 0 && (
+                    {weekPlannedWorkouts > 0 && (
                       <div>
-                        <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">On-Target</div>
-                        <div className="text-sm font-semibold text-zinc-300">{onTargetPct}%</div>
-                        <div className="text-[10px] text-zinc-500">{consistencyPct}% did something</div>
+                        <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-0.5">Workouts</div>
+                        <div className={`text-sm font-semibold ${weekDone === weekPlannedWorkouts ? "text-green-400" : "text-zinc-300"}`}>
+                          {weekDone} of {weekPlannedWorkouts}
+                        </div>
+                        <div className="text-[10px] text-zinc-500">done</div>
                       </div>
                     )}
                   </button>
@@ -1783,14 +1788,27 @@ export default function Calendar() {
                     </div>
                   </div>
                   <div className="bg-zinc-800/40 rounded p-3">
-                    <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Compliance</div>
-                    {selectedWeek.onTargetPct !== null ? (
-                      <div className="text-sm text-zinc-200">
-                        {selectedWeek.onTargetPct}% on-target · {selectedWeek.consistencyPct}% did something
-                      </div>
-                    ) : (
-                      <div className="text-sm text-zinc-500">No scorable planned days this week</div>
-                    )}
+                    <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Workouts</div>
+                    {(() => {
+                      const w = selectedWeek;
+                      const total = w.completed + w.modified + w.missed + w.upcoming;
+                      if (total === 0) {
+                        return <div className="text-sm text-zinc-500">No planned workouts this week</div>;
+                      }
+                      const breakdown = weekBreakdown(w);
+                      return (
+                        <>
+                          <div className="text-sm text-zinc-200">
+                            {w.completed + w.modified} of {total} planned workouts done
+                          </div>
+                          {(breakdown || w.upcoming > 0) && (
+                            <div className="text-xs text-zinc-500 mt-0.5">
+                              {[breakdown, w.upcoming > 0 && `${w.upcoming} to go`].filter(Boolean).join(" · ")}
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
 
