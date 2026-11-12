@@ -17,14 +17,14 @@ export function fmtPace(s: number) {
 }
 
 export function fmtWeekDate(str: string) {
-  return new Date(str + "T00:00:00").toLocaleDateString("en-US", {
+  return new Date(str + "T00:00:00").toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
   });
 }
 
 export function fmtTs(ts: number) {
-  return new Date(ts).toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+  return new Date(ts).toLocaleDateString(undefined, { month: "short", year: "2-digit" });
 }
 
 // Palette used to assign distinct colours to dynamic series (e.g. one line per

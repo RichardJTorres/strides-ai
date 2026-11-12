@@ -37,7 +37,7 @@ html, body {
   border-radius: 5px;
   padding: 0.15em 0.4em;
   font-size: 0.875em;
-  color: #86efac;
+  color: var(--accent, #86efac);
 }
 .coach-message pre {
   background: #0f172a;
@@ -79,11 +79,11 @@ html, body {
   background: #0d1117;
 }
 .coach-message a {
-  color: #4ade80;
+  color: var(--accent, #4ade80);
   text-decoration: underline;
   text-underline-offset: 2px;
-  text-decoration-color: #4ade8040;
+  text-decoration-color: color-mix(in srgb, var(--accent, #4ade80) 25%, transparent);
 }
 .coach-message a:hover {
-  text-decoration-color: #4ade80;
+  text-decoration-color: var(--accent, #4ade80);
 }

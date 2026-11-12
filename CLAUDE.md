@@ -154,6 +154,8 @@ Copy `.env.example` to `.env` to get started.
 
 ### Frontend (`web/`)
 
-React 18 + TypeScript + Tailwind CSS + Vite + recharts. Navigation uses `location.hash` (`#chat`, `#activities`, `#analytics`, `#calendar`, `#profile`, `#settings`) — no router dependency. Vite HMR picks up React changes instantly; Python changes require a server restart.
+React 18 + TypeScript + Tailwind CSS + Vite + recharts. Navigation uses `location.hash` — no router dependency. `web/src/nav.ts` owns the grammar `#<tab>[/<param>]` (`#activities/<id>`, `#calendar/<YYYY-MM-DD>`, `#analytics/<section>`; invalid params are dropped): link with `hrefFor` / `navigate`, never a hand-written hash.
+
+Shared UI lives in `web/src/ui/` — use it instead of hand-rolling Tailwind per page: `Button` (primary takes the mode accent), `Spinner`, `LoadingState` / `ErrorState` / `EmptyState` / `Notice` (`states.tsx`), `PageHeader`, `formatDate` / `formatDuration` (`format.ts`), and `fetchJson` / `useApi` (`api.ts`), which throw on non-2xx so a failed request can't render as empty data. The mode theme is defined once in `ui/theme.tsx` and read with `useTheme()`; it is also exposed as the `--accent` CSS variable. Vite HMR picks up React changes instantly; Python changes require a server restart.
 
 File attachments (images as base64, text as UTF-8) are uploaded to `~/.strides_ai/uploads/` and forwarded to `stream_turn` as `attachments`.
