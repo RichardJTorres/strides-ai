@@ -26,7 +26,7 @@ def test_empty_database(tmp_db):
         "max_misses": 1,
         "this_week": {"done": 0, "missed": 0, "upcoming": 0, "status": "no_plan"},
     }
-    assert result.quests == [] and result.records == []
+    assert result.records == []
 
 
 def test_reads_plan_and_activities_from_the_db(tmp_db, sample_activity):

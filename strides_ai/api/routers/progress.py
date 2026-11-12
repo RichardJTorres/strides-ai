@@ -1,4 +1,4 @@
-"""Progress router: the plan streak, this week's quests and personal records."""
+"""Progress router: the plan streak and personal records."""
 
 from datetime import date
 

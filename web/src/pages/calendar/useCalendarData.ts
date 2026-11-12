@@ -2,9 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { useUnits } from "../../UnitsContext";
 import { fetchJson, jsonBody } from "../../ui/api";
 import { buildGrid } from "./grid";
-import type { Activity, ComplianceDay, Plan, Prefs, Race, TrainingState, Workout } from "./types";
+import type { Activity, ComplianceDay, Plan, Prefs, TrainingState, WeekStart, Workout } from "./types";
 
-/** Everything the calendar loads, plus the preference mutations (blocked days, races). */
+/** Everything the calendar loads, plus the blocked-day mutation. */
 export function useCalendarData(currentMonth: Date) {
   const units = useUnits();
   const [prefs, setPrefs] = useState<Prefs>({ blocked_days: [], races: [] });
@@ -12,6 +12,11 @@ export function useCalendarData(currentMonth: Date) {
   const [activities, setActivities] = useState<Record<string, Activity[]>>({});
   const [compliance, setCompliance] = useState<Record<string, ComplianceDay>>({});
   const [trainingState, setTrainingState] = useState<TrainingState | null>(null);
+  // The Settings page owns this preference; the Calendar remounts on every visit, so it picks up
+  // a change on the next open. Fails soft to Monday. `weekStartLoaded` holds the compliance
+  // fetch back so its first request already covers the right grid range.
+  const [weekStart, setWeekStart] = useState<WeekStart>("monday");
+  const [weekStartLoaded, setWeekStartLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   // A failed initial load: without the plan the grid would look like an empty calendar.
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -23,6 +28,13 @@ export function useCalendarData(currentMonth: Date) {
   // so that fetch can return the old numbers; this one cannot.
   const [confirmed, setConfirmed] = useState(0);
   const refreshDerived = useCallback(() => setConfirmed(n => n + 1), []);
+
+  useEffect(() => {
+    fetchJson<{ week_start?: string }>("/api/settings")
+      .then(s => { if (s.week_start === "sunday") setWeekStart("sunday"); })
+      .catch(() => {})
+      .finally(() => setWeekStartLoaded(true));
+  }, []);
 
   // Load, projected ramp and plan conflicts depend on the plan and blocked days/races, so they
   // are refetched whenever either changes (the backend is the single source of these numbers).
@@ -67,8 +79,9 @@ export function useCalendarData(currentMonth: Date) {
   // time, matching how the grid itself is paginated by month. Refetched when the plan changes,
   // since an edit changes what each day is scored against.
   useEffect(() => {
+    if (!weekStartLoaded) return;
     let cancelled = false;
-    const cells = buildGrid(currentMonth);
+    const cells = buildGrid(currentMonth, weekStart);
     const start = cells[0].dateStr;
     const end = cells[cells.length - 1].dateStr;
     fetchJson<{ days: ComplianceDay[] }>(
@@ -86,7 +99,7 @@ export function useCalendarData(currentMonth: Date) {
       });
     return () => { cancelled = true; };
     // units.system: compliance notes are rendered server-side in the current units.
-  }, [currentMonth, units.system, plan, confirmed]);
+  }, [currentMonth, units.system, plan, confirmed, weekStart, weekStartLoaded]);
 
   // Optimistic: show the change at once. If the save fails, show what the server actually has
   // (several quick changes can overlap, so "the previous value" is not reliably the saved one).
@@ -96,7 +109,7 @@ export function useCalendarData(currentMonth: Date) {
     fetchJson("/api/calendar/prefs", jsonBody("PUT", updated))
       .then(refreshDerived)
       .catch(() => {
-        setPrefsError("Couldn't save your last change to blocked days or races. Try again.");
+        setPrefsError("Couldn't save your last change to blocked days. Try again.");
         fetchJson<Prefs>("/api/calendar/prefs").then(setPrefs).catch(() => {});
       });
   }, [refreshDerived]);
@@ -110,19 +123,8 @@ export function useCalendarData(currentMonth: Date) {
     });
   };
 
-  const addRace = (race: Race) => {
-    savePrefs({
-      ...prefs,
-      races: [...prefs.races, race].sort((a, b) => a.date.localeCompare(b.date)),
-    });
-  };
-
-  const removeRace = (date: string) => {
-    savePrefs({ ...prefs, races: prefs.races.filter(r => r.date !== date) });
-  };
-
   return {
-    prefs, plan, setPlan, activities, compliance, trainingState, toggleBlocked, addRace, removeRace,
+    prefs, plan, setPlan, activities, compliance, trainingState, toggleBlocked, weekStart,
     loading, loadError, prefsError, reload: () => setAttempt(n => n + 1), confirmed, refreshDerived,
   };
 }

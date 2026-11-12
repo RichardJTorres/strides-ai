@@ -81,10 +81,13 @@ export default function DayCell({ cell, grid }: { cell: GridCell; grid: GridProp
       }}
       className={[
         dragOver === dateStr ? "ring-2 ring-inset ring-sky-400/80" : "",
-        "flex-1 min-w-0 min-h-12 md:min-h-16 p-1 md:p-1.5 rounded cursor-pointer border transition-colors select-none",
+        "flex-1 min-w-0 min-h-12 md:min-h-24 p-1 md:p-1.5 rounded cursor-pointer border transition-colors select-none",
         "focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400",
         inRange ? "border-green-500/70 bg-green-500/10" : isSelected ? "border-gray-400 bg-gray-700/60" : "border-gray-800 hover:border-gray-600",
         isToday ? "ring-2 ring-inset ring-green-400/80 border-green-400/60" : "",
+        complianceStatus === "completed" && !inRange && !isSelected
+          ? "border-green-500/50 bg-gradient-to-br from-green-500/20 to-transparent shadow-[0_0_12px_-3px_rgba(74,222,128,0.5)]"
+          : "",
         isBlocked ? "opacity-40" : "",
         !cell.inCurrentMonth ? "opacity-55" : "",
         "bg-gray-800/20",
@@ -98,7 +101,12 @@ export default function DayCell({ cell, grid }: { cell: GridCell; grid: GridProp
         {conflictByDate[dateStr] && (
           <span title={conflictByDate[dateStr]} className="text-amber-400 ml-auto">⚠</span>
         )}
-        {dotColor && (
+        {complianceStatus === "completed" ? (
+          <span
+            title={compliance[dateStr]?.note}
+            className="badge-pop ml-auto w-4 h-4 rounded-full bg-green-400 text-gray-900 text-[10px] font-bold leading-none flex items-center justify-center shadow-[0_0_8px_rgba(74,222,128,0.8)]"
+          >✓</span>
+        ) : dotColor && (
           <span
             title={compliance[dateStr]?.note}
             className={`w-1.5 h-1.5 rounded-full ml-auto ${dotColor}`}

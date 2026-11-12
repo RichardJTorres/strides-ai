@@ -9,7 +9,6 @@ import DayPanel from "./DayPanel";
 import GenerateModal from "./GenerateModal";
 import { buildGrid, chunkWeeks, dateToStr, rangeLength, splitActivities } from "./grid";
 import MonthGrid from "./MonthGrid";
-import Sidebar from "./Sidebar";
 import type { DateRange, GridProps, Workout } from "./types";
 import { useCalendarData } from "./useCalendarData";
 import WeekModal from "./WeekModal";
@@ -31,10 +30,10 @@ export default function Calendar({ routeParam }: { routeParam?: string | null })
     new Date(today.getFullYear(), today.getMonth(), 1)
   );
   const {
-    prefs, plan, setPlan, activities, compliance, trainingState, toggleBlocked, addRace, removeRace,
+    prefs, plan, setPlan, activities, compliance, trainingState, toggleBlocked, weekStart,
     loading, loadError, prefsError, reload, confirmed, refreshDerived,
   } = useCalendarData(currentMonth);
-  // Streak and quests are computed from the plan and activities, so refetch when the plan changes.
+  // The streak is computed from the plan and activities, so refetch when the plan changes.
   const progressKey = useMemo(() => ({ plan, confirmed }), [plan, confirmed]);
   const progress = useProgress(progressKey).data;
   // First day of the week whose breakdown is open.
@@ -48,11 +47,11 @@ export default function Calendar({ routeParam }: { routeParam?: string | null })
   useEffect(() => {
     if (!selectedDate) return;
     setCurrentMonth(month =>
-      buildGrid(month).some(c => c.dateStr === selectedDate)
+      buildGrid(month, weekStart).some(c => c.dateStr === selectedDate)
         ? month
         : new Date(Number(selectedDate.slice(0, 4)), Number(selectedDate.slice(5, 7)) - 1, 1)
     );
-  }, [selectedDate]);
+  }, [selectedDate, weekStart]);
   // A failed drag-to-move (the grid is rolled back).
   const [moveError, setMoveError] = useState<string | null>(null);
   // Bumped on every selection so the day panel remounts (and so resets) even for the same day.
@@ -184,7 +183,7 @@ export default function Calendar({ routeParam }: { routeParam?: string | null })
     selectDate(todayStr);
   };
 
-  const weeks = chunkWeeks(buildGrid(currentMonth));
+  const weeks = chunkWeeks(buildGrid(currentMonth, weekStart));
   const rangeDays = range ? rangeLength(range) : 0;
   const selectedWorkout = selectedDate ? plan[selectedDate] : null;
 
@@ -203,13 +202,6 @@ export default function Calendar({ routeParam }: { routeParam?: string | null })
   return (
     <div className="flex flex-col md:flex-row h-full bg-gray-950 text-gray-100 overflow-hidden">
 
-      <Sidebar
-        prefs={prefs}
-        onGenerate={() => openGenerateModal()}
-        onAddRace={addRace}
-        removeRace={removeRace}
-      />
-
       {/* ── Main column ── */}
       <div className="flex-1 flex min-w-0 min-h-0 overflow-hidden">
       <div className="flex-1 min-w-0 flex flex-col overflow-y-auto">
@@ -227,6 +219,8 @@ export default function Calendar({ routeParam }: { routeParam?: string | null })
               currentMonth={currentMonth}
               setCurrentMonth={setCurrentMonth}
               goToToday={goToToday}
+              onGenerate={() => openGenerateModal()}
+              weekStart={weekStart}
               weeks={weeks}
               grid={grid}
               progress={progress}

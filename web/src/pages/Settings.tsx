@@ -53,6 +53,12 @@ const UNIT_CARDS: { id: UnitSystem; label: string; description: string }[] = [
   { id: "imperial", label: "Imperial", description: "mi, min/mi, mph, ft, lb, fl oz" },
 ];
 
+type WeekStart = "monday" | "sunday";
+const WEEK_START_CARDS: { id: WeekStart; label: string; description: string }[] = [
+  { id: "monday", label: "Monday", description: "Weeks run Monday to Sunday" },
+  { id: "sunday", label: "Sunday", description: "Weeks run Sunday to Saturday" },
+];
+
 const VOICE_OPTIONS: { value: string; label: string; description: string }[] = [
   { value: "", label: "Default", description: "Uses the mode's standard coaching style" },
   { value: "supportive", label: "Supportive", description: "Warm, encouraging, celebrates every win" },
@@ -84,6 +90,34 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
   const units = useUnits();
   const [unitsError, setUnitsError] = useState(false);
   const [modeError, setModeError] = useState(false);
+
+  const [weekStart, setWeekStart] = useState<WeekStart | null>(null);
+  const [weekStartError, setWeekStartError] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/settings")
+      .then((r) => {
+        if (!r.ok) throw new Error(String(r.status));
+        return r.json();
+      })
+      .then((s) => setWeekStart(s.week_start === "sunday" ? "sunday" : "monday"))
+      .catch(() => setWeekStartError(true));
+  }, []);
+
+  async function handleWeekStartChange(next: WeekStart) {
+    setWeekStartError(false);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ week_start: next }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      setWeekStart(next);
+    } catch {
+      setWeekStartError(true);
+    }
+  }
 
   async function handleUnitsChange(next: UnitSystem) {
     setUnitsError(false);
@@ -316,6 +350,48 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
             </div>
             {unitsError && (
               <p className="text-xs text-red-400 mt-2">Couldn't save the unit setting. Try again.</p>
+            )}
+          </section>
+
+          <section>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">
+              Calendar Week Start
+            </h3>
+            <p className="text-xs text-gray-600 mb-3">
+              Which day each row of the Calendar starts on. Training weeks, streaks and ramp are
+              always counted Monday to Sunday.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              {WEEK_START_CARDS.map((card) => {
+                const selected = weekStart === card.id;
+                return (
+                  <button
+                    key={card.id}
+                    onClick={() => handleWeekStartChange(card.id)}
+                    aria-pressed={selected}
+                    className={`text-left p-4 rounded-lg border-2 transition-colors bg-gray-900 ${
+                      selected ? "border-gray-300" : "border-gray-700 hover:border-gray-500"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 mb-1">
+                      <span
+                        className={`font-medium text-sm ${selected ? theme.accentClass : "text-gray-200"}`}
+                      >
+                        {card.label}
+                      </span>
+                      {selected && (
+                        <span className={`ml-auto text-xs ${theme.accentClass}`}>Active</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-500">{card.description}</p>
+                  </button>
+                );
+              })}
+            </div>
+            {weekStartError && (
+              <p className="text-xs text-red-400 mt-2">
+                Couldn't load or save the week start. Try again.
+              </p>
             )}
           </section>
 

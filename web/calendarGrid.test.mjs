@@ -82,3 +82,24 @@ test('weekBreakdown and rangeLength', () => {
   assert.equal(grid.rangeLength({ start: '2026-11-10', end: '2026-11-10' }), 1);
   assert.equal(grid.rangeLength({ start: '2026-10-30', end: '2026-11-02' }), 4); // across DST end
 });
+
+test('buildGrid can start weeks on Sunday', () => {
+  const nov = grid.buildGrid(new Date(2026, 10, 1), 'sunday'); // November 2026 starts on a Sunday
+  assert.equal(nov[0].dateStr, '2026-11-01'); // no padding
+  assert.equal(nov.length, 35);
+  const oct = grid.buildGrid(new Date(2026, 9, 1), 'sunday'); // October 2026 starts on a Thursday
+  assert.equal(oct[0].dateStr, '2026-09-27'); // the Sunday before
+  for (const week of grid.chunkWeeks(oct)) {
+    assert.equal(week[0].date.getDay(), 0);
+    assert.equal(week[6].date.getDay(), 6);
+  }
+});
+
+test('isPerfectWeek needs every scored workout completed as planned', () => {
+  const w = (completed, modified = 0, missed = 0, upcoming = 0) => ({ completed, modified, missed, upcoming });
+  assert.equal(grid.isPerfectWeek(w(4)), true);
+  assert.equal(grid.isPerfectWeek(w(0)), false); // nothing scored
+  assert.equal(grid.isPerfectWeek(w(3, 1)), false); // shortened
+  assert.equal(grid.isPerfectWeek(w(3, 0, 1)), false); // missed
+  assert.equal(grid.isPerfectWeek(w(3, 0, 0, 1)), false); // still to come
+});

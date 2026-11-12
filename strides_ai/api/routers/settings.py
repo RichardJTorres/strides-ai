@@ -18,6 +18,7 @@ class SettingsBody(BaseModel):
     provider: str | None = None
     model: str | None = None
     unit_system: str | None = None
+    week_start: str | None = None
 
 
 def _settings_payload(session: Session) -> dict:
@@ -25,6 +26,7 @@ def _settings_payload(session: Session) -> dict:
         "mode": crud.get(session, "mode", "running"),
         "provider": crud.get(session, "provider", get_settings().provider),
         "unit_system": crud.get_unit_system(session).value,
+        "week_start": crud.get_week_start(session),
     }
 
 
@@ -63,6 +65,12 @@ def put_settings(
             )
         # No backend re-init needed: the system prompt is rebuilt from settings every turn.
         crud.set(session, crud.UNIT_SYSTEM_KEY, body.unit_system)
+    if body.week_start is not None:
+        if body.week_start not in crud.WEEK_STARTS:
+            raise HTTPException(
+                status_code=400, detail=f"week_start must be one of {sorted(crud.WEEK_STARTS)}"
+            )
+        crud.set(session, crud.WEEK_START_KEY, body.week_start)
     if body.mode is not None or body.provider is not None or body.model is not None:
         init_backend(request.app, mode=body.mode, provider=body.provider)
     return _settings_payload(session)

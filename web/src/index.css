@@ -87,3 +87,16 @@ html, body {
 .coach-message a:hover {
   text-decoration-color: var(--accent, #4ade80);
 }
+
+/* Calendar: the badge on a day completed as planned pops in once. */
+@keyframes badge-pop {
+  0% { transform: scale(0); opacity: 0; }
+  60% { transform: scale(1.35); opacity: 1; }
+  100% { transform: scale(1); }
+}
+.badge-pop {
+  animation: badge-pop 0.45s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .badge-pop { animation: none; }
+}
