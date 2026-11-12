@@ -156,11 +156,10 @@ ANTHROPIC_API_KEY=sk-ant-...
 CLAUDE_MODEL=claude-opus-4-6
 ```
 
-Set `CLAUDE_THINKING_BUDGET` (default `3000`, `0` turns it off, minimum `1024`) to bound how many
-tokens of extended thinking the coach may use per chat request. It is a target, not a hard cap, and
-thinking counts against the per-round `output_tokens` limit (default 10000, which `CHAT_LIMITS` can
-only lower). If the budget leaves under 1024 tokens for the reply, thinking is switched off for that
-request.
+Set `CLAUDE_THINKING_EFFORT` (`off`, `low`, `medium` default, or `high`) to control how hard the
+coach thinks per chat request (adaptive thinking plus the API's effort setting). Thinking counts
+against the per-round `output_tokens` limit (default 10000, which `CHAT_LIMITS` can only lower), and a
+round with under 4000 output tokens left skips thinking so the reply still fits.
 
 Nutrition analysis uses `claude-haiku-4-5` for fast, cost-effective structured output regardless of the `CLAUDE_MODEL` setting.
 
