@@ -28,6 +28,8 @@ export default function DayCell({ cell, grid }: { cell: GridCell; grid: GridProp
   const complianceStatus = day?.status;
   const dotColor = complianceStatus ? COMPLIANCE_DOT_COLORS[complianceStatus] : undefined;
 
+  const isMissed = (id: number) => entries.find(e => e.id === id)?.kind === "workout" && compliance[id]?.status === "missed";
+
   // What a screen reader hears for the cell: the day and everything marked on it.
   const label = [
     formatDate(dateStr, "weekday"),
@@ -85,6 +87,9 @@ export default function DayCell({ cell, grid }: { cell: GridCell; grid: GridProp
         complianceStatus === "completed" && !inRange && !isSelected
           ? "border-green-500/50 bg-gradient-to-br from-green-500/20 to-transparent shadow-[0_0_12px_-3px_rgba(74,222,128,0.5)]"
           : "",
+        complianceStatus === "missed" && !inRange && !isSelected
+          ? "miss-shake border-red-500/50 bg-gradient-to-br from-red-500/15 to-transparent"
+          : "",
         isBlocked ? "opacity-40" : "",
         !cell.inCurrentMonth ? "opacity-55" : "",
         "bg-gray-800/20",
@@ -103,6 +108,11 @@ export default function DayCell({ cell, grid }: { cell: GridCell; grid: GridProp
             title={day?.note}
             className="badge-pop ml-auto w-4 h-4 rounded-full bg-green-400 text-gray-900 text-[10px] font-bold leading-none flex items-center justify-center shadow-[0_0_8px_rgba(74,222,128,0.8)]"
           >✓</span>
+        ) : complianceStatus === "missed" ? (
+          <span
+            title={day?.note}
+            className="ml-auto w-4 h-4 rounded-full bg-red-500/90 text-gray-900 text-[10px] font-bold leading-none flex items-center justify-center shadow-[0_0_8px_rgba(248,113,113,0.6)]"
+          >✗</span>
         ) : dotColor && (
           <span
             title={day?.note}
@@ -136,8 +146,9 @@ export default function DayCell({ cell, grid }: { cell: GridCell; grid: GridProp
               setDragFrom(entry.id);
             }}
             onDragEnd={() => { setDragFrom(null); setDragOver(null); }}
-            className={`hidden md:block text-xs px-1 py-0.5 rounded border truncate mb-0.5 cursor-grab active:cursor-grabbing ${dragFrom === entry.id ? "opacity-40" : ""} ${WORKOUT_COLORS[entry.workout_type] ?? FALLBACK_WORKOUT_COLOR}`}>
+            className={`hidden md:block text-xs px-1 py-0.5 rounded border truncate mb-0.5 cursor-grab active:cursor-grabbing ${dragFrom === entry.id ? "opacity-40" : ""} ${isMissed(entry.id) ? "line-through decoration-red-400/70 opacity-70" : ""} ${WORKOUT_COLORS[entry.workout_type] ?? FALLBACK_WORKOUT_COLOR}`}>
             {matched && "✓ "}
+            {isMissed(entry.id) && <span aria-hidden="true">💔 </span>}
             {label}
             {matched ? (
               <span className="ml-1 opacity-90">

@@ -164,7 +164,7 @@ export default function Calendar({ routeParam }: { routeParam?: string | null })
 
   const grid: GridProps = {
     plan, activities, compliance, prefs, trainingState, todayStr, selectedDate, range,
-    conflictByDate, dragFrom, dragOver, setDragFrom, setDragOver, movePending, handleDayClick,
+    maxMisses: progress?.streak.max_misses ?? null, conflictByDate, dragFrom, dragOver, setDragFrom, setDragOver, movePending, handleDayClick,
     activateDay, moveWorkout, openWeek: setSelectedWeek,
   };
 

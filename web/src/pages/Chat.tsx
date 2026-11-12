@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Mode, ThemeConfig } from "../App";
@@ -53,6 +53,8 @@ interface Props {
 
 const SCROLL_KEY = "chat_scroll";
 const PAGE_SIZE = 40;
+const MIN_INPUT_HEIGHT = 52;
+const MAX_INPUT_HEIGHT = 200; // about 7 lines, then the box scrolls
 
 function TypingIndicator() {
   return (
@@ -552,14 +554,17 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
     setPreviewUrls((prev) => prev.filter((_, i) => i !== index));
   }
 
-  function autoResize() {
+  // Grow with the content up to MAX_INPUT_HEIGHT, then scroll. Runs on every value change, so
+  // typing, a prefilled draft, a restored draft and clearing after send all resize the same way.
+  useLayoutEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = "0px";
-    const newHeight = Math.min(el.scrollHeight, 200);
-    el.style.height = newHeight + "px";
-    el.style.overflowY = el.scrollHeight > 200 ? "auto" : "hidden";
-  }
+    el.style.height = "auto";
+    // scrollHeight excludes the border; the box is border-box.
+    const full = el.scrollHeight + (el.offsetHeight - el.clientHeight);
+    el.style.height = Math.max(MIN_INPUT_HEIGHT, Math.min(full, MAX_INPUT_HEIGHT)) + "px";
+    el.style.overflowY = full > MAX_INPUT_HEIGHT ? "auto" : "hidden";
+  }, [input]);
 
   function isNearBottom() {
     const el = scrollContainerRef.current;
@@ -592,6 +597,10 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
 
     // Track blob URLs embedded in the message; revoke on unmount
     snapshotUrls.forEach((u) => { if (u) blobUrlsInMessagesRef.current.push(u); });
+
+    // The text leaves the box as soon as it is sent; it comes back if the server refuses it.
+    setInput("");
+    let admitted = false;
 
     setSendError("");
     setSavedMemories([]);
@@ -631,16 +640,13 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
       });
 
       if (!handleChatAdmission(res, () => {
-        setInput("");
+        admitted = true;
         setAttachedFiles([]);
         setPreviewUrls([]);
         setAttachedActivities([]);
-        if (textareaRef.current) {
-          textareaRef.current.style.height = "52px";
-          textareaRef.current.style.overflowY = "hidden";
-        }
       }, (error) => {
         setMessages((prev) => prev.slice(0, assistantIndex - 1));
+        setInput(text);
         setSendError(error);
       })) return;
       if (!res.body) throw new Error("Request failed");
@@ -716,6 +722,7 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
       }
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") return;
+      if (!admitted) setInput((cur) => cur || text);
       setMessages((prev) =>
         prev.map((m, i) =>
           i === assistantIndex ? { ...m, content: "_Error: could not reach the server._" } : m
@@ -968,16 +975,16 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
 
             <textarea
               ref={textareaRef}
+              rows={1}
               value={input}
               onChange={(e) => {
                 setInput(e.target.value);
-                autoResize();
               }}
               onKeyDown={onKeyDown}
               placeholder="Message your coach…"
               disabled={streamingIndex !== null}
               className={`block w-full resize-none rounded-2xl bg-gray-800 border border-gray-700/60 py-3.5 pr-12 sm:pr-14 text-[15px] text-gray-100 placeholder-gray-500 max-sm:placeholder:text-sm placeholder:whitespace-nowrap focus:outline-none focus:ring-1 ${theme.accentFocus} disabled:opacity-50 transition-colors leading-relaxed ${supportsAttachments ? "pl-20 sm:pl-[5.5rem]" : "px-4"}`}
-              style={{ minHeight: "52px", height: "52px", overflowY: "hidden" }}
+              style={{ minHeight: MIN_INPUT_HEIGHT }}
             />
 
             {/* Left-side attach buttons — grouped in a flex row so spacing stays

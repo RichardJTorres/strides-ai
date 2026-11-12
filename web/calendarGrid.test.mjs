@@ -121,3 +121,10 @@ test('isPerfectWeek needs every scored workout completed as planned', () => {
   assert.equal(grid.isPerfectWeek(w(3, 0, 1)), false); // missed
   assert.equal(grid.isPerfectWeek(w(3, 0, 0, 1)), false); // still to come
 });
+
+test('weekLives spends one heart per miss and loses the week past the allowance', () => {
+  assert.deepEqual(grid.weekLives(0, 1), { left: 1, spent: 0, lost: false });
+  assert.deepEqual(grid.weekLives(1, 1), { left: 0, spent: 1, lost: false });
+  assert.deepEqual(grid.weekLives(2, 1), { left: 0, spent: 1, lost: true });
+  assert.deepEqual(grid.weekLives(1, 2), { left: 1, spent: 1, lost: false });
+});

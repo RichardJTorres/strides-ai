@@ -118,6 +118,13 @@ export function isPerfectWeek(w: { completed: number; modified: number; missed: 
   return w.completed > 0 && w.modified === 0 && w.missed === 0 && w.upcoming === 0;
 }
 
+/** The streak allows `maxMisses` misses a week: each is a heart. Misses spend them; one past
+ *  the last heart loses the week. */
+export function weekLives(missed: number, maxMisses: number): { left: number; spent: number; lost: boolean } {
+  const spent = Math.min(missed, maxMisses);
+  return { left: maxMisses - spent, spent, lost: missed > maxMisses };
+}
+
 /** "3 as planned · 1 shortened · 1 missed" — only the non-zero parts. "Done" elsewhere means
  *  completed + shortened; "shortened" is the UI name for the API status `modified`. */
 export function weekBreakdown(w: { completed: number; modified: number; missed: number }): string {

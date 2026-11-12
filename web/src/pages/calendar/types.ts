@@ -159,6 +159,8 @@ export interface GridProps {
   prefs: Prefs;
   trainingState: TrainingState | null;
   todayStr: string;
+  /** Misses a week the plan streak forgives (from /api/progress); null until loaded. */
+  maxMisses: number | null;
   selectedDate: string | null;
   range: DateRange | null;
   /** First hard conflict (blocked day / race day) per date, for the ⚠ badge. */
