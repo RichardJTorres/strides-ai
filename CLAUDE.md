@@ -153,7 +153,7 @@ Incremental by default — stops at the first activity ID already in the DB. Ful
 | `OLLAMA_MODEL` | `PROVIDER=ollama` |
 | `OLLAMA_HOST` | `PROVIDER=ollama` (default: `http://localhost:11434`) |
 | `CLAUDE_MODEL` | Optional; defaults to `claude-sonnet-4-6` |
-| `CLAUDE_THINKING_BUDGET` | Optional; chat thinking tokens per request, default `3000`, `0` = off |
+| `CLAUDE_THINKING_EFFORT` | Optional; `off` / `low` / `medium` (default) / `high` — chat thinking effort |
 | `GEMINI_MODEL` | Optional; defaults to `gemini-2.0-flash` |
 | `PORT` | Optional; defaults to `8000` |
 

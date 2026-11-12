@@ -3,6 +3,7 @@
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings
 
@@ -19,9 +20,9 @@ class Settings(BaseSettings):
     ollama_model: str = ""
     ollama_host: str = "http://localhost:11434"
 
-    # Claude extended-thinking allowance per request, in tokens. 0 turns thinking off; values
-    # under 1024 (the API minimum) also turn it off. It counts against the per-round output cap.
-    claude_thinking_budget: int = 3000
+    # How hard Claude thinks on chat turns: off | low | medium | high (adaptive thinking plus the
+    # API's effort setting). Thinking counts against the per-round output cap.
+    claude_thinking_effort: Literal["off", "low", "medium", "high"] = "medium"
 
     # JSON overrides keyed by default, provider, or provider/model label.
     chat_limits: dict[str, dict[str, int]] = {}

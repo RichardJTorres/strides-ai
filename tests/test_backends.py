@@ -74,32 +74,40 @@ def test_claude_stream_turn_text(mock_anthropic):
     assert memories == []
 
 
-@pytest.mark.parametrize(
-    "budget, expected",
-    [
-        (3000, {"type": "enabled", "budget_tokens": 3000}),
-        (0, {"type": "disabled"}),
-        (500, {"type": "disabled"}),  # below the API minimum
-        (8976, {"type": "enabled", "budget_tokens": 8976}),  # exactly 1024 left for the reply
-        (8977, {"type": "disabled"}),  # no room left for the reply
-    ],
-)
-def test_claude_stream_turn_bounds_thinking(mock_anthropic, monkeypatch, budget, expected):
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+def test_claude_stream_turn_uses_adaptive_thinking(mock_anthropic, monkeypatch, effort):
     # Reasoning tokens count against the per-round output cap and can starve the reply.
+    kwargs = _claude_thinking_kwargs(mock_anthropic, monkeypatch, effort)
+    assert kwargs["thinking"] == {"type": "adaptive"}
+    assert kwargs["output_config"] == {"effort": effort}
+    assert kwargs["max_tokens"] == 10000
+
+
+def test_claude_stream_turn_thinking_off(mock_anthropic, monkeypatch):
+    kwargs = _claude_thinking_kwargs(mock_anthropic, monkeypatch, "off")
+    assert kwargs["thinking"] == {"type": "disabled"}
+    assert "output_config" not in kwargs
+
+
+def test_claude_stream_turn_skips_thinking_when_little_output_left(mock_anthropic, monkeypatch):
+    from strides_ai.budget import Limits
+    from strides_ai.backends.base import BaseBackend
+
+    monkeypatch.setattr(BaseBackend, "limits", property(lambda _: Limits(output_tokens=3000)))
+    kwargs = _claude_thinking_kwargs(mock_anthropic, monkeypatch, "medium")
+    assert kwargs["thinking"] == {"type": "disabled"}
+
+
+def _claude_thinking_kwargs(mock_anthropic, monkeypatch, effort):
     from strides_ai import config
-
-    monkeypatch.setattr(
-        config, "get_settings", lambda: config.Settings(claude_thinking_budget=budget)
-    )
-    mock_anthropic.return_value.messages.stream.return_value = _claude_stream(["ok"])
-
     from strides_ai.backends.claude import ClaudeBackend
 
+    monkeypatch.setattr(
+        config, "get_settings", lambda: config.Settings(claude_thinking_effort=effort)
+    )
+    mock_anthropic.return_value.messages.stream.return_value = _claude_stream(["ok"])
     ClaudeBackend("key", []).stream_turn("sys", "hi", _collect()[0])
-
-    kwargs = mock_anthropic.return_value.messages.stream.call_args.kwargs
-    assert kwargs["thinking"] == expected
-    assert kwargs["max_tokens"] == 10000
+    return mock_anthropic.return_value.messages.stream.call_args.kwargs
 
 
 def test_claude_stream_turn_appends_history(mock_anthropic):
