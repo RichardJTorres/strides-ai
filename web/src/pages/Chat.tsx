@@ -4,8 +4,9 @@ import remarkGfm from "remark-gfm";
 import type { Mode, ThemeConfig } from "../App";
 import { handleChatAdmission } from "./chatAdmission";
 import { formatSyncFreshness } from "./syncFreshness";
+import NewRecordBanner from "../progress/NewRecordBanner";
 import ProposalCards, { type ProfileProposal } from "./profile/ProposalCards";
-import { PENDING_CHAT_ACTIVITY_KEY, PENDING_CHAT_DRAFT_KEY } from "./chatActivityHandoff";
+import { PENDING_CHAT_DRAFT_KEY, takeActivityHandoff } from "./chatActivityHandoff";
 
 interface Message {
   id?: number;
@@ -303,16 +304,8 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
   // Chat remounts on mode change (key={mode} in App.tsx), so this only needs
   // to run once per mount — consume and clear immediately so it never re-fires.
   useEffect(() => {
-    const pendingId = sessionStorage.getItem(PENDING_CHAT_ACTIVITY_KEY);
-    if (!pendingId) return;
-    sessionStorage.removeItem(PENDING_CHAT_ACTIVITY_KEY);
-    fetch("/api/activities")
-      .then((r) => r.json())
-      .then((rows: PickerActivity[]) => {
-        const match = rows.find((a) => a.id === Number(pendingId));
-        if (match) attachActivity(match);
-      })
-      .catch(() => {/* handoff is best-effort */});
+    const pending = takeActivityHandoff();
+    if (pending) attachActivity(pending);
   }, []);
 
   // A drafted message from Analytics (e.g. "apply this recommendation to my plan"): prefill the
@@ -738,6 +731,7 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
 
   return (
     <div className="flex flex-col h-full bg-gray-950 relative">
+      <NewRecordBanner mode={mode} />
       {/* Search toggle button */}
       <button
         onClick={() => setSearchOpen((o) => !o)}

@@ -212,11 +212,17 @@ export default function App() {
           />
         )}
         {tab === "activities" && (
-          <Activities mode={mode} theme={theme} lastSyncAt={lastSyncAt} onSynced={refreshStatus} />
+          <Activities
+            mode={mode}
+            theme={theme}
+            lastSyncAt={lastSyncAt}
+            onSynced={refreshStatus}
+            routeParam={route.param}
+          />
         )}
         {tab === "analytics" && (
           <Suspense fallback={<div role="status" className="p-6 text-gray-400">Loading analytics…</div>}>
-            <Charts mode={mode} theme={theme} />
+            <Charts mode={mode} theme={theme} routeParam={route.param} />
           </Suspense>
         )}
         {tab === "calendar" && <Calendar routeParam={route.param} />}

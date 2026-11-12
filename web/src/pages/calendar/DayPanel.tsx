@@ -4,7 +4,7 @@ import Button from "../../ui/Button";
 import { formatDate, formatDuration } from "../../ui/format";
 import { Notice } from "../../ui/states";
 import { climbLabel, plannedClimbRate } from "../activityLabels";
-import { PENDING_CHAT_ACTIVITY_KEY, PENDING_CHAT_DRAFT_KEY } from "../chatActivityHandoff";
+import { PENDING_CHAT_DRAFT_KEY, handOffActivity } from "../chatActivityHandoff";
 import ActivityCard from "./ActivityCard";
 import {
   DAY_NAMES, EMPTY_FORM, FALLBACK_WORKOUT_COLOR, INTENSITIES, NO_DISTANCE_WORKOUT_TYPES,
@@ -297,10 +297,8 @@ export default function DayPanel({
           ? `How did ${what} go compared with the plan, and should anything change this week?`
           : `Tell me about ${what}: what is it for, and how should I approach it?`,
       );
-      if (selectedSplit.matched) {
-        sessionStorage.setItem(PENDING_CHAT_ACTIVITY_KEY, String(selectedSplit.matched.id));
-      }
     } catch { /* best-effort handoff */ }
+    if (selectedSplit.matched) handOffActivity(selectedSplit.matched);
     navigate("chat");
   };
 

@@ -43,6 +43,7 @@ export interface Activity {
   avg_pace_s_per_km: number | null;
   avg_hr: number | null;
   sport_type: string;
+  deep_dive_report?: string | null;
 }
 
 export interface NutritionData {
