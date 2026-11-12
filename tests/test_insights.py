@@ -143,6 +143,23 @@ def test_race_and_compliance_context():
     assert "race_soon" in {f["id"] for f in digest["flags"]}
 
 
+def test_compliance_is_scored_against_every_sport_not_just_the_mode():
+    # In running mode `rows` holds runs only; a planned ride done by a ride must not read as missed.
+    plan = [{"date": "2026-05-30", "workout_type": "Long Ride", "distance_km": 50}]
+    runs = steady_rows()
+    ride = run_row(9000, date(2026, 5, 30), sport_type="Ride", distance_m=50_000)
+    args = (runs, "running", UnitSystem.METRIC, TODAY)
+    mode_only = build_digest(*args, plan_rows=plan)["context"]["compliance"]
+    assert (mode_only["completed"], mode_only["missed"]) == (0, 1)
+    scored = build_digest(*args, plan_rows=plan, compliance_rows=runs + [ride])
+    assert scored["context"]["compliance"]["completed"] == 1
+    assert scored["context"]["compliance"]["missed"] == 0
+    # ...and the cached readout goes stale when another sport's activity arrives.
+    assert digest_fingerprint(*args, compliance_rows=runs) != digest_fingerprint(
+        *args, compliance_rows=runs + [ride]
+    )
+
+
 def test_fingerprint_changes_on_new_activity_units_and_week():
     rows = steady_rows()
     base = digest_fingerprint(rows, "running", UnitSystem.METRIC, TODAY)

@@ -126,6 +126,12 @@ The Analytics page (formerly Charts; legacy `#charts` hashes still resolve) has 
 
 `GET /api/charts/insights` returns the live digest + cached report + `stale` (never calls the LLM); `POST` generates (`?force=true` to bypass a fresh cache). The cache lives in the `settings` table under `charts_insights:{mode}:{unit_system}` and is invalidated by `digest_fingerprint` (activity count/latest id/date, unit system, ISO week). ATL/CTL are distance-based, so the load flag uses the ATL/CTL ratio rather than a TSB threshold.
 
+### Progress: streak, quests, records (`strides_ai/progress.py`)
+
+`GET /api/progress` is computed on read (nothing stored, no mode parameter) from every planned workout and every activity; `build_progress(plan_rows, activity_rows, today, units)` is pure. Weeks are Monday–Sunday. **Streak:** a week is hit when at least one scored plan day was done (completed or shortened) and at most `MAX_MISSES` (1) was missed; weeks with nothing scored pause it, more than two paused weeks in a row end it, and the in-progress week never counts (`this_week.status` says where it is heading). **Quests:** this week's Long / Tempo+Intervals / Rest days; a Rest day is only broken by a run or ride with distance. **Records:** per sport (`run`, `ride`, `lift`), only once that sport has 6 activities and 28 days of history; ties go to the earliest; no pace records (Strava best efforts aren't fetched).
+
+Plan compliance has one entry point, `compliance.compliance_for_range(...)`, and always takes **all** activities, never a mode-filtered list — the plan is shared across modes, so filtering would turn a completed planned ride into "missed" in running mode. The coach, Calendar, Insights digest and progress all go through it.
+
 ### Strava sync (`strides_ai/sync.py`)
 
 Incremental by default — stops at the first activity ID already in the DB. Full sync re-fetches all pages. Cadence is doubled (Strava sends half-cadence). Pace derived: `moving_time_s / (distance_m / 1000)`. OAuth2 in `auth.py` — tokens stored in `~/.strides_ai/token.json`, auto-refreshed.

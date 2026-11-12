@@ -112,11 +112,14 @@ def _memories_section(memories: list[dict]) -> str:
 def _compliance_section(activities: list[dict], units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
     today = datetime.now().date()
     start = today - timedelta(days=COMPLIANCE_WINDOW_DAYS)
-    planned = compliance.planned_workouts_from_rows(
-        db.get_training_plan(start.isoformat(), today.isoformat())
+    days = compliance.compliance_for_range(
+        db.get_training_plan(start.isoformat(), today.isoformat()),
+        activities,
+        start,
+        today,
+        today,
+        units,
     )
-    acts = compliance.compliance_activities_from_rows(activities)
-    days = compliance.compute_range_compliance(planned, acts, today, units)
     summary = compliance.summarize_compliance(days)
     if summary.total_scored == 0:
         return ""
@@ -159,11 +162,11 @@ def _training_state_section(
     plan_rows, prefs = db.get_training_plan(), db.get_calendar_prefs()
     state = build_training_state(rows, plan_rows, prefs, mode, units, today)
     text = render_for_prompt(state, units)
-    readout = _dashboard_readout(rows, plan_rows, prefs, mode, units, today)
+    readout = _dashboard_readout(rows, plan_rows, prefs, mode, units, today, activities)
     return f"{text}\n\n{readout}" if readout else text
 
 
-def _dashboard_readout(rows, plan_rows, prefs, mode, units, today) -> str:
+def _dashboard_readout(rows, plan_rows, prefs, mode, units, today, all_rows) -> str:
     """The athlete's Analytics insights card, when it is still fresh, so the coach and the
     dashboard give consistent advice. Stale or missing readouts are omitted, never guessed."""
     import json
@@ -176,7 +179,7 @@ def _dashboard_readout(rows, plan_rows, prefs, mode, units, today) -> str:
     except json.JSONDecodeError:
         return ""
     if not cached or cached.get("fingerprint") != digest_fingerprint(
-        rows, mode, units, today, plan_rows, prefs
+        rows, mode, units, today, plan_rows, prefs, all_rows
     ):
         return ""
     report = cached.get("report") or {}
