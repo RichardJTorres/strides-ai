@@ -187,6 +187,20 @@ def active_turn(mode: str = "running", session: Session = Depends(get_session)) 
     return {"turn": result}
 
 
+@router.get("/chat/turns/{turn_id}/budget")
+def turn_budget(turn_id: int, session: Session = Depends(get_session)) -> dict:
+    """What a turn sent, how long it took and why it stopped. Sizes and timings, no content."""
+    row = session.get(chat_turns.ChatTurn, turn_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="No such chat turn")
+    return {
+        "turn_id": row.id,
+        "mode": row.mode,
+        "status": row.status,
+        "budget": chat_turns.budget(row),
+    }
+
+
 @router.get("/chat/pending")
 def pending_turns(session: Session = Depends(get_session)) -> dict:
     """Modes with a reply in progress or waiting to be seen (drives the Chat tab dot)."""

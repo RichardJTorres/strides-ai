@@ -419,22 +419,27 @@ def build_system(
         f"## Recent Activities\nACTIVITY {build_training_log([a], mode, units)}" for a in recent
     ]
     periods = [(str(a.get("date") or "unknown")[:10],) for a in recent]
+    # Section names for the per-turn record; they never appear in the prompt.
+    section_keys = [f"activity:{period[0]}" for period in periods]
     if not recent:
         sections.append("## Recent Activities\nNo activities found.")
         periods.append(())
+        section_keys.append("activities:none")
     older = (activities or [])[RECENT_ACTIVITIES_IN_SYSTEM:]
     summary = older_activity_summary(older, units=units)
     if summary:
         sections.append(summary)
         dates = [str(a.get("date") or "unknown")[:10] for a in older]
         periods.append((min(dates), max(dates)))
-    for extra in (
-        _compliance_section(activities or [], units),
-        _analysis_guide_section(cfg, recent, units),
+        section_keys.append("older_summary")
+    for key, extra in (
+        ("compliance", _compliance_section(activities or [], units)),
+        ("analysis_guide", _analysis_guide_section(cfg, recent, units)),
     ):
         if extra:
             sections.append(extra)
             periods.append(())
+            section_keys.append(key)
     return ContextPrompt(
         mandatory,
         [
@@ -450,6 +455,16 @@ def build_system(
         ],
         sections,
         periods,
+        priority_keys=[
+            "profile",
+            "memories",
+            "calendar_constraints",
+            "upcoming_workouts",
+            "voice",
+            "training_state",
+            "progress",
+        ],
+        activity_keys=section_keys,
     )
 
 

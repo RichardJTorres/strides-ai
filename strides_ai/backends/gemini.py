@@ -324,6 +324,7 @@ class GeminiBackend(BaseBackend):
                         on_token(f"\n\n*(Rate limit hit — retrying in {_RETRY_DELAY_S}s…)*\n\n")
                         collected_text = ""
                         fc_parts = []
+                        self._budget.record.retry(_RETRY_DELAY_S)
                         event = getattr(self, "cancel_event", None)
                         if event is not None:
                             event.wait(_RETRY_DELAY_S)
@@ -347,6 +348,7 @@ class GeminiBackend(BaseBackend):
                             raise
                         if attempt == self.limits.retries:
                             raise BudgetExceeded("Transport retry limit reached.") from exc
+                        self._budget.record.retry(_RETRY_DELAY_S)
                         event = getattr(self, "cancel_event", None)
                         if event is not None:
                             event.wait(_RETRY_DELAY_S)

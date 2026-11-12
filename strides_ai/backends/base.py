@@ -302,6 +302,17 @@ def _check_proposed_changes(changes: dict, mode: str | None = None) -> list:
         return []
 
 
+def _section_fact(keys: list, index: int, section: str, included: bool) -> dict:
+    """One context section in the per-turn record: sizes only, never the text."""
+    return {
+        "key": keys[index] if index < len(keys) else f"section_{index}",
+        # 0 = sent in full; None = left out of this request.
+        "level": 0 if included else None,
+        "bytes": len(section.encode("utf-8")),
+        "est": estimate(section),
+    }
+
+
 class BaseBackend(ABC):
     """
     A backend wraps one LLM provider and manages its own conversation history.
@@ -333,8 +344,14 @@ class BaseBackend(ABC):
 
     def prepare_turn(self, system, message, attachments=None):
         """Select atomic context by priority; admission never changes the submission."""
+        import time
+
         from ..budget import ContextPrompt
 
+        admission_started = time.monotonic()
+        # A turn starts clean: nothing from an earlier turn on this instance can be stored for it.
+        self._admission = None
+        self._budget = None
         self._check_cancelled()
         if attachments and not self.supports_attachments:
             raise BudgetExceeded(
@@ -367,9 +384,12 @@ class BaseBackend(ABC):
         b = TurnBudget(self.limits)
         submission = self._submission_history(message, attachments)
         optional, activities, periods = [], [], []
+        optional_keys, activity_keys = [], []
         if isinstance(system, ContextPrompt):
             optional, activities = system.priority, system.activities
             periods = system.activity_periods
+            optional_keys = getattr(system, "priority_keys", [])
+            activity_keys = getattr(system, "activity_keys", [])
             system = system.mandatory
         mandatory = system
         selected_optional, selected_activities = [], []
@@ -452,6 +472,30 @@ class BaseBackend(ABC):
         self._retained_activities = sum(
             section.count("\nACTIVITY ") for _, section in selected_activities
         )
+        included_activities = {index for index, _ in selected_activities}
+        self._admission = {
+            "admission_ms": int(round((time.monotonic() - admission_started) * 1000)),
+            "fixed": {
+                "mandatory": estimate(mandatory),
+                "tools": estimate(self._tool_definitions()),
+                "submission": estimate(submission),
+            },
+            "sections": [
+                _section_fact(optional_keys, i, section, i < len(selected_optional))
+                for i, section in enumerate(optional)
+            ]
+            + [
+                _section_fact(activity_keys, i, section, i in included_activities)
+                for i, section in enumerate(activities)
+            ],
+            "history": {
+                "messages": len(self._history),
+                "est": estimate(self._history) if self._history else 0,
+                "dropped": len(history) - len(self._history),
+            },
+            "est_input": b.input_size,
+            "count_kind": b.count_kind,
+        }
         return system
 
     def _submission_history(self, message, attachments):
@@ -485,6 +529,9 @@ class BaseBackend(ABC):
                     raise
                 if attempt == self.limits.retries:
                     raise BudgetExceeded("Transport retry limit reached.") from exc
+                record = getattr(getattr(self, "_budget", None), "record", None)
+                if record is not None:
+                    record.retry(min(2**attempt, 4))
                 event = getattr(self, "cancel_event", None)
                 if event is not None:
                     event.wait(min(2**attempt, 4))

@@ -408,6 +408,21 @@ when available. Structured `chat_budget` logs identify measured versus estimated
 input size, provider/model, retained context counts, rounds, tool executions, and
 stop reason; they do not include prompt or attachment contents.
 
+Each turn also stores a record of what it sent: the size of every context section and whether
+it was sent or left out, the retained history, per-round sizes and timings, retries, and why
+the turn stopped. It holds sizes and timings only, never prompt or reply text. Read it at
+`GET /api/chat/turns/{id}/budget`. A message rejected at admission has no turn, so it is
+logged as one `chat_admission_rejected` JSON line instead.
+
+To see what the coach's context costs for a mode without calling a model or writing to the
+database:
+
+```bash
+.venv/bin/python scripts/context_report.py --mode hybrid
+```
+
+Add `--measure` to let admission call the provider's token-count endpoint, as a live turn does.
+
 ## Dated goals and preferences
 
 In **Memories**, edit a fact's state (**Current**, **Temporary**, or **Superseded**),
