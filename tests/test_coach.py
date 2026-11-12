@@ -5,7 +5,12 @@ from datetime import date, timedelta
 import pytest
 
 from strides_ai import db
-from strides_ai.coach import build_initial_history, build_system, build_training_log
+from strides_ai.coach import (
+    PLAN_CHUNK_RULE,
+    build_initial_history,
+    build_system,
+    build_training_log,
+)
 from strides_ai.modes import (
     CYCLING_SYSTEM_PROMPT,
     HYBRID_SYSTEM_PROMPT,
@@ -465,3 +470,8 @@ def test_build_training_log_hybrid_header_has_type_column():
     log = build_training_log([_make_row()], mode="hybrid")
     header = log.split("\n")[0]
     assert "TYPE" in header
+
+
+def test_build_system_tells_coach_to_chunk_plan_writes():
+    system = build_system("", [], "running", [])
+    assert PLAN_CHUNK_RULE in system

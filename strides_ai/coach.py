@@ -108,6 +108,15 @@ def units_section(units: UnitSystem) -> str:
     )
 
 
+PLAN_CHUNK_RULE = (
+    "## Writing Plans\n"
+    "Each reply has a hard output limit of roughly 4000 tokens, tool-call arguments included. "
+    "When creating or rewriting a training block, make several update_training_plan calls in a "
+    "row, each covering up to 14 workouts (about two weeks), rather than one call for the whole "
+    "block. Keep workout notes short. Briefly summarise afterwards."
+)
+
+
 def _memories_section(memories: list[dict]) -> str:
     return memories_section(memories)
 
@@ -386,6 +395,7 @@ def build_system(
         [
             cfg.system_prompt,
             units_section(units),
+            PLAN_CHUNK_RULE,
             _datetime_section(),
             "Older activity details are excluded. Use only included details and labeled aggregates. "
             "Context sections and periods absent from this request are omitted, not evidence of no training.",
