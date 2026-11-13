@@ -10,6 +10,13 @@ import json
 NOTICE_TEXT = {
     "truncated": "Response cut off at the length limit. Ask me to continue.",
     "limit": "Turn stopped: a size or time limit was reached.",
+    "round_limit": "Turn wrapped up: the limit on tool rounds was reached. Ask me to continue.",
+    "tool_limit": "Turn wrapped up: the limit on tool calls was reached. Ask me to continue.",
+    "output_ceiling": "Turn wrapped up: the limit on generated text was reached. Ask me to continue.",
+    "input_ceiling": "Turn wrapped up: the conversation grew too large for more tool rounds.",
+    "deadline": "Turn stopped: it ran out of time. Ask me to continue.",
+    "retry_limit": "Turn stopped: the provider kept failing. Resend your message to try again.",
+    "provider_error": "Chat failed — resend your message to try again.",
     "failed": "Chat failed — resend your message to try again.",
     "interrupted": "Chat interrupted — resend your message to generate a full response.",
 }

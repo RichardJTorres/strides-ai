@@ -45,7 +45,7 @@ def test_record_tracks_rounds_tools_and_timings():
     result = record.to_dict(total_ms=4000)
 
     assert result["v"] == 1 and result["model"] == "m" and result["total_ms"] == 4000
-    assert result["limits"]["rounds"] == 6
+    assert result["limits"]["tool_rounds"] == 5
     first, second = result["rounds"]
     assert first["n"] == 1 and first["est_input"] == 1200 and first["count_kind"] == "estimated"
     assert first["first_text_ms"] == 250 and first["duration_ms"] == 500
@@ -116,7 +116,7 @@ def test_admission_names_what_was_sent_and_what_was_left_out(mocker):
     backend = ClaudeBackend("fake", [{"role": "user", "content": "orphan"}])
     prompt = ContextPrompt(
         "base instructions",
-        ["profile text", "m" * 100_000, "plan text"],
+        ["profile text", "m" * 600_000, "plan text"],
         ["ACTIVITY one"],
         priority_keys=["profile", "memories", "upcoming_workouts"],
         activity_keys=["activity:2026-01-01"],
@@ -134,7 +134,7 @@ def test_admission_names_what_was_sent_and_what_was_left_out(mocker):
         "activity:2026-01-01": 0,
     }
     memories = next(s for s in admission["sections"] if s["key"] == "memories")
-    assert memories["bytes"] == 100_000 and memories["est"] > 40_000
+    assert memories["bytes"] == 600_000 and memories["est"] > 200_000
     assert all(type(value) is int for value in admission["fixed"].values())
     assert admission["history"] == {"messages": 0, "est": 0, "dropped": 1}
     assert type(admission["admission_ms"]) is int and admission["est_input"] > 0
@@ -168,19 +168,19 @@ def _run_turn(backend, message="hello"):
 
 
 def test_stopped_turn_stores_its_record(adapter, tmp_db, monkeypatch):  # noqa: F811
-    monkeypatch.setattr(BaseBackend, "limits", property(lambda _: Limits(rounds=1)))
+    monkeypatch.setattr(BaseBackend, "limits", property(lambda _: Limits(tool_rounds=1)))
     backend, _ = adapter()
 
     _, status, record = _run_turn(backend)
 
     assert status == "done"
     assert record["model"] == backend.label
-    assert record["stop"]["reason"] == "stopped"
-    assert "Generation limit" in record["stop"]["detail"]
-    assert len(record["rounds"]) == 1 and record["rounds"][0]["tools_run"] == 1
+    assert record["stop"]["reason"] == "round_limit"
+    assert [r["kind"] for r in record["rounds"]] == ["tool", "reply"]
+    assert record["rounds"][0]["tools_run"] == 1 and record["rounds"][1]["tools_run"] == 0
     assert type(record["rounds"][0]["duration_ms"]) is int
     assert type(record["total_ms"]) is int and type(record["admission_ms"]) is int
-    assert record["fixed"]["mandatory"] > 0 and record["limits"]["rounds"] == 1
+    assert record["fixed"]["mandatory"] > 0 and record["limits"]["tool_rounds"] == 1
 
 
 def test_completed_turn_stores_its_record(mocker, tmp_db):

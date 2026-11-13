@@ -37,9 +37,6 @@ def claude_usage(usage) -> Usage:
     )
 
 
-# Below this much remaining output budget a round skips thinking so the reply still fits.
-MIN_THINKING_ROOM = 4000
-
 # Anthropic tool-use format
 SAVE_MEMORY_TOOL = {
     "name": "save_memory",
@@ -152,22 +149,31 @@ class ClaudeBackend(BaseBackend):
     def profile(self):
         return resolve_profile("claude", self._model, self._fetch_profile)
 
-    def _thinking_kwargs(self, oneshot=False):
+    def _thinking_kwargs(self, oneshot=False, max_tokens=None):
         """Thinking settings, as extra messages.stream kwargs, taken from the model's profile.
 
         Newer models think by default and reasoning counts against max_tokens, so an
-        unmanaged default can starve the reply. Chat turns use the configured effort and the
-        lightest setting the model takes when too little output budget is left; one-shot calls
-        want the answer, so they ask for little thinking.
+        unmanaged default can starve the reply. Chat turns use the configured effort, the same
+        on every round (a changed setting would also change what the request cache can reuse);
+        one-shot calls want the answer, so they ask for little thinking. ``max_tokens`` is the
+        request's cap, which a thinking budget must stay under.
         """
         from ..config import get_settings
 
         effort = "low" if oneshot else get_settings().thinking_effort
-        if not oneshot and self._budget.output_remaining < MIN_THINKING_ROOM:
-            effort = "off"
-        return claude_thinking(
-            self.profile, effort, None if oneshot else self._budget.output_remaining
-        )
+        return claude_thinking(self.profile, effort, max_tokens)
+
+    def _timeout(self):
+        """Connect within first_event_s; a stream silent for stream_idle_s is a stall."""
+        return anthropic.Timeout(self.limits.stream_idle_s, connect=self.limits.first_event_s)
+
+    def _add_app_note(self, note: str) -> None:
+        last = self._history[-1] if self._history else None
+        if last and last.get("role") == "user" and isinstance(last.get("content"), list):
+            # Tool results come first in the message, then the note.
+            last["content"] = [*last["content"], {"type": "text", "text": note}]
+        else:
+            super()._add_app_note(note)
 
     def stream_turn(self, system, user_input, on_token, attachments=None):
         if attachments:
@@ -180,47 +186,59 @@ class ClaudeBackend(BaseBackend):
         plan_changes: list[dict] = []
 
         while True:
-            self._before_request(system)
+            plan = self._begin_round(system)
+            # The reply round keeps the tools in the request (so the cached prefix is the same)
+            # and forbids calling them.
+            extra = {"tool_choice": {"type": "none"}} if plan.kind == "reply" else {}
             with self._transport_stream(
                 lambda: self._client.messages.stream(
                     model=self._model,
-                    max_tokens=self._budget.output_remaining,
-                    **self._thinking_kwargs(),
+                    max_tokens=plan.max_tokens,
+                    # Automatic caching: later rounds of a turn read the earlier prefix at a tenth
+                    # of the price. (Verified live: a repeat request and the reply round with
+                    # tool_choice none both read the cache.)
+                    cache_control={"type": "ephemeral"},
+                    **self._thinking_kwargs(max_tokens=plan.max_tokens),
                     system=system,
                     messages=self._history,
                     tools=[SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL, UPDATE_PROFILE_TOOL],
+                    timeout=self._timeout(),
+                    **extra,
                 )
             ) as stream:
-                for chunk in stream.text_stream:
-                    self._check_cancelled()
-                    on_token(chunk)
-                    response_text += chunk
+                # Every event (thinking, tool-argument deltas) checks the deadline, not only text.
+                for event in stream:
+                    self._on_event()
+                    if event.type == "content_block_delta" and event.delta.type == "text_delta":
+                        on_token(event.delta.text)
+                        response_text += event.delta.text
                 final = stream.get_final_message()
 
-            for block in final.content:
-                if getattr(block, "type", "") == "tool_use":
-                    self._budget.output({"name": block.name, "input": block.input})
+            calls = [b for b in final.content if getattr(b, "type", "") == "tool_use"]
+            for block in calls:
+                self._budget.output({"name": block.name, "input": block.input})
             self._budget.usage(claude_usage(getattr(final, "usage", None)))
             self._history.append({"role": "assistant", "content": final.content})
 
-            if final.stop_reason == "max_tokens":
-                self._budget.notice = "truncated"
+            wants_tools = final.stop_reason == "tool_use"
+            if not self._end_round(
+                plan,
+                cut_off=final.stop_reason == "max_tokens",
+                calls=len(calls) if wants_tools else 0,
+            ):
                 break
 
-            if final.stop_reason != "tool_use":
-                break
-
-            tool_results = []
-            for block in final.content:
-                if not (hasattr(block, "type") and block.type == "tool_use"):
-                    continue
-                result = self._run_tool(block.name, block.input, memories_saved, plan_changes)
-                if result is not None:
-                    tool_results.append(
-                        {"type": "tool_result", "tool_use_id": block.id, "content": result}
-                    )
-
-            self._history.append({"role": "user", "content": tool_results})
+            results = [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": self._run_call(
+                        block.name, block.input, memories_saved, plan_changes
+                    ),
+                }
+                for block in calls
+            ]
+            self._history.append({"role": "user", "content": results})
 
         return response_text, memories_saved, plan_changes
 

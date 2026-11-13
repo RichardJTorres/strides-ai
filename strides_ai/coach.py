@@ -114,7 +114,8 @@ PLAN_CHUNK_RULE = (
     "Each reply has a hard output limit, tool-call arguments included. "
     "When creating or rewriting a training block, make several update_training_plan calls in a "
     "row, each covering up to 14 workouts (about two weeks), rather than one call for the whole "
-    "block. Keep workout notes short. Briefly summarise afterwards."
+    "block; a single call may change at most 31 entries (set items plus deleted ids) and a "
+    "larger one is rejected whole. Keep workout notes short. Briefly summarise afterwards."
 )
 
 

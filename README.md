@@ -160,8 +160,8 @@ Set `THINKING_EFFORT` (`off`, `low`, `medium` default, or `high`; `CLAUDE_THINKI
 control how hard the coach thinks per chat request. Each provider maps it to what its model accepts,
 read from the provider's capability API where there is one (`backends/model_profile.py`); a model it
 cannot identify gets no thinking parameter. Thinking counts
-against the per-round `output_tokens` limit (default 10000, which `CHAT_LIMITS` can only lower), and a
-round with under 4000 output tokens left skips thinking so the reply still fits.
+against the per-round `round_max_tokens` limit (16,000 by default, derived from the model; see "Bounded
+coaching turns"), and the effort is the same on every round of a turn.
 
 Nutrition analysis uses `claude-haiku-4-5` for fast, cost-effective structured output regardless of the `CLAUDE_MODEL` setting.
 
@@ -374,12 +374,41 @@ Frontend admission tests: `npm --prefix web test`.
 
 ### Bounded coaching turns
 
-Each chat provider call is limited to 24,000 input tokens and 4,000 output tokens,
-with 12,000 generated tokens (including tool arguments), six generation rounds,
-16 executed tool calls, and at most two transport retries per round. Completed
-memory and calendar writes are retained if a turn stops at a limit; partial text
-and change notifications are returned without another generation call. A stream
-that has already emitted content is not retried.
+Limits follow the model in use. From the model's context window (W) and maximum output (M),
+read from the provider where it has a capability API (`backends/model_profile.py`), a turn gets
+(for a 200k window and 64k output, the numbers in brackets):
+
+| Limit | Default | |
+|---|---|---|
+| `round_max_tokens` | `min(16000, M, W / 4)` | output cap of a tool round, thinking included (16,000) |
+| `reply_reserve` | `min(4000, round_max_tokens / 2)` | output kept back for the closing reply (4,000) |
+| `turn_output_ceiling` | `3 x round_max_tokens + reply_reserve` | all output of a turn (52,000) |
+| `context_target` | `min(60000, (W - round_max_tokens) x 3/4)` | what prompt selection aims for (60,000) |
+| `input_ceiling` | `min(W - round_max_tokens, context_target + turn_output_ceiling + tools x 1500)` | no tool round above this input (136,000) |
+| `tool_rounds` | 5 | tool rounds; one reply round follows |
+| `tools`, `retries`, `history_messages`, `recent_activities` | 16, 2, 40, 30 | |
+| `first_event_s`, `stream_idle_s` | 60, 120 | connect and read timeouts on the provider client |
+| `round_deadline_s`, `reply_deadline_s`, `turn_deadline_s` | 240, 120, 600 | |
+
+A tool round is offered only while tool rounds and tool calls remain, at least
+`round_max_tokens + reply_reserve` of output remains under the ceiling, the estimated input is
+within `input_ceiling`, and `turn_deadline_s` leaves room for a round and a reply. Its
+`max_tokens` is `round_max_tokens`. Otherwise the next request is the **reply round**: tools are
+switched off (`tool_choice` none on Claude and OpenAI, function calling mode NONE on Gemini,
+no `tools` on Ollama), a note after the tool results asks the model to summarise what was done
+and what remains, and `max_tokens` is `min(round_max_tokens, max(remaining, reply_reserve))`.
+The turn ends with the reply, and its stop code is stored as the turn's notice: `round_limit`,
+`tool_limit`, `output_ceiling`, `input_ceiling` or `deadline`. If even that reply would not
+fit the model's window, the turn ends with the receipt of what it saved. A response cut off at
+its token limit (`truncated`) never has its tool calls run, and neither does a reply round's.
+Tool arguments that do not parse are not run: the model is told. Calls skipped at the tool
+limit are answered "Not executed: tool limit reached". Time is checked before every request
+and on every stream event; a stalled stream ends the turn as `deadline`, and repeated transport
+failures as `retry_limit`. Completed writes are always kept and summarised in the receipt.
+
+An `update_training_plan` call may change at most 31 entries (`set` items plus `delete` ids); a
+larger call is rejected whole and the coach is told to split it. Its result lists every created,
+updated and removed id, with at most five warnings or reasons of 200 characters each.
 
 The coach recalls at most 40 messages as complete exchanges and individually
 represents at most 30 recent activities. Older records become deterministic sport
@@ -392,20 +421,23 @@ records or uploads are saved; messages and attachments are never shortened.
 
 Set `CHAT_LIMITS` to a JSON object with overrides keyed by `default`, provider
 (`claude`, `gemini`, `openai`, `ollama`), or the exact backend label shown in chat.
-Keys are `input_tokens`, `output_tokens`, `total_output_tokens`, `context_window`,
-`rounds`, `tools`, `retries`, `history_messages`, and `recent_activities`. Overrides
-may lower defaults; input plus reserved output must fit the configured model
-window. For example:
+Keys are the names above plus `context_window`; the older `output_tokens`,
+`total_output_tokens`, `input_tokens` and `rounds` still work as aliases. Overrides may raise
+or lower a default (values past what the model supports are clamped, with a logged warning),
+and an unknown key or a bad value stops the server at startup. For example:
 
 ```dotenv
-CHAT_LIMITS={"ollama":{"input_tokens":6000,"output_tokens":2000,"context_window":8192}}
+CHAT_LIMITS={"default":{"tool_rounds":3},"ollama":{"round_max_tokens":2000,"context_window":8192}}
 ```
 
-Claude and Gemini use their provider token-count endpoints. Other providers use
-an intentionally conservative UTF-8 byte count plus 10% and framing overhead;
-encoded image payloads are included. Generated output is conservatively charged
-as UTF-8 bytes plus 10%, reconciled upward with reported usage including reasoning
-when available. Structured `chat_budget` logs identify measured versus estimated
+Claude requests ask for automatic prompt caching, so later rounds of a turn read the earlier
+prefix from cache.
+
+Input is estimated from UTF-8 bytes at a static per-model ratio plus framing, an image
+counting a flat 5,000 tokens; after the first round it is built from the provider's own
+usage. The provider's token-count endpoint is only a last resort when admitting a message.
+Generated output is estimated as it streams and replaced by the reported usage, including
+reasoning. Structured `chat_budget` logs identify measured versus estimated
 input size, provider/model, retained context counts, rounds, tool executions, and
 stop reason; they do not include prompt or attachment contents.
 
