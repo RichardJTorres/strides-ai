@@ -216,20 +216,8 @@ class OpenAIBackend(BaseBackend):
                     args = json.loads(tc["arguments"])
                 except json.JSONDecodeError:
                     args = {}
-                if tc["name"] == "save_memory":
-                    result, category, content = self._execute_save_memory(args)
-                    memories_saved.append((category, content))
-                    self._history.append(
-                        {"role": "tool", "tool_call_id": tc["id"], "content": result}
-                    )
-                elif tc["name"] == "update_profile":
-                    result = self._execute_update_profile(args)
-                    self._history.append(
-                        {"role": "tool", "tool_call_id": tc["id"], "content": result}
-                    )
-                elif tc["name"] == "update_training_plan":
-                    result, changes = self._execute_update_training_plan(args)
-                    plan_changes.extend(changes)
+                result = self._run_tool(tc["name"], args, memories_saved, plan_changes)
+                if result is not None:
                     self._history.append(
                         {"role": "tool", "tool_call_id": tc["id"], "content": result}
                     )

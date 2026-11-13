@@ -182,20 +182,8 @@ class ClaudeBackend(BaseBackend):
             for block in final.content:
                 if not (hasattr(block, "type") and block.type == "tool_use"):
                     continue
-                if block.name == "save_memory":
-                    result, category, content = self._execute_save_memory(block.input)
-                    memories_saved.append((category, content))
-                    tool_results.append(
-                        {"type": "tool_result", "tool_use_id": block.id, "content": result}
-                    )
-                elif block.name == "update_profile":
-                    result = self._execute_update_profile(block.input)
-                    tool_results.append(
-                        {"type": "tool_result", "tool_use_id": block.id, "content": result}
-                    )
-                elif block.name == "update_training_plan":
-                    result, changes = self._execute_update_training_plan(block.input)
-                    plan_changes.extend(changes)
+                result = self._run_tool(block.name, block.input, memories_saved, plan_changes)
+                if result is not None:
                     tool_results.append(
                         {"type": "tool_result", "tool_use_id": block.id, "content": result}
                     )
