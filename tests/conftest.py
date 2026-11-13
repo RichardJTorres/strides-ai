@@ -59,3 +59,13 @@ def sample_cycling_activity():
         "perceived_exertion": 6.0,
         "sport_type": "Ride",
     }
+
+
+@pytest.fixture(autouse=True)
+def _fresh_model_profiles():
+    """Profiles are cached for the process; a test must not see another test's."""
+    from strides_ai.backends import model_profile
+
+    model_profile.clear_cache()
+    yield
+    model_profile.clear_cache()

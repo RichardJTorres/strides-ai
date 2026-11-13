@@ -156,8 +156,10 @@ ANTHROPIC_API_KEY=sk-ant-...
 CLAUDE_MODEL=claude-opus-4-6
 ```
 
-Set `CLAUDE_THINKING_EFFORT` (`off`, `low`, `medium` default, or `high`) to control how hard the
-coach thinks per chat request (adaptive thinking plus the API's effort setting). Thinking counts
+Set `THINKING_EFFORT` (`off`, `low`, `medium` default, or `high`; `CLAUDE_THINKING_EFFORT` still works) to
+control how hard the coach thinks per chat request. Each provider maps it to what its model accepts,
+read from the provider's capability API where there is one (`backends/model_profile.py`); a model it
+cannot identify gets no thinking parameter. Thinking counts
 against the per-round `output_tokens` limit (default 10000, which `CHAT_LIMITS` can only lower), and a
 round with under 4000 output tokens left skips thinking so the reply still fits.
 
