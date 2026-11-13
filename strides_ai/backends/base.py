@@ -90,6 +90,28 @@ def update_profile_fields() -> list[str]:
 
 SAVE_MEMORY_CATEGORIES: list[str] = ["goal", "race", "injury", "preference", "training", "other"]
 
+# One update_training_plan call changes at most this many entries (set items plus deleted ids);
+# a larger call is rejected whole and the coach is told to split it. Bounds the call's size, so
+# the result, which lists every id, stays small too.
+MAX_PLAN_OPERATIONS = 31
+# A result names at most this many warnings or rejection reasons, each clipped, then "and N more".
+MAX_RESULT_REASONS = 5
+MAX_REASON_CHARS = 200
+
+
+def bounded_reasons(items) -> str:
+    """Reasons for a tool result, bounded by construction: the first few, each clipped."""
+    items = [str(item) for item in items]
+    shown = [
+        item if len(item) <= MAX_REASON_CHARS else item[: MAX_REASON_CHARS - 1] + "…"
+        for item in items[:MAX_RESULT_REASONS]
+    ]
+    text = "; ".join(shown)
+    if len(items) > MAX_RESULT_REASONS:
+        text += f"; and {len(items) - MAX_RESULT_REASONS} more"
+    return text
+
+
 UPDATE_TRAINING_PLAN_DESCRIPTION = (
     "Create, update, or remove entries on the athlete's training calendar: workouts, races, rest "
     "days, travel. A day can hold several entries. In `set`, an item without `id` creates a new "
@@ -106,6 +128,8 @@ UPDATE_TRAINING_PLAN_DESCRIPTION = (
     "otherwise use, delete or move that entry (send its `id` with a new `date`) rather than "
     "double-booking it. When regenerating a block, `delete` the ids that need to change and `set` "
     "their replacements in the same call. Only one scored workout per sport per day is allowed. "
+    f"A call may change at most {MAX_PLAN_OPERATIONS} entries (`set` items plus `delete` ids); "
+    "a larger call is rejected whole, so split a big block across several calls. "
     "Give `distance` and `elevation` in the athlete's units and say which with `distance_unit` / "
     "`elevation_unit`. " + INDOOR_RIDE_GUIDANCE
 )
@@ -835,14 +859,25 @@ class BaseBackend(ABC):
         self._check_cancelled()
         self._budget.tool(args)
         change_start = len(self._budget.changes)
+        count = sum(
+            len(args.get(key) or []) if isinstance(args.get(key), list) else 0
+            for key in ("set", "delete")
+        )
+        if count > MAX_PLAN_OPERATIONS:
+            return (
+                f"Rejected, no changes made. This call has {count} operations; at most "
+                f"{MAX_PLAN_OPERATIONS} are allowed per call. Send it again as several calls of "
+                f"{MAX_PLAN_OPERATIONS} or fewer (for example one per two weeks).",
+                [],
+            )
         ops, proposed, errors = _plan_ops(args, db.get_training_plan())
         if errors:
-            return "Rejected, no changes made. " + "; ".join(errors), []
+            return "Rejected, no changes made. " + bounded_reasons(errors), []
         violations = _check_proposed_changes(proposed, getattr(self, "mode", None))
         hard = [v for v in violations if v.hard]
         if hard:
             # Nothing is saved: the model gets the reasons and can resubmit a corrected call.
-            reasons = "; ".join(f"{v.date}: {v.detail}" for v in hard)
+            reasons = bounded_reasons(f"{v.date}: {v.detail}" for v in hard)
             return (
                 f"Rejected, no changes made. {reasons} Choose other dates, or ask the athlete "
                 "to unblock the day first.",
@@ -885,7 +920,7 @@ class BaseBackend(ABC):
         summary = ". ".join(parts) if parts else "No changes made."
         warnings = [v for v in violations if not v.hard]
         if warnings:
-            summary += ". Warnings: " + "; ".join(v.detail for v in warnings)
+            summary += ". Warnings: " + bounded_reasons(v.detail for v in warnings)
             summary += " Consider revising the plan to stay within the Training State guardrails."
         return summary, self._budget.changes[change_start:]
 

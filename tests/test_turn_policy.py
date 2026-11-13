@@ -295,3 +295,92 @@ def test_every_stop_code_has_notice_text():
 def test_turn_stop_carries_its_code():
     stop = TurnStop("deadline", "too slow")
     assert stop.code == "deadline" and str(stop) == "too slow"
+
+
+# ── Tool results: bounded by construction, every id kept ──────────────────────
+
+
+def _plan_call(mocker, args, violations=(), created=()):
+    """One update_training_plan call against a stub backend; returns (summary, changes, apply)."""
+    from types import SimpleNamespace
+
+    mocker.patch("strides_ai.backends.base.db.get_training_plan", return_value=[])
+    mocker.patch("strides_ai.backends.base._check_proposed_changes", return_value=list(violations))
+    apply = mocker.patch(
+        "strides_ai.backends.base.db.apply_calendar_changes",
+        return_value={"created": list(created), "updated": [], "deleted": []},
+    )
+    stub = SimpleNamespace(
+        _check_cancelled=lambda: None,
+        _budget=SimpleNamespace(tool=lambda a: None, changes=[]),
+    )
+    summary, changes = BaseBackend._execute_update_training_plan(stub, args)
+    return summary, changes, apply
+
+
+def _workout(day, workout_type):
+    return {"date": f"2026-12-{day:02d}", "workout_type": workout_type, "distance": 5}
+
+
+def test_the_largest_possible_plan_result_stays_small_and_keeps_every_id(mocker):
+    from types import SimpleNamespace
+
+    from strides_ai.backends.base import MAX_PLAN_OPERATIONS
+    from strides_ai.budget import estimate
+    from strides_ai.kinds import WORKOUT_TYPES, display_type
+
+    longest = max(WORKOUT_TYPES, key=lambda t: len(display_type("workout", t, None)))
+    ids = [900_000 + i for i in range(MAX_PLAN_OPERATIONS)]
+    warnings = [
+        SimpleNamespace(hard=False, date="2026-12-01", detail=f"warning {i} " + "w" * 500)
+        for i in range(40)
+    ]
+    args = {"set": [_workout(1 + i % 28, longest) for i in range(MAX_PLAN_OPERATIONS)]}
+    summary, changes, _ = _plan_call(mocker, args, violations=warnings, created=ids)
+
+    assert estimate(summary) < 1_500
+    for entry_id in ids:
+        assert f"[id {entry_id}]" in summary  # nothing that names an entry is ever dropped
+    assert len(changes) == MAX_PLAN_OPERATIONS
+    assert summary.count("warning ") == 5 and "and 35 more" in summary
+
+
+def test_the_largest_rejection_stays_small_too(mocker):
+    from strides_ai.backends.base import MAX_PLAN_OPERATIONS
+    from strides_ai.budget import estimate
+
+    # 31 entries with no date: 31 reasons, five shown.
+    summary, changes, apply = _plan_call(
+        mocker, {"set": [{"workout_type": "Easy Run"} for _ in range(MAX_PLAN_OPERATIONS)]}
+    )
+    assert summary.startswith("Rejected, no changes made.") and "and 26 more" in summary
+    assert estimate(summary) < 1_500 and changes == []
+    apply.assert_not_called()
+
+
+def test_a_call_over_the_operation_limit_is_rejected_whole_with_advice(mocker):
+    from strides_ai.backends.base import MAX_PLAN_OPERATIONS
+
+    args = {
+        "set": [_workout(1 + i % 28, "Easy Run") for i in range(MAX_PLAN_OPERATIONS)],
+        "delete": [1],
+    }
+    summary, changes, apply = _plan_call(mocker, args)
+    assert summary.startswith("Rejected, no changes made.")
+    assert f"{MAX_PLAN_OPERATIONS + 1} operations" in summary and "several calls" in summary
+    assert changes == []
+    apply.assert_not_called()
+    # Exactly the limit is accepted.
+    args = {"set": [_workout(1 + i % 28, "Easy Run") for i in range(MAX_PLAN_OPERATIONS)]}
+    summary, _, apply = _plan_call(mocker, args, created=range(MAX_PLAN_OPERATIONS))
+    assert summary.startswith("Created 31 entr")
+    apply.assert_called_once()
+
+
+def test_the_limit_is_stated_in_the_tool_description_and_the_prompt():
+    from strides_ai.backends.base import MAX_PLAN_OPERATIONS, UPDATE_TRAINING_PLAN_DESCRIPTION
+    from strides_ai.coach import PLAN_CHUNK_RULE
+
+    assert MAX_PLAN_OPERATIONS == 31
+    assert "at most 31 entries" in UPDATE_TRAINING_PLAN_DESCRIPTION
+    assert "at most 31 entries" in PLAN_CHUNK_RULE
