@@ -713,6 +713,9 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
         signal: controller.signal,
       });
 
+      const rejection = res.status === 413
+        ? await res.clone().json().then((body) => (typeof body?.detail === "string" ? body.detail : undefined), () => undefined)
+        : undefined;
       if (!handleChatAdmission(res, () => {
         admitted = true;
         setAttachedFiles([]);
@@ -722,7 +725,7 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
         setMessages((prev) => prev.slice(0, assistantIndex - 1));
         setInput(text);
         setSendError(error);
-      })) return;
+      }, rejection)) return;
       if (!res.body) throw new Error("Request failed");
 
       const reader = res.body.getReader();

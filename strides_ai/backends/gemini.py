@@ -1,5 +1,6 @@
 """Google Gemini backend."""
 
+import json
 import time
 
 from google import genai
@@ -249,13 +250,19 @@ class GeminiBackend(BaseBackend):
         ]
 
     def _count_request(self, system, history, tools):
+        # The Gemini developer API's count_tokens rejects system_instruction and tools (the SDK
+        # raises ValueError, which admission would report as a 413). Count them as leading text
+        # instead: the same words, so the total tracks a real request closely.
+        preamble = f"{system}\n\n{json.dumps(tools, default=str)}"
         try:
             return self._client.models.count_tokens(
                 model=self._model,
-                contents=history,
-                config=types.CountTokensConfig(system_instruction=system, tools=tools),
+                contents=[
+                    types.Content(role="user", parts=[types.Part.from_text(text=preamble)]),
+                    *history,
+                ],
             ).total_tokens
-        except (AttributeError, NotImplementedError):
+        except (AttributeError, NotImplementedError, ValueError):
             return None
         except ClientError as exc:
             if exc.code in (400, 404, 405, 413, 422):
