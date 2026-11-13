@@ -414,10 +414,23 @@ The coach recalls at most 40 messages as complete exchanges and individually
 represents at most 30 recent activities. Older records become deterministic sport
 aggregates: weekly for the preceding 12 weeks, monthly for up to 24 older months,
 and a coarsened earlier bucket. Source conversations and activities are preserved.
-Context is selected in order: mandatory instructions and current submission,
-profile, memories, calendar, recent exchanges, recent activities, older summaries.
-Excluded context is labeled. Oversized submissions receive HTTP 413 before chat
-records or uploads are saved; messages and attachments are never shortened.
+Context is built in two kinds of parts (`context_builder.py`). **Required** parts are never cut:
+base instructions, tool definitions, your message and attachments, the profile, calendar
+constraints, the coaching voice, the training state, workouts in the next 14 days, and protected
+notes (injury, or temporary). If they alone exceed `context_target`, the message is rejected with
+HTTP 413 before anything is saved; the message names the three largest parts and says to shorten
+them or choose a model with a larger window. The smallest supported window is 16,384 tokens.
+**Reducible** parts each have a cap (a share of `context_target`) and may be empty: history 35%
+(newest whole exchanges), recent activities 25% (one table: 30 rows, 15, 7), other notes 15%
+(ranked by category, newest start, newest id), later workouts 10% (to 60 days, 28), the older
+summary 10%, and the analysis guide with streak and plan compliance 5%. Each starts at the
+fullest level within its cap. If the total is still over the target they are cut in a fixed
+order (older summary; activities to 15; history to 20%; workouts to 28 days; notes halved;
+activities to 7; guide and streak; later workouts; history to one exchange, then none; notes;
+activities), which always ends at the required context. Everything left out is labelled in the
+prompt, for example "12 notes omitted". The date and time come last, so the rest of the prompt
+is identical between turns; Claude gets them as a second system block after the cached one.
+Messages and attachments are never shortened.
 
 Set `CHAT_LIMITS` to a JSON object with overrides keyed by `default`, provider
 (`claude`, `gemini`, `openai`, `ollama`), or the exact backend label shown in chat.

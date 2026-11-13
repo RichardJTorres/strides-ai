@@ -1,12 +1,12 @@
 """Coaching system prompt assembly and history utilities."""
 
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import date as date_type, datetime, timedelta
 
 from . import compliance, db
 from .db.calendar import format_goal
 from .db.models import PlanRow
-from .memory_context import memories_section
+from .memory_context import NOTES_HEADER, split_memories
 from .modes import MODES
 from .training_state import build_training_state, render_for_prompt
 from .workout_structure import render_text, structure_from_json
@@ -117,10 +117,6 @@ PLAN_CHUNK_RULE = (
     "block; a single call may change at most 31 entries (set items plus deleted ids) and a "
     "larger one is rejected whole. Keep workout notes short. Briefly summarise afterwards."
 )
-
-
-def _memories_section(memories: list[dict]) -> str:
-    return memories_section(memories)
 
 
 def _compliance_section(activities: list[dict], units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
@@ -250,14 +246,15 @@ def _workout_detail_lines(workout: dict) -> str:
     return out
 
 
-def _upcoming_workouts_section(units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
+def _upcoming_workouts(
+    units: UnitSystem = DEFAULT_UNIT_SYSTEM,
+) -> tuple[str, list[tuple[int, str]]]:
+    """The planned-workout table up to WORKOUT_DETAIL_DAYS out ("" when there are none), and the
+    rows beyond it as (days ahead, text), for the part of the prompt that may be cut."""
     upcoming = db.get_upcoming_planned_workouts(days=PLANNED_WORKOUTS_WINDOW_DAYS)
-    if not upcoming:
-        return ""
-    detail_until = (datetime.now().date() + timedelta(days=WORKOUT_DETAIL_DAYS)).isoformat()
-    header = "Id    | Date       | Type             | Distance  | Elevation | Duration | Intensity"
-    sep = "-" * 84
-    rows = []
+    today = datetime.now().date()
+    detail_until = (today + timedelta(days=WORKOUT_DETAIL_DAYS)).isoformat()
+    near, later = [], []
     for w in upcoming:
         m = PlanRow.measure_field(w, "distance_km", units) if w.get("distance_km") else None
         dist = m.formatted if m else "—"
@@ -281,18 +278,27 @@ def _upcoming_workouts_section(units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
         structure = structure_from_json(w.get("structure_json"))
         if structure:
             row += f"\n{'':10s}   structure: {render_text(structure)}"
-        # The athlete's notes and route verdict, for the sessions close enough to discuss.
         if w["date"] <= detail_until:
-            row += _workout_detail_lines(w)
-        rows.append(row)
-    return (
-        f"## Upcoming Planned Workouts (next {PLANNED_WORKOUTS_WINDOW_DAYS} days)\n"
-        + header
-        + "\n"
-        + sep
-        + "\n"
-        + "\n".join(rows)
-    )
+            # The athlete's notes and route verdict, for the sessions close enough to discuss.
+            near.append(row + _workout_detail_lines(w))
+            continue
+        try:
+            ahead = (date_type.fromisoformat(w["date"][:10]) - today).days
+        except ValueError:
+            ahead = PLANNED_WORKOUTS_WINDOW_DAYS
+        later.append((ahead, row))
+    return _upcoming_table(near), later
+
+
+_UPCOMING_HEADER = (
+    "Id    | Date       | Type             | Distance  | Elevation | Duration | Intensity"
+)
+
+
+def _upcoming_table(rows: list[str]) -> str:
+    if not rows:
+        return ""
+    return "\n".join(["## Upcoming Planned Workouts", _UPCOMING_HEADER, "-" * 84, *rows])
 
 
 _WEEK_WORDS = {
@@ -381,14 +387,28 @@ def _analysis_guide_section(cfg, recent: list, units: UnitSystem = DEFAULT_UNIT_
     )
 
 
-def _recent_activities_section(
-    recent: list, mode: str, units: UnitSystem = DEFAULT_UNIT_SYSTEM
-) -> str:
-    log = build_training_log(recent, mode, units)
-    return f"## Recent Activities (last {RECENT_ACTIVITIES_IN_SYSTEM})\n\n```\n{log}\n```"
+def _log_mode(recent: list, mode: str) -> str:
+    """The formatter mode for the whole recent list, so a shorter table keeps the same columns."""
+    cfg = MODES.get(mode, MODES["running"])
+    if cfg.sport_types is not None and not {(r.get("sport_type") or "") for r in recent}.issubset(
+        cfg.sport_types
+    ):
+        return "hybrid"
+    return mode
+
+
+def _span(rows: list) -> str:
+    dates = [str(a.get("date") or "unknown")[:10] for a in rows]
+    return f"{min(dates)}..{max(dates)}"
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
+# Each reducible section's share of the context target (see context_builder.py).
+CAP_ACTIVITIES, CAP_OTHER_MEMORIES, CAP_UPCOMING_LATER = 0.25, 0.15, 0.10
+CAP_OLDER_SUMMARY, CAP_PROGRESS_GROUP = 0.10, 0.05
+ACTIVITY_LEVELS = (RECENT_ACTIVITIES_IN_SYSTEM, 15, 7)
+UPCOMING_LEVELS = (PLANNED_WORKOUTS_WINDOW_DAYS, 28)
 
 
 def build_system(
@@ -398,75 +418,138 @@ def build_system(
     activities: list | None = None,
     coach_voice: str = "",
     units: UnitSystem = DEFAULT_UNIT_SYSTEM,
-) -> str:
-    cfg = MODES.get(mode, MODES["running"])
-    # Pin only the most recent activities every turn (cheap, always survives truncation).
-    # Older activities are represented by deterministic aggregates only.
-    recent = (activities or [])[:RECENT_ACTIVITIES_IN_SYSTEM]
+):
+    """The coaching prompt as required parts (never cut) and reducible parts with caps; see
+    ``budget.ContextPrompt``. The date and time go last, so the rest is the same between turns."""
+    from .budget import ContextPrompt, Reducible, Required
 
-    from .budget import ContextPrompt
+    cfg = MODES.get(mode, MODES["running"])
+    activities = activities or []
+    # Only the most recent activities are listed row by row; older ones are aggregated.
+    recent = activities[:RECENT_ACTIVITIES_IN_SYSTEM]
+    older = activities[RECENT_ACTIVITIES_IN_SYSTEM:]
 
     mandatory = "\n\n".join(
         [
             cfg.system_prompt,
             units_section(units),
             PLAN_CHUNK_RULE,
-            _datetime_section(),
             "Older activity details are excluded. Use only included details and labeled aggregates. "
             "Context sections and periods absent from this request are omitted, not evidence of no training.",
         ]
     )
-    sections = [
-        f"## Recent Activities\nACTIVITY {build_training_log([a], mode, units)}" for a in recent
-    ]
-    periods = [(str(a.get("date") or "unknown")[:10],) for a in recent]
-    # Section names for the per-turn record; they never appear in the prompt.
-    section_keys = [f"activity:{period[0]}" for period in periods]
-    if not recent:
-        sections.append("## Recent Activities\nNo activities found.")
-        periods.append(())
-        section_keys.append("activities:none")
-    older = (activities or [])[RECENT_ACTIVITIES_IN_SYSTEM:]
+    protected, other = split_memories(memories)
+    notes = "\n".join([NOTES_HEADER, *protected]) if memories else ""
+    near_workouts, later_workouts = _upcoming_workouts(units)
+
+    def upcoming_later(days: int) -> str:
+        rows = "\n".join(row for ahead, row in later_workouts if ahead <= days)
+        return rows if near_workouts or not rows else _upcoming_table([rows])
+
+    def upcoming_label(days: int) -> str:
+        if not any(ahead > days for ahead, _ in later_workouts):
+            return ""
+        return f"Planned workouts beyond {max(days, WORKOUT_DETAIL_DAYS)} days omitted"
+
+    log_mode = _log_mode(recent, mode)
+
+    def recent_activities(n: int) -> str:
+        log = build_training_log(recent[:n], log_mode, units)
+        return f"## Recent Activities (newest {min(n, len(recent))})\n\n```\n{log}\n```"
+
+    def recent_label(n: int) -> str:
+        if n >= len(recent):
+            return ""
+        return f"Recent activities omitted: {len(recent) - n} rows covering {_span(recent[n:])}"
+
+    activity_levels = []
+    for n in ACTIVITY_LEVELS:
+        n = min(n, len(recent))
+        if n > 0 and n not in activity_levels:
+            activity_levels.append(n)
     summary = older_activity_summary(older, units=units)
-    if summary:
-        sections.append(summary)
-        dates = [str(a.get("date") or "unknown")[:10] for a in older]
-        periods.append((min(dates), max(dates)))
-        section_keys.append("older_summary")
-    for key, extra in (
-        ("compliance", _compliance_section(activities or [], units)),
-        ("analysis_guide", _analysis_guide_section(cfg, recent, units)),
-    ):
-        if extra:
-            sections.append(extra)
-            periods.append(())
-            section_keys.append(key)
-    return ContextPrompt(
-        mandatory,
-        [
-            profile,
-            _memories_section(memories),
-            _calendar_prefs_section(),
-            _upcoming_workouts_section(units),
-            # Optional sections are added in this order until one does not fit, so the short
-            # voice instruction goes before the long computed ones rather than being lost to them.
-            _voice_section(coach_voice),
-            _training_state_section(activities or [], mode, units),
-            _progress_section(activities or [], mode, units),
-        ],
-        sections,
-        periods,
-        priority_keys=[
-            "profile",
-            "memories",
-            "calendar_constraints",
-            "upcoming_workouts",
-            "voice",
-            "training_state",
-            "progress",
-        ],
-        activity_keys=section_keys,
+    extras = "\n\n".join(
+        x
+        for x in (
+            _analysis_guide_section(cfg, recent, units),
+            _progress_section(activities, mode, units),
+            _compliance_section(activities, units),
+        )
+        if x
     )
+
+    def other_label(k: int) -> str:
+        if k >= len(other):
+            return ""
+        return f"{len(other) - k} notes omitted (lowest-ranked coaching notes)"
+
+    parts = [
+        Required("mandatory", "base instructions", mandatory),
+        Required("profile", "athlete profile", profile),
+        Required("calendar_constraints", "calendar constraints", _calendar_prefs_section()),
+        Required("voice", "coaching voice", _voice_section(coach_voice)),
+        Required("protected_memories", "injury and temporary coaching notes", notes),
+        Reducible(
+            "other_memories",
+            CAP_OTHER_MEMORIES,
+            lambda k: "\n".join(other[:k]),
+            full=len(other),
+            join="\n",
+            omitted=other_label,
+        ),
+        Required(
+            "training_state", "training state", _training_state_section(activities, mode, units)
+        ),
+        Required("upcoming_workouts", "workouts in the next 14 days", near_workouts),
+        Reducible(
+            "upcoming_later",
+            CAP_UPCOMING_LATER,
+            upcoming_later,
+            full=PLANNED_WORKOUTS_WINDOW_DAYS if later_workouts else 0,
+            levels=(*UPCOMING_LEVELS, 0),
+            join="\n" if near_workouts else "\n\n",
+            omitted=upcoming_label,
+        ),
+        Reducible(
+            "progress_group",
+            CAP_PROGRESS_GROUP,
+            lambda k: extras,
+            full=1 if extras else 0,
+            levels=(1, 0),
+            omitted=lambda k: (
+                "Analysis guide, streak and records, and plan compliance omitted"
+                if extras and not k
+                else ""
+            ),
+        ),
+    ]
+    if not recent:
+        parts.append(
+            Required(
+                "recent_activities_none",
+                "recent activities",
+                "## Recent Activities\nNo activities found.",
+            )
+        )
+    parts += [
+        Reducible(
+            "recent_activities",
+            CAP_ACTIVITIES,
+            recent_activities,
+            full=len(recent),
+            levels=(*activity_levels, 0),
+            omitted=recent_label,
+        ),
+        Reducible(
+            "older_summary",
+            CAP_OLDER_SUMMARY,
+            lambda k: summary,
+            full=1 if summary else 0,
+            levels=(1, 0),
+            omitted=lambda k: "Older activity summary omitted" if summary and not k else "",
+        ),
+    ]
+    return ContextPrompt(parts, tail=_datetime_section())
 
 
 def build_training_log(

@@ -523,29 +523,107 @@ def bounded_turn(method):
     return run
 
 
-class ContextPrompt(str):
-    """Keeps optional sections atomic so reductions never split instructions."""
+@dataclass(frozen=True)
+class Required:
+    """A context part that is never reduced. ``label`` names it in an over-size message."""
 
-    def __new__(
-        cls,
-        mandatory,
-        priority,
-        activities,
-        activity_periods=None,
-        priority_keys=None,
-        activity_keys=None,
+    key: str
+    label: str
+    text: str
+
+
+class Reducible:
+    """A context part that may be cut. ``knob`` is its size setting: rows, days, notes, or 1/0.
+
+    ``cap`` is its share of the context target. ``levels`` lists the allowed knobs fullest first
+    (ending in 0); without it any knob from ``full`` down to 0 is allowed (notes, cut by rank).
+    ``render(knob)`` gives its text ("" when empty) and ``omitted(knob)`` the label for what that
+    knob leaves out ("" when nothing). ``join`` is how it attaches to the part before it.
+    """
+
+    def __init__(
+        self, key, cap, render, *, full, levels=None, omitted=lambda knob: "", join="\n\n"
     ):
-        obj = super().__new__(cls, "\n\n".join(filter(None, [mandatory, *priority, *activities])))
-        obj.mandatory = mandatory
-        obj.priority = list(filter(None, priority))
-        obj.activities = list(filter(None, activities))
-        obj.activity_periods = activity_periods or []
-        # Names for the per-turn record, aligned with the filtered lists above.
-        obj.priority_keys = _keys(priority, priority_keys, "priority")
-        obj.activity_keys = _keys(activities, activity_keys, "activity")
+        self.key, self.cap, self.full, self.levels = key, cap, full, levels
+        self._render, self.omitted, self.join = render, omitted, join
+        self._cache: dict[int, str] = {}
+
+    def render(self, knob: int) -> str:
+        if knob not in self._cache:
+            self._cache[knob] = self._render(knob) if knob > 0 else ""
+        return self._cache[knob]
+
+    def fit(self, budget: int, cost, ceiling: int | None = None) -> int:
+        """The largest allowed knob whose text costs at most ``budget`` tokens (0 always fits)."""
+        top = self.full if ceiling is None else min(self.full, ceiling)
+        if self.levels is not None:
+            return next(
+                (k for k in self.levels if 0 < k <= top and cost(self.render(k)) <= budget), 0
+            )
+        low, high = 0, top
+        while low < high:
+            mid = (low + high + 1) // 2
+            low, high = (mid, high) if cost(self.render(mid)) <= budget else (low, mid - 1)
+        return low
+
+
+def _assemble(parts, knobs: dict[str, int], notes=()) -> str:
+    out, labels = "", []
+    for part in parts:
+        if isinstance(part, Required):
+            text, join = part.text, "\n\n"
+        else:
+            knob = knobs.get(part.key, 0)
+            text, join = part.render(knob), part.join
+            label = part.omitted(knob)
+            if label:
+                labels.append(label)
+        if text:
+            out = out + join + text if out else text
+    labels += [n for n in notes if n]
+    if labels:
+        out += "\n\n## Context Omitted\n" + "\n".join(f"- {label}" for label in labels)
+    return out
+
+
+class ContextPrompt(str):
+    """The coaching prompt as parts in prompt order: ``Required`` ones and ``Reducible`` ones,
+    then ``tail`` (the date and time), which goes last so everything before it is byte-stable
+    between turns. The string value is the fullest version, with every part at its full size.
+    """
+
+    def __new__(cls, parts, tail: str = ""):
+        parts = list(parts)
+        full = {p.key: p.full for p in parts if isinstance(p, Reducible)}
+        text = _assemble(parts, full)
+        obj = super().__new__(cls, f"{text}\n\n{tail}" if tail else text)
+        obj.parts = parts
+        obj.tail = tail
+        obj.required = [p for p in parts if isinstance(p, Required)]
+        obj.reducible = [p for p in parts if isinstance(p, Reducible)]
         return obj
 
+    def __init__(self, parts, tail: str = ""):
+        super().__init__()
 
-def _keys(sections, keys, prefix):
-    keys = list(keys) if keys is not None and len(keys) == len(sections) else None
-    return [keys[i] if keys else f"{prefix}_{i}" for i, section in enumerate(sections) if section]
+    def __getnewargs__(self):
+        return self.parts, self.tail
+
+    def stable(self, knobs: dict[str, int] | None = None, notes=()) -> str:
+        """The prompt before the date and time. A missing knob means the part is empty; the
+        omission labels (parts' own, then ``notes``) close it."""
+        return _assemble(self.parts, knobs or {}, notes)
+
+
+class PreparedPrompt(str):
+    """What admission returns: the system prompt split into its stable part and the tail (date
+    and time). As a string it is both; Claude sends them as two blocks so the first can be cached.
+    """
+
+    def __new__(cls, stable: str, tail: str = ""):
+        obj = super().__new__(cls, f"{stable}\n\n{tail}" if tail else stable)
+        obj.stable, obj.tail = stable, tail
+        return obj
+
+    def __getnewargs__(self):
+        return self.stable, self.tail
