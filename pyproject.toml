@@ -10,7 +10,8 @@ requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.27",
     "anthropic>=0.96",
-    "google-genai>=1.0",
+    # 3.x defaults to an API version that rejects function calling; 1.73 is the tested version.
+    "google-genai>=1.73,<2",
     "openai>=1.0",
     "python-dotenv>=1.0",
     "fastapi>=0.100",
