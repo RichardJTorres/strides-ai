@@ -4,7 +4,14 @@ from abc import ABC, abstractmethod
 from typing import Callable
 
 from .. import db
-from ..budget import Limits, TurnBudget, bounded_turn, BudgetExceeded, estimate
+from ..budget import (
+    DEFAULT_BYTES_PER_TOKEN,
+    Limits,
+    TurnBudget,
+    bounded_turn,
+    BudgetExceeded,
+    estimate,
+)
 from ..kinds import (
     KINDS,
     display_type,
@@ -302,14 +309,16 @@ def _check_proposed_changes(changes: dict, mode: str | None = None) -> list:
         return []
 
 
-def _section_fact(keys: list, index: int, section: str, included: bool) -> dict:
+def _section_fact(
+    keys: list, index: int, section: str, included: bool, bytes_per_token: float
+) -> dict:
     """One context section in the per-turn record: sizes only, never the text."""
     return {
         "key": keys[index] if index < len(keys) else f"section_{index}",
         # 0 = sent in full; None = left out of this request.
         "level": 0 if included else None,
         "bytes": len(section.encode("utf-8")),
-        "est": estimate(section),
+        "est": estimate(section, bytes_per_token),
     }
 
 
@@ -325,6 +334,20 @@ class BaseBackend(ABC):
         super().__init_subclass__(**kwargs)
         if "stream_turn" in cls.__dict__:
             cls.stream_turn = bounded_turn(cls.stream_turn)
+
+    @property
+    def profile(self):
+        """What is known of the model in use; backends override this with a lookup."""
+        from .model_profile import ModelProfile
+
+        return ModelProfile()
+
+    def _bytes_per_token(self) -> float:
+        try:
+            ratio = self.profile.bytes_per_token
+        except Exception:
+            ratio = None
+        return ratio if type(ratio) is float and ratio > 0 else DEFAULT_BYTES_PER_TOKEN
 
     @property
     def limits(self):
@@ -352,6 +375,8 @@ class BaseBackend(ABC):
         # A turn starts clean: nothing from an earlier turn on this instance can be stored for it.
         self._admission = None
         self._budget = None
+        self._count_spent = False
+        self._admitted_input = None
         self._check_cancelled()
         if attachments and not self.supports_attachments:
             raise BudgetExceeded(
@@ -381,7 +406,8 @@ class BaseBackend(ABC):
             else:
                 i += 1
         self._history = []
-        b = TurnBudget(self.limits)
+        ratio = self._bytes_per_token()
+        b = TurnBudget(self.limits, ratio)
         submission = self._submission_history(message, attachments)
         optional, activities, periods = [], [], []
         optional_keys, activity_keys = [], []
@@ -397,20 +423,25 @@ class BaseBackend(ABC):
         reserve = 300 if activities else 0
 
         def fits(prompt, messages, margin=reserve):
-            if (
-                estimate([prompt, messages, self._tool_definitions()]) + margin
+            return (
+                estimate([prompt, messages, self._tool_definitions()], ratio) + margin
                 <= self.limits.input_tokens
-            ):
-                return True
-            # Prefer measured counts when a conservative estimate would reject context.
-            measured = self._count_request(prompt, messages, self._tool_definitions())
-            return type(measured) is int and measured + margin <= self.limits.input_tokens
+            )
 
-        if not fits(system, submission, margin=0):
+        b.counter = self._count_once
+        try:
+            # The one place a measured count may reject a message on its own: the estimate says
+            # the submission cannot fit, so confirm before refusing the athlete's message.
+            b.check_request(system, submission, self._tool_definitions())
+        except BudgetExceeded:
             # No optional context is left to remove.
             raise BudgetExceeded(
                 "Your message and attachments exceed the input context limit. Shorten them or send smaller files."
             )
+        # When the provider's own count admitted the bare request, that count stands even though
+        # the estimate says otherwise; only optional context is dropped (the estimate decides it).
+        bare_measured = b.count_kind == "measured"
+        self._admitted_input = b.input_size if bare_measured else None
         for section in optional:
             candidate = system + "\n\n" + section
             if not fits(candidate, submission):
@@ -435,7 +466,6 @@ class BaseBackend(ABC):
             selected_activities.append((index, section))
             retained_activities += count
             system = candidate
-        b.counter = self._count_request
         while True:
             included = {index for index, _ in selected_activities}
             omitted = [periods[i] for i in range(len(periods)) if i not in included and periods[i]]
@@ -466,6 +496,8 @@ class BaseBackend(ABC):
                     self._history = self._history[2:]
                 elif selected_optional:
                     selected_optional.pop()
+                elif bare_measured:
+                    break
                 else:
                     raise
         self._retained_messages = len(self._history)
@@ -476,21 +508,21 @@ class BaseBackend(ABC):
         self._admission = {
             "admission_ms": int(round((time.monotonic() - admission_started) * 1000)),
             "fixed": {
-                "mandatory": estimate(mandatory),
-                "tools": estimate(self._tool_definitions()),
-                "submission": estimate(submission),
+                "mandatory": estimate(mandatory, ratio),
+                "tools": estimate(self._tool_definitions(), ratio),
+                "submission": estimate(submission, ratio),
             },
             "sections": [
-                _section_fact(optional_keys, i, section, i < len(selected_optional))
+                _section_fact(optional_keys, i, section, i < len(selected_optional), ratio)
                 for i, section in enumerate(optional)
             ]
             + [
-                _section_fact(activity_keys, i, section, i in included_activities)
+                _section_fact(activity_keys, i, section, i in included_activities, ratio)
                 for i, section in enumerate(activities)
             ],
             "history": {
                 "messages": len(self._history),
-                "est": estimate(self._history) if self._history else 0,
+                "est": estimate(self._history, ratio) if self._history else 0,
                 "dropped": len(history) - len(self._history),
             },
             "est_input": b.input_size,
@@ -506,6 +538,13 @@ class BaseBackend(ABC):
 
     def _count_request(self, system, history, tools):
         return None
+
+    def _count_once(self, system, history, tools):
+        """The provider's token counter, at most once per turn (a network round trip each)."""
+        if getattr(self, "_count_spent", False):
+            return None
+        self._count_spent = True
+        return self._count_request(system, history, tools)
 
     def _transport_call(self, call):
         """Retry transport setup only; tool execution is always outside this boundary."""
@@ -585,7 +624,7 @@ class BaseBackend(ABC):
     def _before_request(self, system):
         self._check_cancelled()
         self._budget.request(system, self._history, self._tool_definitions())
-        self._reported_output = None
+        self._reported_usage = None
 
     @property
     @abstractmethod

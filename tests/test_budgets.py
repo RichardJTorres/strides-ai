@@ -142,7 +142,7 @@ def test_equivalent_limits(
 
 
 def test_tool_results_rebudgeted_before_request(adapter, mocker):
-    write = mocker.patch("strides_ai.backends.base.db.save_memory", return_value="x" * 30000)
+    write = mocker.patch("strides_ai.backends.base.db.save_memory", return_value="x" * 90000)
     backend, requests = adapter()
     text, memories, _ = backend.stream_turn("mandatory", "hello", lambda _: None)
     assert requests.call_count == write.call_count == 1
@@ -159,9 +159,9 @@ def test_oversized_submission_never_saved(adapter, tmp_db, attachment):
     backend, requests = adapter()
     coordinator = ConversationCoordinator(lambda _: backend)
     turn = coordinator.acquire("running")
-    blocks = [{"type": "text", "text": "x" * 30000}] if attachment else None
+    blocks = [{"type": "text", "text": "x" * 90000}] if attachment else None
     with pytest.raises(HTTPException):
-        coordinator.start(turn, "mandatory", "hi" if attachment else "x" * 30000, "saved", blocks)
+        coordinator.start(turn, "mandatory", "hi" if attachment else "x" * 90000, "saved", blocks)
     coordinator.release(turn)
     assert not requests.called
     assert db.get_recent_messages(mode="running") == []

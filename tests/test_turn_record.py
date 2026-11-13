@@ -116,7 +116,7 @@ def test_admission_names_what_was_sent_and_what_was_left_out(mocker):
     backend = ClaudeBackend("fake", [{"role": "user", "content": "orphan"}])
     prompt = ContextPrompt(
         "base instructions",
-        ["profile text", "m" * 40_000, "plan text"],
+        ["profile text", "m" * 100_000, "plan text"],
         ["ACTIVITY one"],
         priority_keys=["profile", "memories", "upcoming_workouts"],
         activity_keys=["activity:2026-01-01"],
@@ -134,7 +134,7 @@ def test_admission_names_what_was_sent_and_what_was_left_out(mocker):
         "activity:2026-01-01": 0,
     }
     memories = next(s for s in admission["sections"] if s["key"] == "memories")
-    assert memories["bytes"] == 40_000 and memories["est"] > 40_000
+    assert memories["bytes"] == 100_000 and memories["est"] > 40_000
     assert all(type(value) is int for value in admission["fixed"].values())
     assert admission["history"] == {"messages": 0, "est": 0, "dropped": 1}
     assert type(admission["admission_ms"]) is int and admission["est_input"] > 0
