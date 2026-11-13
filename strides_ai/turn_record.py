@@ -23,6 +23,7 @@ class TurnRecord:
         self._round_started: float | None = None
         self._early_retries = [0, 0]  # count, wait ms: retries before the first round started
         self.model = model
+        self.ratio: float | None = None  # bytes per token the input estimate used
         self.limits = asdict(limits) if is_dataclass(limits) else None
         self.admission: dict = {}
         self.rounds: list[dict] = []
@@ -65,11 +66,21 @@ class TurnRecord:
         if current is not None and current["first_text_ms"] is None and self._round_started:
             current["first_text_ms"] = _ms(self._clock() - self._round_started)
 
-    def end_round(self, output_total: int | None, output_est: int | None = None) -> None:
-        """Called at the end of a round's generation; the last call wins.
+    def end_round(
+        self,
+        output_total: int | None,
+        output_est: int | None = None,
+        *,
+        input_total: int | None = None,
+        cache_read: int | None = None,
+        cache_write: int | None = None,
+        reasoning: int | None = None,
+    ) -> None:
+        """Called at the end of a round's generation; the last call wins for the output fields.
 
         ``output_total`` is the provider's own count (None when it reported none);
-        ``output_est`` is the app's running estimate.
+        ``output_est`` is the app's running estimate. A usage field the provider did not report
+        stays None, and a later call without it never erases one already recorded.
         """
         current = self._current()
         if current is None or self._round_started is None:
@@ -78,6 +89,14 @@ class TurnRecord:
             current["output_total"] = output_total
         if type(output_est) is int:
             current["output_est"] = output_est
+        for key, value in (
+            ("input_total", input_total),
+            ("cache_read", cache_read),
+            ("cache_write", cache_write),
+            ("reasoning", reasoning),
+        ):
+            if type(value) is int:
+                current[key] = value
         current["duration_ms"] = _ms(self._clock() - self._round_started)
 
     def tool(self) -> None:
@@ -107,7 +126,7 @@ class TurnRecord:
             "model": self.model,
             "profile": None,
             "limits": self.limits,
-            "ratio": None,
+            "ratio": self.ratio,
             "admission_ms": admission.get("admission_ms"),
             "total_ms": total_ms,
             "fixed": admission.get("fixed"),

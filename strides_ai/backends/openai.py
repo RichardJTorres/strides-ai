@@ -5,6 +5,7 @@ import time
 
 import openai as _openai
 
+from ..budget import Usage
 from .model_profile import openai_thinking, resolve_profile
 from .base import (
     UPDATE_TRAINING_PLAN_PARAMETERS,
@@ -70,6 +71,18 @@ UPDATE_TRAINING_PLAN_TOOL = {
         "parameters": UPDATE_TRAINING_PLAN_PARAMETERS,
     },
 }
+
+
+def openai_usage(usage) -> Usage:
+    """Normalize Chat Completions usage; cached and reasoning counts are nested detail objects."""
+    prompt_details = getattr(usage, "prompt_tokens_details", None)
+    completion_details = getattr(usage, "completion_tokens_details", None)
+    return Usage.of(
+        input_total=getattr(usage, "prompt_tokens", None),
+        cache_read=getattr(prompt_details, "cached_tokens", None),
+        output_total=getattr(usage, "completion_tokens", None),
+        reasoning=getattr(completion_details, "reasoning_tokens", None),
+    )
 
 
 class OpenAIBackend(BaseBackend):
@@ -163,9 +176,7 @@ class OpenAIBackend(BaseBackend):
             ) as stream:
                 for chunk in stream:
                     self._check_cancelled()
-                    self._budget.usage(
-                        getattr(getattr(chunk, "usage", None), "completion_tokens", None)
-                    )
+                    self._budget.usage(openai_usage(getattr(chunk, "usage", None)))
                     delta = chunk.choices[0].delta if chunk.choices else None
                     if delta is None:
                         continue

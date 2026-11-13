@@ -84,7 +84,10 @@ def analyze_nutrition(
             system=NUTRITION_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
         )
-        text = resp.content[0].text.strip()
+        # Thinking blocks can precede the text, so take the first block that has text.
+        text = next(
+            (b.text for b in resp.content if isinstance(getattr(b, "text", None), str)), ""
+        ).strip()
         text = re.sub(r"^```[a-z]*\n?", "", text)
         text = re.sub(r"\n?```$", "", text)
 

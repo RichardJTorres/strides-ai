@@ -48,6 +48,19 @@ def test_analyze_nutrition_claude_returns_parsed_dict(monkeypatch):
     assert result["notes"] == "Eat well before this long run."
 
 
+def test_analyze_nutrition_claude_reads_the_first_text_block_after_thinking(monkeypatch):
+    monkeypatch.setenv("PROVIDER", "claude")
+    thinking = MagicMock(spec=["type", "thinking"])
+    mock_response = MagicMock()
+    mock_response.content = [thinking, MagicMock(text=json.dumps(SAMPLE_NUTRITION))]
+
+    with patch("strides_ai.schedule.anthropic.Anthropic") as MockClient:
+        MockClient.return_value.messages.create.return_value = mock_response
+        result = analyze_nutrition(SAMPLE_WORKOUT, "Athlete profile", "fake-key")
+
+    assert result["calories_pre"] == 400
+
+
 def test_analyze_nutrition_claude_strips_markdown_fences(monkeypatch):
     """Claude may wrap JSON in ```json ... ``` — these must be stripped."""
     monkeypatch.setenv("PROVIDER", "claude")

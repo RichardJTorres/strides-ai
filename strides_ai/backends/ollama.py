@@ -5,6 +5,7 @@ import time
 
 import httpx
 
+from ..budget import Usage
 from .model_profile import ollama_thinking, resolve_profile
 from .base import (
     UPDATE_TRAINING_PLAN_PARAMETERS,
@@ -70,6 +71,14 @@ UPDATE_TRAINING_PLAN_TOOL = {
         "parameters": UPDATE_TRAINING_PLAN_PARAMETERS,
     },
 }
+
+
+def ollama_usage(chunk) -> Usage:
+    """Normalize the counts on Ollama's final chunk. Cache and reasoning are not reported."""
+    chunk = chunk if isinstance(chunk, dict) else {}
+    return Usage.of(
+        input_total=chunk.get("prompt_eval_count"), output_total=chunk.get("eval_count")
+    )
 
 
 class OllamaBackend(BaseBackend):
@@ -166,7 +175,7 @@ class OllamaBackend(BaseBackend):
             if self._supports_tools is not False:
                 body["tools"] = [SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL, UPDATE_PROFILE_TOOL]
 
-            provider_output = None
+            provider_usage = Usage()
             retry_without_tools = False
             with httpx.Client(timeout=120) as client:
                 with self._transport_stream(
@@ -201,7 +210,7 @@ class OllamaBackend(BaseBackend):
                                 tool_calls = msg["tool_calls"]
 
                             if chunk.get("done"):
-                                provider_output = chunk.get("eval_count")
+                                provider_usage = ollama_usage(chunk)
                                 break
 
             if retry_without_tools:
@@ -212,13 +221,13 @@ class OllamaBackend(BaseBackend):
             )
 
             if not tool_calls:
-                self._budget.usage(provider_output)
+                self._budget.usage(provider_usage)
                 break
 
             # Execute tool calls and add results to history
             for tc in tool_calls:
                 self._budget.output(tc.get("function", {}))
-            self._budget.usage(provider_output)
+            self._budget.usage(provider_usage)
             for tc in tool_calls:
                 fn = tc.get("function", {})
                 result = self._run_tool(

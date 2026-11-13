@@ -11,6 +11,7 @@ from ..budget import BudgetExceeded
 from ..kinds import KINDS, RACE_PRIORITIES, RACE_SPORTS, WORKOUT_TYPES
 from ..workout_structure import WORKOUT_STRUCTURE_SCHEMA
 
+from ..budget import Usage
 from .model_profile import gemini_thinking, resolve_profile
 from .base import (
     DISTANCE_UNITS,
@@ -181,6 +182,26 @@ UPDATE_TRAINING_PLAN_TOOL = types.Tool(
 )
 
 
+def gemini_usage(metadata) -> Usage:
+    """Normalize Gemini usage metadata. Reasoning ("thoughts") is billed as output."""
+
+    def get(name):
+        value = getattr(metadata, name, None)
+        return value if type(value) is int else None
+
+    prompt, tool_prompt = get("prompt_token_count"), get("tool_use_prompt_token_count")
+    visible, thoughts = get("candidates_token_count"), get("thoughts_token_count")
+    return Usage.of(
+        input_total=None if prompt is None else prompt + (tool_prompt or 0),
+        cache_read=get("cached_content_token_count"),
+        # A reply that is all thinking reports no visible count, but the thoughts were generated.
+        output_total=(
+            None if visible is None and thoughts is None else (visible or 0) + (thoughts or 0)
+        ),
+        reasoning=thoughts,
+    )
+
+
 class GeminiBackend(BaseBackend):
     _model_cache: dict = {"models": None, "ts": 0.0}
     _MODEL_CACHE_TTL: int = 300
@@ -286,11 +307,9 @@ class GeminiBackend(BaseBackend):
         return types.ThinkingConfig(**fields) if fields else None
 
     def _record_usage(self, response):
-        metadata = getattr(response, "usage_metadata", None)
-        visible = getattr(metadata, "candidates_token_count", None)
-        thoughts = getattr(metadata, "thoughts_token_count", None)
-        if type(visible) is int:
-            self._reported_output = visible + (thoughts if type(thoughts) is int else 0)
+        usage = gemini_usage(getattr(response, "usage_metadata", None))
+        if usage.output_total is not None or usage.input_total is not None:
+            self._reported_usage = usage
 
     def stream_turn(self, system, user_input, on_token, attachments=None):
         if attachments:
@@ -322,7 +341,6 @@ class GeminiBackend(BaseBackend):
                 for attempt in range(self.limits.retries + 1):
                     try:
                         self._check_cancelled()
-                        self._budget.check_request(system, self._history, self._tool_definitions())
                         for chunk in self._client.models.generate_content_stream(
                             model=self._model,
                             contents=self._history,
@@ -360,7 +378,6 @@ class GeminiBackend(BaseBackend):
                 for attempt in range(self.limits.retries + 1):
                     try:
                         self._check_cancelled()
-                        self._budget.check_request(system, self._history, self._tool_definitions())
                         resp = self._client.models.generate_content(
                             model=self._model,
                             contents=self._history,
@@ -394,7 +411,7 @@ class GeminiBackend(BaseBackend):
                     {"name": part.function_call.name, "args": dict(part.function_call.args)}
                 )
 
-            self._budget.usage(self._reported_output)
+            self._budget.usage(self._reported_usage)
 
             # Append the model's response to history
             model_parts: list[types.Part] = []

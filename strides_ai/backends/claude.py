@@ -4,6 +4,7 @@ import time
 
 import anthropic
 
+from ..budget import Usage
 from .model_profile import claude_thinking, resolve_profile
 from .base import (
     UPDATE_TRAINING_PLAN_PARAMETERS,
@@ -18,6 +19,24 @@ from .base import (
 )
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
+
+
+def claude_usage(usage) -> Usage:
+    """Normalize Anthropic usage. Input is the uncached part plus every cached part."""
+    fresh = getattr(usage, "input_tokens", None)
+    write = getattr(usage, "cache_creation_input_tokens", None)
+    read = getattr(usage, "cache_read_input_tokens", None)
+    total = None
+    if type(fresh) is int:
+        total = fresh + sum(v for v in (write, read) if type(v) is int)
+    return Usage.of(
+        input_total=total,
+        cache_read=read,
+        cache_write=write,
+        output_total=getattr(usage, "output_tokens", None),
+    )
+
+
 # Below this much remaining output budget a round skips thinking so the reply still fits.
 MIN_THINKING_ROOM = 4000
 
@@ -181,7 +200,7 @@ class ClaudeBackend(BaseBackend):
             for block in final.content:
                 if getattr(block, "type", "") == "tool_use":
                     self._budget.output({"name": block.name, "input": block.input})
-            self._budget.usage(getattr(getattr(final, "usage", None), "output_tokens", None))
+            self._budget.usage(claude_usage(getattr(final, "usage", None)))
             self._history.append({"role": "assistant", "content": final.content})
 
             if final.stop_reason == "max_tokens":
