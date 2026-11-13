@@ -6,12 +6,20 @@ from typing import Callable
 from .. import db
 from ..budget import (
     DEFAULT_BYTES_PER_TOKEN,
+    TOOL_BUDGET_NOTE,
+    ContextPrompt,
     Limits,
+    PreparedPrompt,
+    Required,
+    RoundPlan,
     TurnBudget,
+    TurnStop,
     bounded_turn,
     BudgetExceeded,
     estimate,
+    normalize_limits,
 )
+from ..context_builder import select_context, too_large
 from ..kinds import (
     KINDS,
     display_type,
@@ -86,6 +94,28 @@ def update_profile_fields() -> list[str]:
 
 SAVE_MEMORY_CATEGORIES: list[str] = ["goal", "race", "injury", "preference", "training", "other"]
 
+# One update_training_plan call changes at most this many entries (set items plus deleted ids);
+# a larger call is rejected whole and the coach is told to split it. Bounds the call's size, so
+# the result, which lists every id, stays small too.
+MAX_PLAN_OPERATIONS = 31
+# A result names at most this many warnings or rejection reasons, each clipped, then "and N more".
+MAX_RESULT_REASONS = 5
+MAX_REASON_CHARS = 200
+
+
+def bounded_reasons(items) -> str:
+    """Reasons for a tool result, bounded by construction: the first few, each clipped."""
+    items = [str(item) for item in items]
+    shown = [
+        item if len(item) <= MAX_REASON_CHARS else item[: MAX_REASON_CHARS - 1] + "…"
+        for item in items[:MAX_RESULT_REASONS]
+    ]
+    text = "; ".join(shown)
+    if len(items) > MAX_RESULT_REASONS:
+        text += f"; and {len(items) - MAX_RESULT_REASONS} more"
+    return text
+
+
 UPDATE_TRAINING_PLAN_DESCRIPTION = (
     "Create, update, or remove entries on the athlete's training calendar: workouts, races, rest "
     "days, travel. A day can hold several entries. In `set`, an item without `id` creates a new "
@@ -102,6 +132,8 @@ UPDATE_TRAINING_PLAN_DESCRIPTION = (
     "otherwise use, delete or move that entry (send its `id` with a new `date`) rather than "
     "double-booking it. When regenerating a block, `delete` the ids that need to change and `set` "
     "their replacements in the same call. Only one scored workout per sport per day is allowed. "
+    f"A call may change at most {MAX_PLAN_OPERATIONS} entries (`set` items plus `delete` ids); "
+    "a larger call is rejected whole, so split a big block across several calls. "
     "Give `distance` and `elevation` in the athlete's units and say which with `distance_unit` / "
     "`elevation_unit`. " + INDOOR_RIDE_GUIDANCE
 )
@@ -309,19 +341,6 @@ def _check_proposed_changes(changes: dict, mode: str | None = None) -> list:
         return []
 
 
-def _section_fact(
-    keys: list, index: int, section: str, included: bool, bytes_per_token: float
-) -> dict:
-    """One context section in the per-turn record: sizes only, never the text."""
-    return {
-        "key": keys[index] if index < len(keys) else f"section_{index}",
-        # 0 = sent in full; None = left out of this request.
-        "level": 0 if included else None,
-        "bytes": len(section.encode("utf-8")),
-        "est": estimate(section, bytes_per_token),
-    }
-
-
 class BaseBackend(ABC):
     """
     A backend wraps one LLM provider and manages its own conversation history.
@@ -357,19 +376,21 @@ class BaseBackend(ABC):
             return self._limits
         overrides = get_settings().chat_limits
         provider = self.__class__.__name__.replace("Backend", "").lower()
-        values = {
-            **overrides.get("default", {}),
-            **overrides.get(provider, {}),
-            **overrides.get(self.label, {}),
-        }
-        self._limits = Limits(**values)
+        values: dict = {}
+        for layer in (overrides.get("default"), overrides.get(provider), overrides.get(self.label)):
+            values.update(normalize_limits(layer or {}))
+        try:
+            profile = self.profile
+        except Exception:
+            from .model_profile import ModelProfile
+
+            profile = ModelProfile()
+        self._limits = Limits.derive(profile, values, self.label)
         return self._limits
 
     def prepare_turn(self, system, message, attachments=None):
         """Select atomic context by priority; admission never changes the submission."""
         import time
-
-        from ..budget import ContextPrompt
 
         admission_started = time.monotonic()
         # A turn starts clean: nothing from an earlier turn on this instance can be stored for it.
@@ -409,126 +430,105 @@ class BaseBackend(ABC):
         ratio = self._bytes_per_token()
         b = TurnBudget(self.limits, ratio)
         submission = self._submission_history(message, attachments)
-        optional, activities, periods = [], [], []
-        optional_keys, activity_keys = [], []
-        if isinstance(system, ContextPrompt):
-            optional, activities = system.priority, system.activities
-            periods = system.activity_periods
-            optional_keys = getattr(system, "priority_keys", [])
-            activity_keys = getattr(system, "activity_keys", [])
-            system = system.mandatory
-        mandatory = system
-        selected_optional, selected_activities = [], []
-        # Leave room for an explicit omission notice with date coverage.
-        reserve = 300 if activities else 0
+        tools = self._tool_definitions()
+        if not isinstance(system, ContextPrompt):
+            system = ContextPrompt([Required("mandatory", "base instructions", str(system))])
+        limits = self.limits
 
-        def fits(prompt, messages, margin=reserve):
-            return (
-                estimate([prompt, messages, self._tool_definitions()], ratio) + margin
-                <= self.limits.input_tokens
-            )
+        def cost(value):
+            return estimate(value, ratio) if value else 0
+
+        empty = {p.key: 0 for p in system.reducible}
+        required_text = system.stable(empty)
+        floor = f"{required_text}\n\n{system.tail}" if system.tail else required_text
+        mandatory = next((p.text for p in system.required if p.key == "mandatory"), "")
 
         b.counter = self._count_once
+        part_sizes = [(p.label, cost(p.text)) for p in system.required if p.key != "mandatory"] + [
+            ("base instructions", cost(mandatory)),
+            ("tool definitions", cost(tools)),
+            ("your message and attachments", cost(submission[-1:])),
+        ]
         try:
             # The one place a measured count may reject a message on its own: the estimate says
-            # the submission cannot fit, so confirm before refusing the athlete's message.
-            b.check_request(system, submission, self._tool_definitions())
+            # the required request cannot fit, so confirm before refusing the athlete's message.
+            b.check_request(floor, submission, tools)
         except BudgetExceeded:
-            # No optional context is left to remove.
-            raise BudgetExceeded(
-                "Your message and attachments exceed the input context limit. Shorten them or send smaller files."
+            raise too_large(
+                estimate([floor, submission, tools], ratio), limits.context_target, part_sizes
             )
         # When the provider's own count admitted the bare request, that count stands even though
-        # the estimate says otherwise; only optional context is dropped (the estimate decides it).
+        # the estimate says otherwise; every reducible section is then left out.
         bare_measured = b.count_kind == "measured"
         self._admitted_input = b.input_size if bare_measured else None
-        for section in optional:
-            candidate = system + "\n\n" + section
-            if not fits(candidate, submission):
-                break
-            selected_optional.append(section)
-            system = candidate
-        for group in reversed(groups):
-            candidate = group + self._history
-            if len(candidate) > self.limits.history_messages or not fits(
-                system, [*candidate, *submission]
-            ):
-                break
-            self._history = candidate
-        retained_activities = 0
-        for index, section in enumerate(activities):
-            count = section.count("\nACTIVITY ")
-            if retained_activities + count > self.limits.recent_activities:
-                continue
-            candidate = system + "\n\n" + section
-            if not fits(candidate, [*self._history, *submission]):
-                continue
-            selected_activities.append((index, section))
-            retained_activities += count
-            system = candidate
-        while True:
-            included = {index for index, _ in selected_activities}
-            omitted = [periods[i] for i in range(len(periods)) if i not in included and periods[i]]
-            notice = ""
-            if omitted:
-                dates = [day for period in omitted for day in period]
-                notice = f"Context omitted: activity sections covering {min(dates)}..{max(dates)}. Individual details or aggregates for those omitted sections are unavailable."
-            system = "\n\n".join(
-                filter(
-                    None,
-                    [
-                        mandatory,
-                        *selected_optional,
-                        *[section for _, section in selected_activities],
-                        notice,
-                    ],
-                )
-            )
-            try:
-                b.check_request(
-                    system, self._submission_history(message, attachments), self._tool_definitions()
-                )
-                break
-            except BudgetExceeded:
-                if selected_activities:
-                    selected_activities.pop()
-                elif self._history:
-                    self._history = self._history[2:]
-                elif selected_optional:
-                    selected_optional.pop()
-                elif bare_measured:
-                    break
-                else:
-                    raise
-        self._retained_messages = len(self._history)
-        self._retained_activities = sum(
-            section.count("\nACTIVITY ") for _, section in selected_activities
+        selection = select_context(
+            system,
+            groups,
+            target=limits.context_target,
+            cost=cost,
+            size=lambda text, kept: estimate([text, [*kept, *submission], tools], ratio),
+            max_pairs=limits.history_messages // 2,
+            recent_limit=limits.recent_activities,
+            part_sizes=part_sizes,
+            check_required=not bare_measured,
         )
-        included_activities = {index for index, _ in selected_activities}
+        self._history = [m for group in groups[len(groups) - selection.pairs :] for m in group]
+        if not selection.pairs:
+            self._history = []
+        prepared = PreparedPrompt(selection.stable, selection.tail)
+        if not bare_measured:
+            # Admission against the model's hard ceiling, with what is actually sent.
+            b.check_request(prepared, self._submission_history(message, attachments), tools)
+        self._retained_messages = len(self._history)
+        self._retained_activities = selection.knobs.get("recent_activities", 0)
+        sections = [
+            {
+                "key": p.key,
+                "kind": "required",
+                "bytes": len(p.text.encode("utf-8")),
+                "est": cost(p.text),
+            }
+            for p in system.required
+        ]
+        for p in system.reducible:
+            knob = selection.knobs[p.key]
+            text = p.render(knob)
+            sections.append(
+                {
+                    "key": p.key,
+                    "kind": "reducible",
+                    "level": knob,
+                    "full": p.full,
+                    "cap": int(limits.context_target * p.cap),
+                    "bytes": len(text.encode("utf-8")),
+                    "est": cost(text),
+                    "full_est": cost(p.render(p.full)),
+                }
+            )
         self._admission = {
             "admission_ms": int(round((time.monotonic() - admission_started) * 1000)),
             "fixed": {
                 "mandatory": estimate(mandatory, ratio),
-                "tools": estimate(self._tool_definitions(), ratio),
+                "tools": estimate(tools, ratio),
                 "submission": estimate(submission, ratio),
+                "date_time": cost(system.tail),
             },
-            "sections": [
-                _section_fact(optional_keys, i, section, i < len(selected_optional), ratio)
-                for i, section in enumerate(optional)
-            ]
-            + [
-                _section_fact(activity_keys, i, section, i in included_activities, ratio)
-                for i, section in enumerate(activities)
-            ],
+            "sections": sections,
             "history": {
                 "messages": len(self._history),
                 "est": estimate(self._history, ratio) if self._history else 0,
                 "dropped": len(history) - len(self._history),
+                "pairs": selection.pairs,
+                "of": selection.available_pairs,
+                "cap": selection.pairs_cap,
             },
+            "ladder": selection.ladder,
+            "required_est": selection.required_est,
+            "context_target": limits.context_target,
             "est_input": b.input_size,
             "count_kind": b.count_kind,
         }
-        return system
+        return prepared
 
     def _submission_history(self, message, attachments):
         return [
@@ -551,7 +551,7 @@ class BaseBackend(ABC):
         import time
 
         for attempt in range(self.limits.retries + 1):
-            self._check_cancelled()
+            self._tick()
             try:
                 return call()
             except Exception as exc:
@@ -567,7 +567,7 @@ class BaseBackend(ABC):
                 if not retryable:
                     raise
                 if attempt == self.limits.retries:
-                    raise BudgetExceeded("Transport retry limit reached.") from exc
+                    raise TurnStop("retry_limit", "Transport retry limit reached.") from exc
                 record = getattr(getattr(self, "_budget", None), "record", None)
                 if record is not None:
                     record.retry(min(2**attempt, 4))
@@ -621,10 +621,60 @@ class BaseBackend(ABC):
             if hasattr(module, n)
         ]
 
-    def _before_request(self, system):
-        self._check_cancelled()
-        self._budget.request(system, self._history, self._tool_definitions())
+    def _begin_round(self, system) -> RoundPlan:
+        """Start the next provider request and say what it may do.
+
+        A tool round offers tools; the reply round (``plan.kind == "reply"``) does not, carries
+        the app's note after the tool results, and is the last. The caller builds its request
+        from ``plan``: ``max_tokens``, and tools off for a reply. Raises TurnStop when even the
+        reply cannot be sent.
+        """
+        self._tick()
+        budget = self._budget
+        tools = self._tool_definitions()
+        plan = budget.plan_round(system, self._history, tools)
+        if plan.kind == "reply" and budget.rounds:
+            self._add_app_note(TOOL_BUDGET_NOTE)
+        budget.request(system, self._history, tools, plan)
         self._reported_usage = None
+        return plan
+
+    def _add_app_note(self, note: str) -> None:
+        """Put the app's note after the tool results in this provider's history format."""
+        self._history.append({"role": "user", "content": note})
+
+    def _tick(self):
+        """Called on every provider event (and before each request): cancel and deadline checks."""
+        self._check_cancelled()
+        budget = getattr(self, "_budget", None)
+        if budget is not None:
+            budget.check_deadline()
+
+    def _on_event(self):
+        self._tick()
+        self._budget.record.first_event()
+
+    def _end_round(self, plan: RoundPlan, *, cut_off: bool, calls: int) -> bool:
+        """The response is complete. True when its tool calls should run and the loop continue.
+
+        A response cut off at its token limit never has its tool calls run (their arguments may be
+        incomplete), and neither does a reply round's: tools were off.
+        """
+        budget = self._budget
+        budget.end_round()
+        record = budget.record
+        if cut_off:
+            record.round_stop("truncated")
+            budget.stop("truncated")
+            return False
+        if not calls:
+            record.round_stop("complete")
+            return False
+        if plan.kind == "reply":
+            record.round_stop("calls_ignored")
+            return False
+        record.round_stop("tool_calls")
+        return True
 
     @property
     @abstractmethod
@@ -694,6 +744,26 @@ class BaseBackend(ABC):
             return result
         return None
 
+    def _run_call(
+        self,
+        name: str,
+        args: dict | None,
+        memories_saved: list[tuple[str, str]],
+        plan_changes: list[dict],
+    ) -> str:
+        """The tool result for one call; every call gets one so the history stays valid.
+
+        ``args`` is None when the model's arguments could not be parsed: nothing is run.
+        """
+        if args is None:
+            return (
+                "Error: the arguments were not valid JSON, so nothing was run. Send the call again."
+            )
+        if self._budget.tools >= self.limits.tools:
+            return "Not executed: tool limit reached"
+        result = self._run_tool(name, args, memories_saved, plan_changes)
+        return result if result is not None else f"Unknown tool: {name}"
+
     def _execute_save_memory(self, args: dict) -> tuple[str, str, str]:
         """
         Persist a save_memory tool call to the DB.
@@ -757,14 +827,25 @@ class BaseBackend(ABC):
         self._check_cancelled()
         self._budget.tool(args)
         change_start = len(self._budget.changes)
+        count = sum(
+            len(args.get(key) or []) if isinstance(args.get(key), list) else 0
+            for key in ("set", "delete")
+        )
+        if count > MAX_PLAN_OPERATIONS:
+            return (
+                f"Rejected, no changes made. This call has {count} operations; at most "
+                f"{MAX_PLAN_OPERATIONS} are allowed per call. Send it again as several calls of "
+                f"{MAX_PLAN_OPERATIONS} or fewer (for example one per two weeks).",
+                [],
+            )
         ops, proposed, errors = _plan_ops(args, db.get_training_plan())
         if errors:
-            return "Rejected, no changes made. " + "; ".join(errors), []
+            return "Rejected, no changes made. " + bounded_reasons(errors), []
         violations = _check_proposed_changes(proposed, getattr(self, "mode", None))
         hard = [v for v in violations if v.hard]
         if hard:
             # Nothing is saved: the model gets the reasons and can resubmit a corrected call.
-            reasons = "; ".join(f"{v.date}: {v.detail}" for v in hard)
+            reasons = bounded_reasons(f"{v.date}: {v.detail}" for v in hard)
             return (
                 f"Rejected, no changes made. {reasons} Choose other dates, or ask the athlete "
                 "to unblock the day first.",
@@ -807,7 +888,7 @@ class BaseBackend(ABC):
         summary = ". ".join(parts) if parts else "No changes made."
         warnings = [v for v in violations if not v.hard]
         if warnings:
-            summary += ". Warnings: " + "; ".join(v.detail for v in warnings)
+            summary += ". Warnings: " + bounded_reasons(v.detail for v in warnings)
             summary += " Consider revising the plan to stay within the Training State guardrails."
         return summary, self._budget.changes[change_start:]
 

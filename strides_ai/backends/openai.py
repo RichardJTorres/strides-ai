@@ -140,6 +140,10 @@ class OpenAIBackend(BaseBackend):
     def profile(self):
         return resolve_profile("openai", self._model)
 
+    def _timeout(self):
+        """Connect within first_event_s; a stream silent for stream_idle_s is a stall."""
+        return _openai.Timeout(self.limits.stream_idle_s, connect=self.limits.first_event_s)
+
     def _thinking_kwargs(self, oneshot=False):
         from ..config import get_settings
 
@@ -155,28 +159,35 @@ class OpenAIBackend(BaseBackend):
         plan_changes: list[dict] = []
 
         while True:
-            self._before_request(system)
+            plan = self._begin_round(system)
             messages = [{"role": "system", "content": system}, *self._history]
 
             full_content = ""
             # tool_calls_by_index accumulates streaming tool-call deltas
             tool_calls_by_index: dict[int, dict] = {}
+            reported = Usage()
+            finish = None
 
             with self._transport_stream(
                 lambda: self._client.chat.completions.create(
                     model=self._model,
                     messages=messages,
                     tools=[SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL, UPDATE_PROFILE_TOOL],
-                    tool_choice="auto",
+                    # The reply round keeps the tools in the request and forbids calling them.
+                    tool_choice="none" if plan.kind == "reply" else "auto",
                     stream=True,
-                    max_completion_tokens=self._budget.output_remaining,
+                    max_completion_tokens=plan.max_tokens,
                     stream_options={"include_usage": True},
+                    timeout=self._timeout(),
                     **self._thinking_kwargs(),
                 )
             ) as stream:
                 for chunk in stream:
-                    self._check_cancelled()
-                    self._budget.usage(openai_usage(getattr(chunk, "usage", None)))
+                    self._on_event()
+                    if getattr(chunk, "usage", None) is not None:
+                        reported = openai_usage(chunk.usage)
+                    if chunk.choices and chunk.choices[0].finish_reason:
+                        finish = chunk.choices[0].finish_reason
                     delta = chunk.choices[0].delta if chunk.choices else None
                     if delta is None:
                         continue
@@ -206,6 +217,7 @@ class OpenAIBackend(BaseBackend):
                                         "arguments"
                                     ] += tc_delta.function.arguments
 
+            self._budget.usage(reported)
             tool_calls = [tool_calls_by_index[i] for i in sorted(tool_calls_by_index)]
 
             # Build the assistant history entry
@@ -230,19 +242,21 @@ class OpenAIBackend(BaseBackend):
             else:
                 self._history.append({"role": "assistant", "content": full_content})
                 response_text += full_content
+
+            if not self._end_round(plan, cut_off=finish == "length", calls=len(tool_calls)):
                 break
 
-            # Execute tool calls and append results
+            # Execute tool calls and append results. Arguments that do not parse are not run:
+            # the model is told, rather than given {} to run.
             for tc in tool_calls:
                 try:
                     args = json.loads(tc["arguments"])
+                    if not isinstance(args, dict):
+                        args = None
                 except json.JSONDecodeError:
-                    args = {}
-                result = self._run_tool(tc["name"], args, memories_saved, plan_changes)
-                if result is not None:
-                    self._history.append(
-                        {"role": "tool", "tool_call_id": tc["id"], "content": result}
-                    )
+                    args = None
+                result = self._run_call(tc["name"], args, memories_saved, plan_changes)
+                self._history.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
 
         return response_text, memories_saved, plan_changes
 
