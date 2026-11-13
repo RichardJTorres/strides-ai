@@ -80,6 +80,18 @@ UPDATE_TRAINING_PLAN_TOOL = {
 }
 
 
+def system_blocks(system):
+    """The system prompt as Anthropic blocks: the stable part with a cache breakpoint, then the
+    date and time, which change every turn. A plain string is sent as it is."""
+    tail = getattr(system, "tail", "")
+    if not tail:
+        return system
+    return [
+        {"type": "text", "text": system.stable, "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": tail},
+    ]
+
+
 class ClaudeBackend(BaseBackend):
     _model_cache: dict = {"models": None, "ts": 0.0}
     _MODEL_CACHE_TTL: int = 300
@@ -199,7 +211,7 @@ class ClaudeBackend(BaseBackend):
                     # tool_choice none both read the cache.)
                     cache_control={"type": "ephemeral"},
                     **self._thinking_kwargs(max_tokens=plan.max_tokens),
-                    system=system,
+                    system=system_blocks(system),
                     messages=self._history,
                     tools=[SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL, UPDATE_PROFILE_TOOL],
                     timeout=self._timeout(),

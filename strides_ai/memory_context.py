@@ -55,23 +55,60 @@ def resolve_memories(memories: list[dict], today: date | None = None) -> list[di
     return [m for m in eligible if not m.get("topic") or winners[m["topic"]][1] is m]
 
 
+NOTES_HEADER = (
+    "## Coaching Notes (remembered from previous sessions)\n"
+    "These are the applicable dated facts. They take precedence over conflicting older "
+    "profile goals/preferences and recalled conversations. Temporary facts override only "
+    "their topic; do not treat them as permanent changes. Do not revive expired or "
+    "superseded instructions from conversation history. Undated facts may be stale: "
+    "prefer explicit newer statements and ask when a conflict is unresolved."
+)
+# Lower comes first when notes must be cut: a note's category decides what is kept longest.
+CATEGORY_RANK = ("injury", "race", "goal", "training", "preference", "other")
+
+
+def memory_line(m: dict) -> str:
+    timing = f"{m.get('status', 'current')}; from {m.get('effective_from') or 'unspecified'}; until {m.get('effective_until') or 'ongoing'}"
+    topic = f"; topic={m['topic']}" if m.get("topic") else ""
+    return f"  [{m['category']}] {m['content']} (id={m.get('id', '?')}; {timing}{topic})"
+
+
+def is_protected(m: dict) -> bool:
+    """Notes about an injury, or a temporary override, are never cut from the prompt."""
+    return m.get("category") == "injury" or m.get("status") == "temporary"
+
+
+def memory_rank_key(m: dict):
+    """Sort key, best first: category, then effective_from newest first (undated last), then id
+    newest first."""
+    category = m.get("category")
+    cat = CATEGORY_RANK.index(category) if category in CATEGORY_RANK else len(CATEGORY_RANK)
+    try:
+        day = date.fromisoformat(str(m.get("effective_from"))[:10])
+    except ValueError:
+        day = None
+    return (
+        cat,
+        day is None,
+        -(day.toordinal() if day else 0),
+        -(m.get("id") if type(m.get("id")) is int else 0),
+    )
+
+
+def split_memories(memories: list[dict], today: date | None = None) -> tuple[list[str], list[str]]:
+    """The applicable notes as prompt lines: (protected, others by rank, best first)."""
+    active = sorted(resolve_memories(memories, today), key=memory_rank_key)
+    return (
+        [memory_line(m) for m in active if is_protected(m)],
+        [memory_line(m) for m in active if not is_protected(m)],
+    )
+
+
 def memories_section(memories: list[dict], today: date | None = None) -> str:
     active = resolve_memories(memories, today)
     if not memories:
         return ""
-    lines = [
-        "## Coaching Notes (remembered from previous sessions)",
-        "These are the applicable dated facts. They take precedence over conflicting older "
-        "profile goals/preferences and recalled conversations. Temporary facts override only "
-        "their topic; do not treat them as permanent changes. Do not revive expired or "
-        "superseded instructions from conversation history. Undated facts may be stale: "
-        "prefer explicit newer statements and ask when a conflict is unresolved.",
-    ]
-    for m in active:
-        timing = f"{m.get('status', 'current')}; from {m.get('effective_from') or 'unspecified'}; until {m.get('effective_until') or 'ongoing'}"
-        topic = f"; topic={m['topic']}" if m.get("topic") else ""
-        lines.append(f"  [{m['category']}] {m['content']} (id={m.get('id', '?')}; {timing}{topic})")
-    return "\n".join(lines)
+    return "\n".join([NOTES_HEADER, *(memory_line(m) for m in active)])
 
 
 def memory_timeline_section(memories: list[dict], start: date, end: date) -> str:

@@ -10,7 +10,7 @@ from sqlmodel import Session
 from strides_ai import db
 from strides_ai.api.conversations import ConversationCoordinator
 from strides_ai.backends.base import BaseBackend
-from strides_ai.budget import ContextPrompt, Limits
+from strides_ai.budget import ContextPrompt, Limits, Reducible, Required
 from strides_ai.db import chat_turns
 from strides_ai.db import engine as db_engine
 from strides_ai.turn_record import TurnRecord
@@ -85,25 +85,19 @@ def test_record_methods_are_safe_before_any_round():
 # ── Section names ─────────────────────────────────────────────────────────────
 
 
-def test_context_prompt_keys_follow_the_sections_that_exist():
+def test_context_prompt_is_the_fullest_version_with_the_date_last():
     prompt = ContextPrompt(
-        "base",
-        ["profile text", "", "plan text"],
-        ["", "summary"],
-        priority_keys=["profile", "memories", "upcoming_workouts"],
-        activity_keys=["activity:2026-01-01", "older_summary"],
+        [
+            Required("mandatory", "base", "base"),
+            Required("profile", "profile", ""),
+            Reducible("notes", 0.15, lambda k: "n" * k, full=3, join="\n"),
+        ],
+        tail="date",
     )
-    assert prompt.priority == ["profile text", "plan text"]
-    assert prompt.priority_keys == ["profile", "upcoming_workouts"]
-    assert prompt.activity_keys == ["older_summary"]
-    # The names are for the record only; the prompt text is unchanged.
-    assert str(prompt) == "base\n\nprofile text\n\nplan text\n\nsummary"
-
-
-def test_context_prompt_without_keys_gets_positional_names():
-    prompt = ContextPrompt("base", ["a", "", "c"], ["x"])
-    assert prompt.priority_keys == ["priority_0", "priority_2"]
-    assert prompt.activity_keys == ["activity_0"]
+    assert [p.key for p in prompt.required] == ["mandatory", "profile"]
+    assert [p.key for p in prompt.reducible] == ["notes"]
+    assert str(prompt) == "base\nnnn\n\ndate"
+    assert prompt.stable({"notes": 1}).startswith("base\nn")
 
 
 # ── Admission ─────────────────────────────────────────────────────────────────
@@ -115,28 +109,33 @@ def test_admission_names_what_was_sent_and_what_was_left_out(mocker):
 
     backend = ClaudeBackend("fake", [{"role": "user", "content": "orphan"}])
     prompt = ContextPrompt(
-        "base instructions",
-        ["profile text", "m" * 600_000, "plan text"],
-        ["ACTIVITY one"],
-        priority_keys=["profile", "memories", "upcoming_workouts"],
-        activity_keys=["activity:2026-01-01"],
+        [
+            Required("mandatory", "base instructions", "base instructions"),
+            Required("profile", "profile", "profile text"),
+            Reducible("other_memories", 0.15, lambda k: "m" * 600_000, full=1, levels=(1, 0)),
+            Required("upcoming_workouts", "workouts", "plan text"),
+            Reducible("recent_activities", 0.25, lambda k: "one activity", full=1, levels=(1, 0)),
+        ],
+        tail="today",
     )
 
     backend.prepare_turn(prompt, "hello", None)
 
     admission = backend._admission
-    levels = {section["key"]: section["level"] for section in admission["sections"]}
-    # The oversized section stops the priority list, so the one after it is left out too.
+    levels = {s["key"]: s.get("level") for s in admission["sections"]}
+    # The oversized section is cut alone; the sections after it are still sent.
     assert levels == {
-        "profile": 0,
-        "memories": None,
+        "mandatory": None,
+        "profile": None,
         "upcoming_workouts": None,
-        "activity:2026-01-01": 0,
+        "other_memories": 0,
+        "recent_activities": 1,
     }
-    memories = next(s for s in admission["sections"] if s["key"] == "memories")
-    assert memories["bytes"] == 600_000 and memories["est"] > 200_000
+    memories = next(s for s in admission["sections"] if s["key"] == "other_memories")
+    assert memories["bytes"] == 0 and memories["full_est"] > 200_000
     assert all(type(value) is int for value in admission["fixed"].values())
-    assert admission["history"] == {"messages": 0, "est": 0, "dropped": 1}
+    assert admission["history"]["messages"] == 0 and admission["history"]["dropped"] == 1
+    assert admission["ladder"] == [] and type(admission["required_est"]) is int
     assert type(admission["admission_ms"]) is int and admission["est_input"] > 0
     assert admission["count_kind"] == "estimated"
 
@@ -156,10 +155,10 @@ def _strings(value):
         yield value
 
 
-def _run_turn(backend, message="hello"):
+def _run_turn(backend, message="hello", system="mandatory"):
     coordinator = ConversationCoordinator(lambda _: backend)
     turn = coordinator.acquire("running")
-    coordinator.start(turn, "mandatory", message, message, None)
+    coordinator.start(turn, system, message, message, None)
     turn.worker.join(5)
     assert not turn.worker.is_alive()
     with Session(db_engine.get_engine()) as session:
@@ -188,7 +187,9 @@ def test_completed_turn_stores_its_record(mocker, tmp_db):
     client.messages.stream.return_value = _claude_stream(["Hello", " world"])
     from strides_ai.backends.claude import ClaudeBackend
 
-    _, status, record = _run_turn(ClaudeBackend("fake", []), message="secret question")
+    _, status, record = _run_turn(
+        ClaudeBackend("fake", []), message="secret question", system="secret system prompt"
+    )
 
     assert status == "done"
     assert record["stop"] == {"reason": "complete", "detail": None}
@@ -200,7 +201,7 @@ def test_completed_turn_stores_its_record(mocker, tmp_db):
     # Neither the reply, the message nor the system prompt enters the record.
     stored = str(record).lower()
     assert "hello" not in stored and "secret question" not in stored
-    assert "mandatory" not in {v for v in _strings(record)}
+    assert "secret system prompt" not in stored
 
 
 def test_failed_turn_stores_its_record(mocker, tmp_db):
@@ -305,8 +306,9 @@ def test_context_report_runs_offline_and_changes_nothing(mocker, tmp_db):
     client.messages.count_tokens.assert_not_called()
     client.messages.stream.assert_not_called()
     assert report["rejected"] is None and report["measured"] is False
-    assert {"memories"} <= {section["key"] for section in report["sections"]}
-    assert "mandatory" in text and "memories" in text and "Request as sent" in text
+    assert {"protected_memories", "other_memories"} <= {s["key"] for s in report["sections"]}
+    assert "mandatory" in text and "other_memories" in text and "Request as sent" in text
+    assert "Ladder steps applied" in text and "Required context" in text
     # The memory text itself is never printed.
     assert "marathon" not in text
     assert _row_counts(tmp_db) == before

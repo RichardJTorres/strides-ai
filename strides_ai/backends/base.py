@@ -7,7 +7,10 @@ from .. import db
 from ..budget import (
     DEFAULT_BYTES_PER_TOKEN,
     TOOL_BUDGET_NOTE,
+    ContextPrompt,
     Limits,
+    PreparedPrompt,
+    Required,
     RoundPlan,
     TurnBudget,
     TurnStop,
@@ -16,6 +19,7 @@ from ..budget import (
     estimate,
     normalize_limits,
 )
+from ..context_builder import select_context, too_large
 from ..kinds import (
     KINDS,
     display_type,
@@ -337,19 +341,6 @@ def _check_proposed_changes(changes: dict, mode: str | None = None) -> list:
         return []
 
 
-def _section_fact(
-    keys: list, index: int, section: str, included: bool, bytes_per_token: float
-) -> dict:
-    """One context section in the per-turn record: sizes only, never the text."""
-    return {
-        "key": keys[index] if index < len(keys) else f"section_{index}",
-        # 0 = sent in full; None = left out of this request.
-        "level": 0 if included else None,
-        "bytes": len(section.encode("utf-8")),
-        "est": estimate(section, bytes_per_token),
-    }
-
-
 class BaseBackend(ABC):
     """
     A backend wraps one LLM provider and manages its own conversation history.
@@ -401,8 +392,6 @@ class BaseBackend(ABC):
         """Select atomic context by priority; admission never changes the submission."""
         import time
 
-        from ..budget import ContextPrompt
-
         admission_started = time.monotonic()
         # A turn starts clean: nothing from an earlier turn on this instance can be stored for it.
         self._admission = None
@@ -441,126 +430,105 @@ class BaseBackend(ABC):
         ratio = self._bytes_per_token()
         b = TurnBudget(self.limits, ratio)
         submission = self._submission_history(message, attachments)
-        optional, activities, periods = [], [], []
-        optional_keys, activity_keys = [], []
-        if isinstance(system, ContextPrompt):
-            optional, activities = system.priority, system.activities
-            periods = system.activity_periods
-            optional_keys = getattr(system, "priority_keys", [])
-            activity_keys = getattr(system, "activity_keys", [])
-            system = system.mandatory
-        mandatory = system
-        selected_optional, selected_activities = [], []
-        # Leave room for an explicit omission notice with date coverage.
-        reserve = 300 if activities else 0
+        tools = self._tool_definitions()
+        if not isinstance(system, ContextPrompt):
+            system = ContextPrompt([Required("mandatory", "base instructions", str(system))])
+        limits = self.limits
 
-        def fits(prompt, messages, margin=reserve):
-            return (
-                estimate([prompt, messages, self._tool_definitions()], ratio) + margin
-                <= self.limits.input_ceiling
-            )
+        def cost(value):
+            return estimate(value, ratio) if value else 0
+
+        empty = {p.key: 0 for p in system.reducible}
+        required_text = system.stable(empty)
+        floor = f"{required_text}\n\n{system.tail}" if system.tail else required_text
+        mandatory = next((p.text for p in system.required if p.key == "mandatory"), "")
 
         b.counter = self._count_once
+        part_sizes = [(p.label, cost(p.text)) for p in system.required if p.key != "mandatory"] + [
+            ("base instructions", cost(mandatory)),
+            ("tool definitions", cost(tools)),
+            ("your message and attachments", cost(submission[-1:])),
+        ]
         try:
             # The one place a measured count may reject a message on its own: the estimate says
-            # the submission cannot fit, so confirm before refusing the athlete's message.
-            b.check_request(system, submission, self._tool_definitions())
+            # the required request cannot fit, so confirm before refusing the athlete's message.
+            b.check_request(floor, submission, tools)
         except BudgetExceeded:
-            # No optional context is left to remove.
-            raise BudgetExceeded(
-                "Your message and attachments exceed the input context limit. Shorten them or send smaller files."
+            raise too_large(
+                estimate([floor, submission, tools], ratio), limits.context_target, part_sizes
             )
         # When the provider's own count admitted the bare request, that count stands even though
-        # the estimate says otherwise; only optional context is dropped (the estimate decides it).
+        # the estimate says otherwise; every reducible section is then left out.
         bare_measured = b.count_kind == "measured"
         self._admitted_input = b.input_size if bare_measured else None
-        for section in optional:
-            candidate = system + "\n\n" + section
-            if not fits(candidate, submission):
-                break
-            selected_optional.append(section)
-            system = candidate
-        for group in reversed(groups):
-            candidate = group + self._history
-            if len(candidate) > self.limits.history_messages or not fits(
-                system, [*candidate, *submission]
-            ):
-                break
-            self._history = candidate
-        retained_activities = 0
-        for index, section in enumerate(activities):
-            count = section.count("\nACTIVITY ")
-            if retained_activities + count > self.limits.recent_activities:
-                continue
-            candidate = system + "\n\n" + section
-            if not fits(candidate, [*self._history, *submission]):
-                continue
-            selected_activities.append((index, section))
-            retained_activities += count
-            system = candidate
-        while True:
-            included = {index for index, _ in selected_activities}
-            omitted = [periods[i] for i in range(len(periods)) if i not in included and periods[i]]
-            notice = ""
-            if omitted:
-                dates = [day for period in omitted for day in period]
-                notice = f"Context omitted: activity sections covering {min(dates)}..{max(dates)}. Individual details or aggregates for those omitted sections are unavailable."
-            system = "\n\n".join(
-                filter(
-                    None,
-                    [
-                        mandatory,
-                        *selected_optional,
-                        *[section for _, section in selected_activities],
-                        notice,
-                    ],
-                )
-            )
-            try:
-                b.check_request(
-                    system, self._submission_history(message, attachments), self._tool_definitions()
-                )
-                break
-            except BudgetExceeded:
-                if selected_activities:
-                    selected_activities.pop()
-                elif self._history:
-                    self._history = self._history[2:]
-                elif selected_optional:
-                    selected_optional.pop()
-                elif bare_measured:
-                    break
-                else:
-                    raise
-        self._retained_messages = len(self._history)
-        self._retained_activities = sum(
-            section.count("\nACTIVITY ") for _, section in selected_activities
+        selection = select_context(
+            system,
+            groups,
+            target=limits.context_target,
+            cost=cost,
+            size=lambda text, kept: estimate([text, [*kept, *submission], tools], ratio),
+            max_pairs=limits.history_messages // 2,
+            recent_limit=limits.recent_activities,
+            part_sizes=part_sizes,
+            check_required=not bare_measured,
         )
-        included_activities = {index for index, _ in selected_activities}
+        self._history = [m for group in groups[len(groups) - selection.pairs :] for m in group]
+        if not selection.pairs:
+            self._history = []
+        prepared = PreparedPrompt(selection.stable, selection.tail)
+        if not bare_measured:
+            # Admission against the model's hard ceiling, with what is actually sent.
+            b.check_request(prepared, self._submission_history(message, attachments), tools)
+        self._retained_messages = len(self._history)
+        self._retained_activities = selection.knobs.get("recent_activities", 0)
+        sections = [
+            {
+                "key": p.key,
+                "kind": "required",
+                "bytes": len(p.text.encode("utf-8")),
+                "est": cost(p.text),
+            }
+            for p in system.required
+        ]
+        for p in system.reducible:
+            knob = selection.knobs[p.key]
+            text = p.render(knob)
+            sections.append(
+                {
+                    "key": p.key,
+                    "kind": "reducible",
+                    "level": knob,
+                    "full": p.full,
+                    "cap": int(limits.context_target * p.cap),
+                    "bytes": len(text.encode("utf-8")),
+                    "est": cost(text),
+                    "full_est": cost(p.render(p.full)),
+                }
+            )
         self._admission = {
             "admission_ms": int(round((time.monotonic() - admission_started) * 1000)),
             "fixed": {
                 "mandatory": estimate(mandatory, ratio),
-                "tools": estimate(self._tool_definitions(), ratio),
+                "tools": estimate(tools, ratio),
                 "submission": estimate(submission, ratio),
+                "date_time": cost(system.tail),
             },
-            "sections": [
-                _section_fact(optional_keys, i, section, i < len(selected_optional), ratio)
-                for i, section in enumerate(optional)
-            ]
-            + [
-                _section_fact(activity_keys, i, section, i in included_activities, ratio)
-                for i, section in enumerate(activities)
-            ],
+            "sections": sections,
             "history": {
                 "messages": len(self._history),
                 "est": estimate(self._history, ratio) if self._history else 0,
                 "dropped": len(history) - len(self._history),
+                "pairs": selection.pairs,
+                "of": selection.available_pairs,
+                "cap": selection.pairs_cap,
             },
+            "ladder": selection.ladder,
+            "required_est": selection.required_est,
+            "context_target": limits.context_target,
             "est_input": b.input_size,
             "count_kind": b.count_kind,
         }
-        return system
+        return prepared
 
     def _submission_history(self, message, attachments):
         return [

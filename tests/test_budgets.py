@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from strides_ai.backends.base import BaseBackend
-from strides_ai.budget import BudgetExceeded, ContextPrompt, Limits, estimate
+from strides_ai.budget import BudgetExceeded, ContextPrompt, Limits, Reducible, Required, estimate
 from strides_ai.coach import build_initial_history, older_activity_summary
 from tests.test_backends import (
     _claude_stream,
@@ -222,7 +222,16 @@ def test_history_selection_is_complete_ordered_and_bounded(adapter):
         ]
     else:
         backend._history = prior
-    system = backend.prepare_turn(ContextPrompt("mandatory", ["profile"], ["old" * 200000]), "now")
+    system = backend.prepare_turn(
+        ContextPrompt(
+            [
+                Required("mandatory", "base instructions", "mandatory"),
+                Required("profile", "profile", "profile"),
+                Reducible("old", 0.25, lambda k: "old" * 200000, full=1, levels=(1, 0)),
+            ]
+        ),
+        "now",
+    )
     assert backend._retained_messages == 40
     assert backend._retained_activities == 0
     assert len(backend._history) == 40
