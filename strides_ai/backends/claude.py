@@ -194,6 +194,10 @@ class ClaudeBackend(BaseBackend):
                 lambda: self._client.messages.stream(
                     model=self._model,
                     max_tokens=plan.max_tokens,
+                    # Automatic caching: later rounds of a turn read the earlier prefix at a tenth
+                    # of the price. (Verified live: a repeat request and the reply round with
+                    # tool_choice none both read the cache.)
+                    cache_control={"type": "ephemeral"},
                     **self._thinking_kwargs(max_tokens=plan.max_tokens),
                     system=system,
                     messages=self._history,

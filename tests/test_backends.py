@@ -91,6 +91,15 @@ def test_claude_stream_turn_uses_adaptive_thinking(mock_anthropic, monkeypatch, 
     assert kwargs["max_tokens"] == 16000
 
 
+def test_claude_requests_ask_for_automatic_caching_and_carry_the_stall_timeout(
+    mock_anthropic, monkeypatch
+):
+    kwargs = _claude_thinking_kwargs(mock_anthropic, monkeypatch, "medium")
+    assert kwargs["cache_control"] == {"type": "ephemeral"}
+    assert "tool_choice" not in kwargs  # tools are on in a tool round
+    assert kwargs["timeout"].read == 120 and kwargs["timeout"].connect == 60
+
+
 def test_claude_stream_turn_thinking_off(mock_anthropic, monkeypatch):
     kwargs = _claude_thinking_kwargs(mock_anthropic, monkeypatch, "off")
     assert kwargs["thinking"] == {"type": "disabled"}
