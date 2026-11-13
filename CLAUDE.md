@@ -76,6 +76,10 @@ At session start, `build_initial_history()` seeds the full activity log (all act
 
 Every chat turn stores what it sent and why it stopped in `chat_turns.budget_json`: context section sizes and whether each was sent, retained history, per-round sizes and timings, retries, stop reason. Sizes and timings only, never content. `TurnBudget` owns a `TurnRecord` and feeds it from `request()` / `usage()` / `tool()`; `prepare_turn` leaves the admission facts on `backend._admission`; the coordinator stores the record on success and failure. Read it at `GET /api/chat/turns/{id}/budget` (deliberately not part of `/chat/active`). `scripts/context_report.py --mode <mode>` runs the same assembly and admission offline. Section names come from `ContextPrompt.priority_keys` / `activity_keys`, so a new context section needs a key in `build_system`.
 
+### What a turn changed: mutation log, receipt, notice (`strides_ai/db/mutations.py`, `strides_ai/turn_notice.py`)
+
+Every change a chat turn makes is logged in `chat_turn_mutations` in the **same transaction** as the change (`calendar.apply_changes` and `memories.save` take `turn_id`; the coordinator sets `backend.turn_id`). A profile proposal is logged as `pending` (nothing is saved until the athlete accepts it). `build_receipt(session, turn_id)` is the only source of the receipt, stored in `conversations.receipt_json`; `conversations.notice` holds how the turn ended (`truncated`, `limit`, `failed`, `interrupted`). Both are kept out of `content`, which holds only the model's words. Wording lives in `turn_notice.py` and is rendered on read: `/api/history` returns `notice_text` / `receipt_text` (the receipt only when there is a notice), the stream sends `[NOTICE]`, and `build_initial_history` replays a notice as `[App note: …]` after the reply. `recover_interrupted_turns` builds the receipt from the log for turns a restart left running. Backends set `self._budget.notice` instead of appending text to the reply.
+
 ### Conversation persistence
 
 - **Conversation history**: last 40 messages stored in SQLite, re-injected at session start.

@@ -6,7 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from strides_ai import db
-from strides_ai.api.conversations import ConversationCoordinator, FAILED, INTERRUPTED
+from strides_ai.api.conversations import ConversationCoordinator
 
 
 class FakeBackend:
@@ -75,7 +75,9 @@ def test_failure_and_delayed_cancellation(tmp_db, cancel):
     turn.worker.join(3)
     assert not turn.worker.is_alive()
     history = db.get_recent_messages(mode="running")
-    assert [m["content"] for m in history] == ["hello", INTERRUPTED if cancel else FAILED]
+    # The app's note is stored beside the reply, never in it.
+    assert [m["content"] for m in history] == ["hello", ""]
+    assert history[-1]["notice"] == ("interrupted" if cancel else "failed")
     coordinator.release(coordinator.acquire("running"))
 
 
@@ -289,7 +291,8 @@ def test_explicit_cancel_keeps_partial_text(tmp_db):
     assert entered.wait(2)
     assert coordinator.cancel("running") is True
     turn.worker.join(3)
-    assert db.get_recent_messages(mode="running")[-1]["content"] == f"partial\n\n{INTERRUPTED}"
+    last = db.get_recent_messages(mode="running")[-1]
+    assert (last["content"], last["notice"]) == ("partial", "interrupted")
     assert coordinator.cancel("running") is False
 
 
@@ -304,7 +307,8 @@ def test_startup_recovery_marks_running_turns_interrupted(tmp_db):
     recover_interrupted_turns()
     with Session(db.get_engine()) as session:
         assert chat_turns.to_dict(chat_turns.latest(session, "running"))["status"] == "interrupted"
-    assert db.get_recent_messages(mode="running")[-1]["content"] == f"half a reply\n\n{INTERRUPTED}"
+    last = db.get_recent_messages(mode="running")[-1]
+    assert (last["content"], last["notice"]) == ("half a reply", "interrupted")
 
 
 def test_active_endpoint_returns_finished_turn_once(tmp_db):

@@ -32,6 +32,7 @@ from ..kinds import (
     scored_group,
 )
 from ..workout_structure import structure_for_type, structure_to_json, total_seconds
+from . import mutations
 from .models import CalendarEntry, CalendarPref, ChangeRequest, RaceDetail, WorkoutDetail
 
 
@@ -424,12 +425,40 @@ def delete_entry(session: Session, entry_id: int) -> None:
     session.commit()
 
 
-def apply_changes(session: Session, ops: list[dict], request_id: str | None = None) -> dict:
+def _log_turn_changes(session: Session, turn_id: int | None, ops: list[dict], result: dict) -> None:
+    if turn_id is None or not any(result.values()):
+        return
+    created_ids = iter(result["created"])
+    created = [
+        {
+            "id": next(created_ids),
+            "date": op.get("date"),
+            "label": display_type(op.get("kind"), op.get("workout_type"), op.get("sport")),
+        }
+        for op in ops
+        if op.get("op") == "create"
+    ]
+    mutations.log(
+        session,
+        turn_id,
+        "calendar",
+        "committed",
+        {"created": created, "updated": result["updated"], "deleted": result["deleted"]},
+    )
+
+
+def apply_changes(
+    session: Session,
+    ops: list[dict],
+    request_id: str | None = None,
+    turn_id: int | None = None,
+) -> dict:
     """Apply create / update / delete operations atomically and idempotently.
 
     ``ops`` items: ``{"op": "create", ...entry fields}``, ``{"op": "update", "id": n, ...patch}``,
     ``{"op": "delete", "id": n}``. Any failure rolls the whole set back. A repeated
-    ``request_id`` returns the first result without applying anything again.
+    ``request_id`` returns the first result without applying anything again. With a ``turn_id``
+    the change is logged in the same transaction (see ``mutations``).
     Returns ``{"created": [ids], "updated": [ids], "deleted": [ids]}``.
     """
     ops_hash = hashlib.sha1(json.dumps(ops, sort_keys=True, default=str).encode()).hexdigest()
@@ -463,6 +492,7 @@ def apply_changes(session: Session, ops: list[dict], request_id: str | None = No
                 result["updated"].append(entry_id)
             else:
                 raise EntryError(f"Unknown operation: {kind!r}")
+        _log_turn_changes(session, turn_id, ops, result)
         if request_id:
             session.add(
                 ChangeRequest(

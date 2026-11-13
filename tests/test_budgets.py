@@ -136,7 +136,7 @@ def test_equivalent_limits(
     assert requests.call_count == expected_requests
     assert write.call_count == expected_writes
     assert len(memories) == expected_writes
-    assert "Turn stopped" in text
+    assert backend._budget.notice == "limit"
     assert "".join(chunks) == text
     assert changes == []
 
@@ -147,7 +147,7 @@ def test_tool_results_rebudgeted_before_request(adapter, mocker):
     text, memories, _ = backend.stream_turn("mandatory", "hello", lambda _: None)
     assert requests.call_count == write.call_count == 1
     assert len(memories) == 1
-    assert "Input context limit" in text
+    assert "Input context limit" in backend._budget.stop_reason
 
 
 @pytest.mark.parametrize("attachment", [False, True])
@@ -179,7 +179,7 @@ def test_stop_preserves_changes_and_releases_slot(adapter, tmp_db, monkeypatch):
     turn.worker.join(5)
     assert not turn.worker.is_alive()
     assert db.get_all_memories()[0]["content"] == "race"
-    assert "Turn stopped" in db.get_recent_messages(mode="running")[-1]["content"]
+    assert db.get_recent_messages(mode="running")[-1]["notice"] == "limit"
     chunks = list(turn.tokens.queue)
     assert any(str(chunk).startswith("[MEMORIES]") for chunk in chunks)
     coordinator.release(coordinator.acquire("running"))
@@ -282,7 +282,7 @@ def test_retries_do_not_replay_completed_writes(adapter, mocker, monkeypatch):
     text, memories, _ = backend.stream_turn("mandatory", "hello", lambda _: None)
     assert requests.call_count == write.call_count == len(memories) == 2
     assert backend._budget.rounds == 2
-    assert "Turn stopped" in text
+    assert backend._budget.notice == "limit"
 
 
 def test_output_and_tool_arguments_share_turn_budget(adapter, mocker, monkeypatch):
@@ -290,7 +290,7 @@ def test_output_and_tool_arguments_share_turn_budget(adapter, mocker, monkeypatc
     write = mocker.patch("strides_ai.backends.base.db.save_memory", return_value="saved")
     backend, requests = adapter()
     text, memories, _ = backend.stream_turn("mandatory", "hello", lambda _: None)
-    assert "Turn stopped" in text
+    assert backend._budget.notice == "limit"
     assert backend._budget.rounds <= 2
     assert write.call_count <= 1
     assert len(memories) == write.call_count
@@ -380,7 +380,8 @@ def test_retry_exhaustion_stops_without_replaying_writes(adapter, mocker, monkey
     text, memories, _ = backend.stream_turn("mandatory", "hello", lambda _: None)
     assert attempts[0] == 3
     assert requests.call_count == write.call_count == len(memories) == 1
-    assert "Transport retry limit" in text
+    assert "Transport retry limit" in backend._budget.stop_reason
+    assert backend._budget.notice == "limit"
     assert backend._budget.rounds == 2
 
 

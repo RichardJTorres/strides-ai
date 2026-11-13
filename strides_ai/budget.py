@@ -69,6 +69,7 @@ class TurnBudget:
         self.profile_proposals = []
         self.text = []
         self.stop_reason = "complete"
+        self.notice: str | None = None  # how the turn ended, if not normally (turn_notice.py)
         self.count_kind = "estimated"
         self.round_generated = 0
         self.counter = None
@@ -152,9 +153,9 @@ def bounded_turn(method):
         except BudgetExceeded as exc:
             self._budget.stop_reason = str(exc)
             record.set_stop("stopped", str(exc))
-            notice = f"\n\n_Turn stopped: {exc} Earlier memory or calendar changes may already have completed._"
-            on_token(notice)
-            return "".join(self._budget.text) + notice, self._budget.memories, self._budget.changes
+            # The app's note about the stop is stored beside the reply (turn_notice.py), not in it.
+            self._budget.notice = "limit"
+            return "".join(self._budget.text), self._budget.memories, self._budget.changes
         except BaseException as exc:
             self._budget.stop_reason = (
                 "cancelled" if isinstance(exc, InterruptedError) else "provider_error"

@@ -15,6 +15,19 @@ interface Message {
   content: string;
   created_at?: string;
   model?: string;
+  // How the turn ended and what it saved, written by the app and kept apart from the reply.
+  notice_text?: string | null;
+  receipt_text?: string | null;
+}
+
+function TurnNotice({ message }: { message: Message }) {
+  if (!message.notice_text) return null;
+  return (
+    <div className="mt-2 text-xs text-gray-500 italic whitespace-pre-line">
+      {message.notice_text}
+      {message.receipt_text ? `\n${message.receipt_text}` : ""}
+    </div>
+  );
 }
 
 interface Memory {
@@ -183,9 +196,10 @@ const MessageList = memo(function MessageList({
                   <TypingIndicator />
                 ) : (
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {m.content || "…"}
+                    {m.content || (m.notice_text ? "" : "…")}
                   </ReactMarkdown>
                 )}
+                {i !== streamingIndex && <TurnNotice message={m} />}
                 {m.model && i !== streamingIndex && (
                   <p className="text-[10px] text-gray-700 mt-1">{m.model}</p>
                 )}
@@ -782,12 +796,24 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
             continue;
           }
 
-          if (payload.startsWith("[ERROR]")) {
-            setMessages((prev) =>
-              prev.map((m, i) =>
-                i === assistantIndex ? { ...m, content: `_${payload.slice(7)}_` } : m
-              )
-            );
+          if (payload.startsWith("[NOTICE]")) {
+            try {
+              // Parse the raw line: the newline unescaping above would break the JSON string.
+              const notice = JSON.parse(line.slice(6 + "[NOTICE]".length));
+              setMessages((prev) =>
+                prev.map((m, i) =>
+                  i === assistantIndex
+                    ? {
+                        ...m,
+                        notice_text: [notice.text, notice.detail].filter(Boolean).join(" "),
+                        receipt_text: notice.receipt_text,
+                      }
+                    : m
+                )
+              );
+            } catch {
+              // ignore
+            }
             continue;
           }
 

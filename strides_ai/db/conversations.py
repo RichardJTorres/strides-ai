@@ -1,5 +1,7 @@
 """Conversation history CRUD operations."""
 
+import json
+
 import sqlalchemy as sa
 from sqlmodel import Session, select
 
@@ -12,8 +14,17 @@ def save(
     content: str,
     mode: str = "running",
     model: str | None = None,
+    notice: str | None = None,
+    receipt: dict | None = None,
 ) -> int:
-    row = Conversation(role=role, content=content, mode=mode, model=model)
+    row = Conversation(
+        role=role,
+        content=content,
+        mode=mode,
+        model=model,
+        notice=notice,
+        receipt_json=json.dumps(receipt) if receipt else None,
+    )
     session.add(row)
     session.commit()
     return row.id

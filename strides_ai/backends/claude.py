@@ -170,9 +170,7 @@ class ClaudeBackend(BaseBackend):
             self._history.append({"role": "assistant", "content": final.content})
 
             if final.stop_reason == "max_tokens":
-                notice = "\n\n_[Response truncated — hit the length limit. Ask me to continue.]_"
-                on_token(notice)
-                response_text += notice
+                self._budget.notice = "truncated"
                 break
 
             if final.stop_reason != "tool_use":

@@ -12,18 +12,36 @@ from fastapi import HTTPException
 from sqlmodel import Session
 
 from ..config import VALID_MODES
-from ..db import chat_turns, conversations
+from ..db import chat_turns, conversations, mutations
 from ..db.engine import get_engine
+from ..turn_notice import notice_text, receipt_text
 
-INTERRUPTED = "_Chat interrupted — resend your message to generate a full response._"
-FAILED = "_Chat failed — resend your message to try again._"
 # An unattended turn keeps running after the client leaves, so it needs a ceiling of its own.
 MAX_TURN_SECONDS = 600
 FLUSH_INTERVAL_S = 1.0
 
 
-def _with_marker(partial: str, marker: str) -> str:
-    return f"{partial.rstrip()}\n\n{marker}" if partial.strip() else marker
+def _store_reply(session, mode, turn_id, text, notice=None, model=None) -> tuple[int, dict | None]:
+    """The one place a reply is stored: its words, how it ended and what it changed, together.
+
+    The receipt is built from the mutation log, so it is right however the turn ended.
+    """
+    receipt = mutations.build_receipt(session, turn_id)
+    message_id = conversations.save(
+        session, "assistant", text, mode=mode, model=model, notice=notice, receipt=receipt
+    )
+    return message_id, receipt
+
+
+def _notice_event(code: str, receipt: dict | None, detail: str | None = None) -> str:
+    return "[NOTICE]" + json.dumps(
+        {
+            "code": code,
+            "text": notice_text(code),
+            "receipt_text": receipt_text(receipt),
+            "detail": detail,
+        }
+    )
 
 
 def _snapshot_events(backend, model: str | None = None) -> dict:
@@ -60,9 +78,7 @@ def recover_interrupted_turns() -> None:
     """Startup: a turn still ``running`` belongs to a process that no longer exists."""
     with Session(get_engine()) as session:
         for row in chat_turns.running(session):
-            message_id = conversations.save(
-                session, "assistant", _with_marker(row.partial_text, INTERRUPTED), mode=row.mode
-            )
+            message_id, _ = _store_reply(session, row.mode, row.id, row.partial_text, "interrupted")
             chat_turns.update(
                 session, row.id, status="interrupted", assistant_message_id=message_id
             )
@@ -156,6 +172,8 @@ class ConversationCoordinator:
         with Session(get_engine()) as session:
             user_id = conversations.save(session, "user", saved_message, mode=turn.mode)
             turn.turn_id = chat_turns.create(session, turn.mode, user_id)
+        if turn.backend is not None:
+            turn.backend.turn_id = turn.turn_id  # lets its writes be logged against this turn
         turn.worker = threading.Thread(
             target=self._run, args=(turn, system, message, attachments), daemon=True
         )
@@ -211,8 +229,9 @@ class ConversationCoordinator:
                 events["plan_changes"] = changes
                 events["profile_proposals"] = proposals
                 events = {k: v for k, v in events.items() if v}
-                message_id = conversations.save(
-                    session, "assistant", text, mode=turn.mode, model=turn.backend.label
+                notice = getattr(getattr(turn.backend, "_budget", None), "notice", None)
+                message_id, receipt = _store_reply(
+                    session, turn.mode, turn.turn_id, text, notice, turn.backend.label
                 )
                 finalized = True  # the reply is stored; never write a second one below
                 chat_turns.update(
@@ -231,29 +250,36 @@ class ConversationCoordinator:
                     turn.tokens.put("[PLAN_UPDATED]" + json.dumps(changes))
                 if proposals:
                     turn.tokens.put("[PROFILE_PROPOSAL]" + json.dumps(proposals))
+                if notice:
+                    turn.tokens.put(_notice_event(notice, receipt))
             except Exception as exc:
                 session.rollback()
                 if finalized:
                     logging.getLogger(__name__).exception("chat turn status write failed")
                     raise
                 cancelled = turn.cancel.is_set() or isinstance(exc, InterruptedError)
-                marker = INTERRUPTED if cancelled else FAILED
+                code = "interrupted" if cancelled else "failed"
                 partial = "".join(parts)
-                message_id = conversations.save(
-                    session, "assistant", _with_marker(partial, marker), mode=turn.mode
-                )
+                message_id, receipt = _store_reply(session, turn.mode, turn.turn_id, partial, code)
+                events = _snapshot_events(turn.backend)
                 chat_turns.update(
                     session,
                     turn.turn_id,
                     status="cancelled" if cancelled else "failed",
                     partial_text=partial,
-                    events=_snapshot_events(turn.backend),
+                    events=events,
                     assistant_message_id=message_id,
                     budget=_turn_record(turn),
                 )
                 finalized = True
-                if marker == FAILED:
-                    turn.tokens.put(f"[ERROR]{exc}")
+                # What was saved before the stop is shown too, not only the failure.
+                if events.get("memories"):
+                    turn.tokens.put("[MEMORIES]" + json.dumps(events["memories"]))
+                if events.get("plan_changes"):
+                    turn.tokens.put("[PLAN_UPDATED]" + json.dumps(events["plan_changes"]))
+                if events.get("profile_proposals"):
+                    turn.tokens.put("[PROFILE_PROPOSAL]" + json.dumps(events["profile_proposals"]))
+                turn.tokens.put(_notice_event(code, receipt, None if cancelled else str(exc)))
         finally:
             session.close()
             try:  # a row must never stay "running" once its worker is gone
