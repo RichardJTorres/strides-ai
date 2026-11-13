@@ -395,29 +395,11 @@ class GeminiBackend(BaseBackend):
             tool_response_parts: list[types.Part] = []
             for part in fc_parts:
                 fc = part.function_call
-                if fc.name == "save_memory":
-                    result, category, content = self._execute_save_memory(dict(fc.args))
-                    memories_saved.append((category, content))
+                result = self._run_tool(fc.name, dict(fc.args or {}), memories_saved, plan_changes)
+                if result is not None:
                     tool_response_parts.append(
                         types.Part.from_function_response(
-                            name="save_memory",
-                            response={"result": result},
-                        )
-                    )
-                elif fc.name == "update_profile":
-                    result = self._execute_update_profile(dict(fc.args))
-                    tool_response_parts.append(
-                        types.Part.from_function_response(
-                            name="update_profile",
-                            response={"result": result},
-                        )
-                    )
-                elif fc.name == "update_training_plan":
-                    result, changes = self._execute_update_training_plan(dict(fc.args))
-                    plan_changes.extend(changes)
-                    tool_response_parts.append(
-                        types.Part.from_function_response(
-                            name="update_training_plan",
+                            name=fc.name,
                             response={"result": result},
                         )
                     )

@@ -631,6 +631,30 @@ class BaseBackend(ABC):
         if event is not None and event.is_set():
             raise InterruptedError("client disconnected")
 
+    def _run_tool(
+        self,
+        name: str,
+        args: dict,
+        memories_saved: list[tuple[str, str]],
+        plan_changes: list[dict],
+    ) -> str | None:
+        """Run one model tool call and return its result text for the tool message.
+
+        Memories and calendar changes made are appended to the caller's turn lists. An unknown
+        tool returns None and the caller adds no result, as before.
+        """
+        if name == "save_memory":
+            result, category, content = self._execute_save_memory(args)
+            memories_saved.append((category, content))
+            return result
+        if name == "update_profile":
+            return self._execute_update_profile(args)
+        if name == "update_training_plan":
+            result, changes = self._execute_update_training_plan(args)
+            plan_changes.extend(changes)
+            return result
+        return None
+
     def _execute_save_memory(self, args: dict) -> tuple[str, str, str]:
         """
         Persist a save_memory tool call to the DB.

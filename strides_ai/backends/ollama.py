@@ -205,16 +205,10 @@ class OllamaBackend(BaseBackend):
             self._budget.usage(provider_output)
             for tc in tool_calls:
                 fn = tc.get("function", {})
-                if fn.get("name") == "save_memory":
-                    result, category, content = self._execute_save_memory(fn.get("arguments", {}))
-                    memories_saved.append((category, content))
-                    self._history.append({"role": "tool", "content": result})
-                elif fn.get("name") == "update_profile":
-                    result = self._execute_update_profile(fn.get("arguments", {}))
-                    self._history.append({"role": "tool", "content": result})
-                elif fn.get("name") == "update_training_plan":
-                    result, changes = self._execute_update_training_plan(fn.get("arguments", {}))
-                    plan_changes.extend(changes)
+                result = self._run_tool(
+                    fn.get("name"), fn.get("arguments", {}), memories_saved, plan_changes
+                )
+                if result is not None:
                     self._history.append({"role": "tool", "content": result})
 
         return response_text, memories_saved, plan_changes
