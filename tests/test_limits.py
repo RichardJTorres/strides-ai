@@ -120,3 +120,10 @@ def test_a_backend_derives_its_limits_from_its_profile_and_settings(mocker, monk
     assert (
         limits.round_max_tokens == 16_000 and limits.input_ceiling == 116_500  # fewer tools
     )  # fewer tools, less room
+
+
+def test_context_window_override_is_clamped_to_the_model():
+    limits = Limits.derive(SONNET_5, {"context_window": 1_000_000})
+    assert limits.context_window == 200_000
+    small = Limits.derive(SONNET_5, {"context_window": 50_000})
+    assert small.context_window == 50_000

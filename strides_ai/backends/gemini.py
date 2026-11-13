@@ -439,7 +439,7 @@ class GeminiBackend(BaseBackend):
                             raise TurnStop("retry_limit", "Transport retry limit reached.") from exc
                         self._budget.record.retry(_RETRY_DELAY_S)
                         wait(_RETRY_DELAY_S)
-                self._on_event()
+                self._budget.record.first_event()  # a finished reply is never discarded
                 self._record_usage(resp)
                 if resp.candidates:
                     candidate = resp.candidates[0]

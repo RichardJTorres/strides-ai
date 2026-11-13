@@ -135,6 +135,16 @@ class Limits:
         then clamped to what the model can do, with a warning for each clamp."""
         ov = normalize_limits(overrides or {})
         window = ov.get("context_window", profile.context_window)
+        if window > profile.context_window and getattr(profile, "family", "") != "ollama":
+            # (Ollama's profile window is already capped for memory, so it may be raised.)
+            log.warning(
+                "chat limit context_window=%s exceeds %s for %s; using %s",
+                window,
+                profile.context_window,
+                label,
+                profile.context_window,
+            )
+            window = profile.context_window
         top = profile.max_output
 
         def clamp(name, value, high=None, low=1):
