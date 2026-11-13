@@ -22,6 +22,7 @@ def update(
     partial_text: str | None = None,
     events: dict | None = None,
     assistant_message_id: int | None = None,
+    budget: dict | None = None,
 ) -> None:
     row = session.get(ChatTurn, turn_id)
     if row is None:
@@ -34,6 +35,8 @@ def update(
         row.events_json = json.dumps(events)
     if assistant_message_id is not None:
         row.assistant_message_id = assistant_message_id
+    if budget is not None:
+        row.budget_json = json.dumps(budget)
     session.add(row)
     session.execute(
         ChatTurn.__table__.update().where(ChatTurn.id == turn_id).values(updated_at=_now())
@@ -63,6 +66,15 @@ def mark_delivered(session: Session, turn_id: int) -> None:
 
 def running(session: Session) -> list[ChatTurn]:
     return list(session.exec(select(ChatTurn).where(ChatTurn.status == "running")).all())
+
+
+def budget(row: ChatTurn) -> dict | None:
+    """The turn's stored record, or None when it has none (older rows, rejected turns)."""
+    try:
+        value = json.loads(row.budget_json) if row.budget_json else None
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def to_dict(row: ChatTurn) -> dict:

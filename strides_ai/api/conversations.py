@@ -44,6 +44,18 @@ def _snapshot_events(backend, model: str | None = None) -> dict:
     return events
 
 
+def _turn_record(turn) -> dict | None:
+    """The turn's record for storage, or None. A record must never cost the turn its reply."""
+    try:
+        record = getattr(getattr(turn.backend, "_budget", None), "record", None)
+        if record is None:
+            return None
+        return record.to_dict(total_ms=int(round((time.monotonic() - turn.started) * 1000)))
+    except Exception:
+        logging.getLogger(__name__).exception("chat turn record could not be built")
+        return None
+
+
 def recover_interrupted_turns() -> None:
     """Startup: a turn still ``running`` belongs to a process that no longer exists."""
     with Session(get_engine()) as session:
@@ -126,6 +138,18 @@ class ConversationCoordinator:
                     turn.backend.label,
                     estimate([system, message, attachments]),
                 )
+                # A rejected message has no turn row, so its record is this one log line.
+                logging.getLogger(__name__).info(
+                    "chat_admission_rejected %s",
+                    json.dumps(
+                        {
+                            "model": turn.backend.label,
+                            "mode": turn.mode,
+                            "reason": str(exc),
+                            "est_input": estimate([system, message, attachments]),
+                        }
+                    ),
+                )
                 raise HTTPException(413, str(exc)) from exc
         if on_admitted is not None:
             on_admitted()
@@ -198,6 +222,7 @@ class ConversationCoordinator:
                     partial_text=text,
                     events=events,
                     assistant_message_id=message_id,
+                    budget=_turn_record(turn),
                 )
                 turn.tokens.put(f"[MODEL]{turn.backend.label}")
                 if memories:
@@ -224,6 +249,7 @@ class ConversationCoordinator:
                     partial_text=partial,
                     events=_snapshot_events(turn.backend),
                     assistant_message_id=message_id,
+                    budget=_turn_record(turn),
                 )
                 finalized = True
                 if marker == FAILED:

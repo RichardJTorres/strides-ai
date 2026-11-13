@@ -72,6 +72,10 @@ On every turn `build_system()` assembles: mode-specific base prompt → units se
 
 At session start, `build_initial_history()` seeds the full activity log (all activities) as the first exchange in `_history`, so older runs are accessible even though the system prompt only carries the 30 most recent. Last 40 messages (`RECALL_MESSAGES`) from the DB are appended after.
 
+### Per-turn record (`strides_ai/turn_record.py`)
+
+Every chat turn stores what it sent and why it stopped in `chat_turns.budget_json`: context section sizes and whether each was sent, retained history, per-round sizes and timings, retries, stop reason. Sizes and timings only, never content. `TurnBudget` owns a `TurnRecord` and feeds it from `request()` / `usage()` / `tool()`; `prepare_turn` leaves the admission facts on `backend._admission`; the coordinator stores the record on success and failure. Read it at `GET /api/chat/turns/{id}/budget` (deliberately not part of `/chat/active`). `scripts/context_report.py --mode <mode>` runs the same assembly and admission offline. Section names come from `ContextPrompt.priority_keys` / `activity_keys`, so a new context section needs a key in `build_system`.
+
 ### Conversation persistence
 
 - **Conversation history**: last 40 messages stored in SQLite, re-injected at session start.

@@ -10,6 +10,8 @@ import logging
 from dataclasses import dataclass
 from functools import wraps
 
+from .turn_record import TurnRecord
+
 log = logging.getLogger(__name__)
 
 
@@ -70,6 +72,7 @@ class TurnBudget:
         self.count_kind = "estimated"
         self.round_generated = 0
         self.counter = None
+        self.record = TurnRecord(limits=limits)
 
     @property
     def output_remaining(self):
@@ -94,6 +97,7 @@ class TurnBudget:
         self.check_request(system, history, tools)
         self.rounds += 1
         self.round_generated = 0
+        self.record.start_round(self.rounds, self.input_size, self.count_kind)
 
     def output(self, value):
         # Charge every emitted chunk, including tool arguments, conservatively.
@@ -107,9 +111,11 @@ class TurnBudget:
 
     def usage(self, measured):
         """Replace the streamed estimate with provider-reported generation (incl. reasoning)."""
-        if type(measured) is int and measured >= 0:
+        reported = type(measured) is int and measured >= 0
+        if reported:
             self.generated += measured - self.round_generated
             self.round_generated = measured
+        self.record.end_round(measured if reported else None, self.round_generated)
         if self.round_generated > self.limits.output_tokens:
             raise BudgetExceeded("Per-call generated output limit reached.")
         if self.generated > self.limits.total_output_tokens:
@@ -119,6 +125,7 @@ class TurnBudget:
         if self.tools >= self.limits.tools:
             raise BudgetExceeded("Tool execution limit reached.")
         self.tools += 1
+        self.record.tool()
 
 
 def bounded_turn(method):
@@ -128,11 +135,15 @@ def bounded_turn(method):
             system = self.prepare_turn(system, user_input, attachments)
         self._budget = TurnBudget(self.limits)
         self._budget.counter = self._count_request
+        record = self._budget.record
+        record.model = self.label
+        record.set_admission(getattr(self, "_admission", None))
 
         def emit(chunk):
             self._check_cancelled()
             self._budget.output(chunk)
             self._budget.text.append(chunk)
+            record.first_text()
             on_token(chunk)
 
         try:
@@ -140,6 +151,7 @@ def bounded_turn(method):
             return "".join(self._budget.text), self._budget.memories, self._budget.changes
         except BudgetExceeded as exc:
             self._budget.stop_reason = str(exc)
+            record.set_stop("stopped", str(exc))
             notice = f"\n\n_Turn stopped: {exc} Earlier memory or calendar changes may already have completed._"
             on_token(notice)
             return "".join(self._budget.text) + notice, self._budget.memories, self._budget.changes
@@ -147,6 +159,13 @@ def bounded_turn(method):
             self._budget.stop_reason = (
                 "cancelled" if isinstance(exc, InterruptedError) else "provider_error"
             )
+            status = getattr(exc, "status_code", getattr(exc, "code", None))
+            record.set_stop(
+                self._budget.stop_reason,
+                type(exc).__name__ + (f" status={status}" if type(status) is int else ""),
+            )
+            if self._budget.stop_reason == "provider_error":
+                log.warning("chat turn failed: %s: %s", type(exc).__name__, exc)
             raise
         finally:
             b = self._budget
@@ -169,10 +188,26 @@ def bounded_turn(method):
 class ContextPrompt(str):
     """Keeps optional sections atomic so reductions never split instructions."""
 
-    def __new__(cls, mandatory, priority, activities, activity_periods=None):
+    def __new__(
+        cls,
+        mandatory,
+        priority,
+        activities,
+        activity_periods=None,
+        priority_keys=None,
+        activity_keys=None,
+    ):
         obj = super().__new__(cls, "\n\n".join(filter(None, [mandatory, *priority, *activities])))
         obj.mandatory = mandatory
         obj.priority = list(filter(None, priority))
         obj.activities = list(filter(None, activities))
         obj.activity_periods = activity_periods or []
+        # Names for the per-turn record, aligned with the filtered lists above.
+        obj.priority_keys = _keys(priority, priority_keys, "priority")
+        obj.activity_keys = _keys(activities, activity_keys, "activity")
         return obj
+
+
+def _keys(sections, keys, prefix):
+    keys = list(keys) if keys is not None and len(keys) == len(sections) else None
+    return [keys[i] if keys else f"{prefix}_{i}" for i, section in enumerate(sections) if section]

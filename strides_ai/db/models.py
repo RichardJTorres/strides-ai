@@ -132,6 +132,8 @@ class ChatTurn(SQLModel, table=True):
         default="{}", sa_column=Column(sa.Text, nullable=False, server_default="{}")
     )
     delivered: bool = Field(default=False)
+    # What the turn sent, its timings and why it stopped (see strides_ai/turn_record.py).
+    budget_json: Optional[str] = Field(default=None, sa_column=Column(sa.Text, nullable=True))
     started_at: Optional[str] = Field(
         default=None, sa_column=Column(sa.Text, server_default=sa.text("datetime('now')"))
     )
