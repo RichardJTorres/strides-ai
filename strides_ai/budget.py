@@ -614,9 +614,6 @@ class ContextPrompt(str):
         omission labels (parts' own, then ``notes``) close it."""
         return _assemble(self.parts, knobs or {}, notes)
 
-    def full(self) -> dict[str, int]:
-        return {p.key: p.full for p in self.reducible}
-
 
 class PreparedPrompt(str):
     """What admission returns: the system prompt split into its stable part and the tail (date

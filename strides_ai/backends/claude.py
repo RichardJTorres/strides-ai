@@ -83,8 +83,10 @@ UPDATE_TRAINING_PLAN_TOOL = {
 def system_blocks(system):
     """The system prompt as Anthropic blocks: the stable part with a cache breakpoint, then the
     date and time, which change every turn. A plain string is sent as it is."""
+    from ..budget import PreparedPrompt
+
     tail = getattr(system, "tail", "")
-    if not tail:
+    if not tail or not isinstance(system, PreparedPrompt):
         return system
     return [
         {"type": "text", "text": system.stable, "cache_control": {"type": "ephemeral"}},
