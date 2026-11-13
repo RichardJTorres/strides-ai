@@ -5,6 +5,7 @@ import time
 
 import openai as _openai
 
+from .model_profile import openai_thinking, resolve_profile
 from .base import (
     UPDATE_TRAINING_PLAN_PARAMETERS,
     SAVE_MEMORY_CATEGORIES,
@@ -122,6 +123,15 @@ class OpenAIBackend(BaseBackend):
     def supports_attachments(self) -> bool:
         return False
 
+    @property
+    def profile(self):
+        return resolve_profile("openai", self._model)
+
+    def _thinking_kwargs(self, oneshot=False):
+        from ..config import get_settings
+
+        return openai_thinking(self.profile, "low" if oneshot else get_settings().thinking_effort)
+
     def stream_turn(self, system, user_input, on_token, attachments=None):
         if attachments:
             raise NotImplementedError("OpenAI backend does not support file attachments")
@@ -148,6 +158,7 @@ class OpenAIBackend(BaseBackend):
                     stream=True,
                     max_completion_tokens=self._budget.output_remaining,
                     stream_options={"include_usage": True},
+                    **self._thinking_kwargs(),
                 )
             ) as stream:
                 for chunk in stream:
@@ -234,6 +245,8 @@ class OpenAIBackend(BaseBackend):
             model=self._model,
             messages=messages,
             stream=True,
+            max_completion_tokens=min(16000, self.profile.max_output),
+            **self._thinking_kwargs(oneshot=True),
         ) as stream:
             for chunk in stream:
                 delta = chunk.choices[0].delta if chunk.choices else None

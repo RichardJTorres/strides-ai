@@ -5,6 +5,7 @@ import time
 
 import httpx
 
+from .model_profile import ollama_thinking, resolve_profile
 from .base import (
     UPDATE_TRAINING_PLAN_PARAMETERS,
     SAVE_MEMORY_CATEGORIES,
@@ -122,6 +123,20 @@ class OllamaBackend(BaseBackend):
     def prefers_precomputed_brief(self) -> bool:
         return True
 
+    def _fetch_profile(self):
+        response = httpx.post(f"{self._host}/api/show", json={"model": self._model}, timeout=5)
+        response.raise_for_status()
+        return response.json()
+
+    @property
+    def profile(self):
+        return resolve_profile("ollama", self._model, self._fetch_profile)
+
+    def _thinking_kwargs(self, oneshot=False):
+        from ..config import get_settings
+
+        return ollama_thinking(self.profile, "low" if oneshot else get_settings().thinking_effort)
+
     def stream_turn(self, system, user_input, on_token, attachments=None):
         if attachments:
             raise NotImplementedError("Ollama backend does not support file attachments")
@@ -147,6 +162,7 @@ class OllamaBackend(BaseBackend):
                     "num_ctx": self.limits.context_window,
                 },
             }
+            body.update(self._thinking_kwargs())
             if self._supports_tools is not False:
                 body["tools"] = [SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL, UPDATE_PROFILE_TOOL]
 
@@ -218,7 +234,12 @@ class OllamaBackend(BaseBackend):
             {"role": "system", "content": system},
             {"role": "user", "content": user_input},
         ]
-        body = {"model": self._model, "messages": messages, "stream": True}
+        body = {
+            "model": self._model,
+            "messages": messages,
+            "stream": True,
+            **self._thinking_kwargs(oneshot=True),
+        }
         response_text = ""
         with httpx.Client(timeout=120) as client:
             with client.stream("POST", f"{self._host}/api/chat", json=body) as resp:

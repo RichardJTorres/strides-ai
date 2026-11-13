@@ -4,6 +4,7 @@ import time
 
 import anthropic
 
+from .model_profile import claude_thinking, resolve_profile
 from .base import (
     UPDATE_TRAINING_PLAN_PARAMETERS,
     SAVE_MEMORY_CATEGORIES,
@@ -121,19 +122,33 @@ class ClaudeBackend(BaseBackend):
                 return None
             raise
 
-    def _thinking_kwargs(self):
-        """Thinking settings for chat turns, as extra messages.stream kwargs.
+    def _fetch_profile(self):
+        return (
+            self._client.with_options(max_retries=0, timeout=5)
+            .models.retrieve(self._model)
+            .model_dump()
+        )
+
+    @property
+    def profile(self):
+        return resolve_profile("claude", self._model, self._fetch_profile)
+
+    def _thinking_kwargs(self, oneshot=False):
+        """Thinking settings, as extra messages.stream kwargs, taken from the model's profile.
 
         Newer models think by default and reasoning counts against max_tokens, so an
-        unmanaged default can starve the reply. Use adaptive thinking at a configured effort,
-        and disable it when set to "off" or when too little output budget is left.
+        unmanaged default can starve the reply. Chat turns use the configured effort and the
+        lightest setting the model takes when too little output budget is left; one-shot calls
+        want the answer, so they ask for little thinking.
         """
         from ..config import get_settings
 
-        effort = get_settings().claude_thinking_effort
-        if effort == "off" or self._budget.output_remaining < MIN_THINKING_ROOM:
-            return {"thinking": {"type": "disabled"}}
-        return {"thinking": {"type": "adaptive"}, "output_config": {"effort": effort}}
+        effort = "low" if oneshot else get_settings().thinking_effort
+        if not oneshot and self._budget.output_remaining < MIN_THINKING_ROOM:
+            effort = "off"
+        return claude_thinking(
+            self.profile, effort, None if oneshot else self._budget.output_remaining
+        )
 
     def stream_turn(self, system, user_input, on_token, attachments=None):
         if attachments:
@@ -194,11 +209,10 @@ class ClaudeBackend(BaseBackend):
         response_text = ""
         with self._client.messages.stream(
             model=self._model,
-            # Newer models think by default and thinking tokens count against max_tokens; a long
-            # structured answer (e.g. a training block) can be starved to nothing. These one-shot
-            # calls want the answer, not reasoning, so skip it and leave headroom.
-            max_tokens=16000,
-            thinking={"type": "disabled"},
+            # Thinking tokens count against max_tokens; a long structured answer (e.g. a training
+            # block) can be starved to nothing, so ask for little thinking and leave headroom.
+            max_tokens=min(16000, self.profile.max_output),
+            **self._thinking_kwargs(oneshot=True),
             system=system,
             messages=[{"role": "user", "content": user_input}],
         ) as stream:

@@ -5,6 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings
 
 
@@ -20,9 +21,12 @@ class Settings(BaseSettings):
     ollama_model: str = ""
     ollama_host: str = "http://localhost:11434"
 
-    # How hard Claude thinks on chat turns: off | low | medium | high (adaptive thinking plus the
-    # API's effort setting). Thinking counts against the per-round output cap.
-    claude_thinking_effort: Literal["off", "low", "medium", "high"] = "medium"
+    # How hard the model thinks on chat turns: off | low | medium | high. Each provider maps it to
+    # the setting its model takes (backends/model_profile.py). Thinking counts against the
+    # per-round output cap. CLAUDE_THINKING_EFFORT is the older name for the same setting.
+    thinking_effort: Literal["off", "low", "medium", "high"] = Field(
+        "medium", validation_alias=AliasChoices("thinking_effort", "claude_thinking_effort")
+    )
 
     # JSON overrides keyed by default, provider, or provider/model label.
     chat_limits: dict[str, dict[str, int]] = {}

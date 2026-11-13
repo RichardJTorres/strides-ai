@@ -11,6 +11,7 @@ from ..budget import BudgetExceeded
 from ..kinds import KINDS, RACE_PRIORITIES, RACE_SPORTS, WORKOUT_TYPES
 from ..workout_structure import WORKOUT_STRUCTURE_SCHEMA
 
+from .model_profile import gemini_thinking, resolve_profile
 from .base import (
     DISTANCE_UNITS,
     ELEVATION_UNITS,
@@ -269,6 +270,21 @@ class GeminiBackend(BaseBackend):
                 return None
             raise
 
+    def _fetch_profile(self):
+        return self._client.models.get(model=self._model).model_dump()
+
+    @property
+    def profile(self):
+        return resolve_profile("gemini", self._model, self._fetch_profile)
+
+    def _thinking_config(self, oneshot=False):
+        from ..config import get_settings
+
+        fields = gemini_thinking(self.profile, "low" if oneshot else get_settings().thinking_effort)
+        known = types.ThinkingConfig.model_fields  # an older SDK may lack thinking_level
+        fields = {k: v for k, v in (fields or {}).items() if k in known}
+        return types.ThinkingConfig(**fields) if fields else None
+
     def _record_usage(self, response):
         metadata = getattr(response, "usage_metadata", None)
         visible = getattr(metadata, "candidates_token_count", None)
@@ -287,6 +303,7 @@ class GeminiBackend(BaseBackend):
         config = types.GenerateContentConfig(
             system_instruction=system,
             tools=[SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL, UPDATE_PROFILE_TOOL],
+            thinking_config=self._thinking_config(),
         )
 
         response_text = ""
@@ -408,7 +425,11 @@ class GeminiBackend(BaseBackend):
         return response_text, memories_saved, plan_changes
 
     def stateless_turn(self, system, user_input, on_token):
-        config = types.GenerateContentConfig(system_instruction=system)
+        config = types.GenerateContentConfig(
+            system_instruction=system,
+            thinking_config=self._thinking_config(oneshot=True),
+            max_output_tokens=min(16000, self.profile.max_output),
+        )
         contents = [types.Content(role="user", parts=[types.Part.from_text(text=user_input)])]
         response_text = ""
         for attempt in range(_MAX_RETRIES):

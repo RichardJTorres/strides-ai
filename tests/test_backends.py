@@ -102,9 +102,7 @@ def _claude_thinking_kwargs(mock_anthropic, monkeypatch, effort):
     from strides_ai import config
     from strides_ai.backends.claude import ClaudeBackend
 
-    monkeypatch.setattr(
-        config, "get_settings", lambda: config.Settings(claude_thinking_effort=effort)
-    )
+    monkeypatch.setattr(config, "get_settings", lambda: config.Settings(thinking_effort=effort))
     mock_anthropic.return_value.messages.stream.return_value = _claude_stream(["ok"])
     ClaudeBackend("key", []).stream_turn("sys", "hi", _collect()[0])
     return mock_anthropic.return_value.messages.stream.call_args.kwargs
