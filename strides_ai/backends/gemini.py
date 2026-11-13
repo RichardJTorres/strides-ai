@@ -7,7 +7,7 @@ from google import genai
 from google.genai import types
 from google.genai.errors import ClientError
 
-from ..budget import BudgetExceeded
+from ..budget import TurnStop
 from ..kinds import KINDS, RACE_PRIORITIES, RACE_SPORTS, WORKOUT_TYPES
 from ..workout_structure import WORKOUT_STRUCTURE_SCHEMA
 
@@ -182,6 +182,16 @@ UPDATE_TRAINING_PLAN_TOOL = types.Tool(
 )
 
 
+def _parts(candidate) -> list:
+    """A candidate's content parts; a cut-off or malformed reply can have no content at all."""
+    return list(getattr(getattr(candidate, "content", None), "parts", None) or [])
+
+
+def _cut_off(finish) -> bool:
+    """The reply ended at the token limit or with an unusable function call."""
+    return getattr(finish, "name", finish) in ("MAX_TOKENS", "MALFORMED_FUNCTION_CALL")
+
+
 def gemini_usage(metadata) -> Usage:
     """Normalize Gemini usage metadata. Reasoning ("thoughts") is billed as output."""
 
@@ -311,6 +321,38 @@ class GeminiBackend(BaseBackend):
         if usage.output_total is not None or usage.input_total is not None:
             self._reported_usage = usage
 
+    def _request_config(self, config, plan) -> None:
+        """Per-round fields of the request: output cap, tools off for the reply, and a timeout.
+
+        The SDK's timeout is one value for the request: it is the HTTP timeout and is also sent
+        to the server as the request's total time limit, so it is the round's deadline rather
+        than the idle limit the other providers take.
+        """
+        limits = self.limits
+        config.max_output_tokens = plan.max_tokens
+        seconds = limits.reply_deadline_s if plan.kind == "reply" else limits.round_deadline_s
+        config.http_options = types.HttpOptions(timeout=int(seconds * 1000))
+        # Tools stay in the request and are forbidden, so the prompt the model sees is the same.
+        config.tool_config = (
+            types.ToolConfig(
+                function_calling_config=types.FunctionCallingConfig(
+                    mode=types.FunctionCallingConfigMode.NONE
+                )
+            )
+            if plan.kind == "reply"
+            else None
+        )
+
+    def _add_app_note(self, note: str) -> None:
+        last = self._history[-1] if self._history else None
+        if last is not None and last.role == "user":
+            # Function responses come first in the content, then the note.
+            last.parts = [*(last.parts or []), types.Part.from_text(text=note)]
+        else:
+            self._history.append(
+                types.Content(role="user", parts=[types.Part.from_text(text=note)])
+            )
+
     def stream_turn(self, system, user_input, on_token, attachments=None):
         if attachments:
             raise NotImplementedError("Gemini backend does not support file attachments")
@@ -330,30 +372,40 @@ class GeminiBackend(BaseBackend):
         plan_changes: list[dict] = []
         first_turn = True
 
+        def wait(seconds):
+            event = getattr(self, "cancel_event", None)
+            if event is not None:
+                event.wait(seconds)
+            else:
+                time.sleep(seconds)
+
         while True:
-            self._before_request(system)
-            config.max_output_tokens = self._budget.output_remaining
+            plan = self._begin_round(system)
+            self._request_config(config, plan)
             collected_text = ""
             fc_parts: list[types.Part] = []
+            finish = None
 
             if first_turn:
                 # Stream the first response to the user (with retry on rate limit)
                 for attempt in range(self.limits.retries + 1):
                     try:
-                        self._check_cancelled()
+                        self._tick()
                         for chunk in self._client.models.generate_content_stream(
                             model=self._model,
                             contents=self._history,
                             config=config,
                         ):
-                            self._check_cancelled()
+                            self._on_event()
                             self._record_usage(chunk)
                             if chunk.text:
                                 on_token(chunk.text)
                                 collected_text += chunk.text
                             # Collect function-call parts (arrive as complete parts, not deltas)
                             if chunk.candidates:
-                                for part in chunk.candidates[0].content.parts:
+                                candidate = chunk.candidates[0]
+                                finish = getattr(candidate, "finish_reason", None) or finish
+                                for part in _parts(candidate):
                                     fc = getattr(part, "function_call", None)
                                     if fc and getattr(fc, "name", None):
                                         fc_parts.append(part)
@@ -362,22 +414,18 @@ class GeminiBackend(BaseBackend):
                         if exc.code != 429 or collected_text or fc_parts:
                             raise
                         if attempt == self.limits.retries:
-                            raise BudgetExceeded("Transport retry limit reached.") from exc
+                            raise TurnStop("retry_limit", "Transport retry limit reached.") from exc
                         on_token(f"\n\n*(Rate limit hit — retrying in {_RETRY_DELAY_S}s…)*\n\n")
                         collected_text = ""
                         fc_parts = []
                         self._budget.record.retry(_RETRY_DELAY_S)
-                        event = getattr(self, "cancel_event", None)
-                        if event is not None:
-                            event.wait(_RETRY_DELAY_S)
-                        else:
-                            time.sleep(_RETRY_DELAY_S)
+                        wait(_RETRY_DELAY_S)
                 first_turn = False
             else:
                 # Non-streaming for follow-up turns after tool responses
                 for attempt in range(self.limits.retries + 1):
                     try:
-                        self._check_cancelled()
+                        self._tick()
                         resp = self._client.models.generate_content(
                             model=self._model,
                             contents=self._history,
@@ -385,19 +433,18 @@ class GeminiBackend(BaseBackend):
                         )
                         break  # success
                     except ClientError as exc:
-                        if exc.code != 429 or collected_text or fc_parts:
+                        if exc.code != 429:
                             raise
                         if attempt == self.limits.retries:
-                            raise BudgetExceeded("Transport retry limit reached.") from exc
+                            raise TurnStop("retry_limit", "Transport retry limit reached.") from exc
                         self._budget.record.retry(_RETRY_DELAY_S)
-                        event = getattr(self, "cancel_event", None)
-                        if event is not None:
-                            event.wait(_RETRY_DELAY_S)
-                        else:
-                            time.sleep(_RETRY_DELAY_S)
+                        wait(_RETRY_DELAY_S)
+                self._on_event()
                 self._record_usage(resp)
                 if resp.candidates:
-                    for part in resp.candidates[0].content.parts:
+                    candidate = resp.candidates[0]
+                    finish = getattr(candidate, "finish_reason", None)
+                    for part in _parts(candidate):
                         if part.text:
                             on_token(part.text)
                             collected_text += part.text
@@ -422,21 +469,24 @@ class GeminiBackend(BaseBackend):
             if model_parts:
                 self._history.append(types.Content(role="model", parts=model_parts))
 
-            if not fc_parts:
+            if not self._end_round(plan, cut_off=_cut_off(finish), calls=len(fc_parts)):
                 break
 
             # Execute tool calls and add responses
-            tool_response_parts: list[types.Part] = []
-            for part in fc_parts:
-                fc = part.function_call
-                result = self._run_tool(fc.name, dict(fc.args or {}), memories_saved, plan_changes)
-                if result is not None:
-                    tool_response_parts.append(
-                        types.Part.from_function_response(
-                            name=fc.name,
-                            response={"result": result},
+            tool_response_parts: list[types.Part] = [
+                types.Part.from_function_response(
+                    name=part.function_call.name,
+                    response={
+                        "result": self._run_call(
+                            part.function_call.name,
+                            dict(part.function_call.args or {}),
+                            memories_saved,
+                            plan_changes,
                         )
-                    )
+                    },
+                )
+                for part in fc_parts
+            ]
             self._history.append(types.Content(role="user", parts=tool_response_parts))
 
         return response_text, memories_saved, plan_changes

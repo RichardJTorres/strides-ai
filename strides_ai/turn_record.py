@@ -28,17 +28,25 @@ class TurnRecord:
         self.admission: dict = {}
         self.rounds: list[dict] = []
         self.stop: dict = {"reason": "complete", "detail": None}
+        self.output_overshoot = 0  # tokens generated past the turn's output ceiling
 
     def set_admission(self, admission: dict | None) -> None:
         self.admission = dict(admission or {})
 
-    def start_round(self, n: int, est_input: int, count_kind: str) -> None:
+    def start_round(
+        self,
+        n: int,
+        est_input: int,
+        count_kind: str,
+        kind: str = "tool",
+        max_tokens: int | None = None,
+    ) -> None:
         self._round_started = self._clock()
         self.rounds.append(
             {
                 "n": n,
-                # Tools are offered on every round until the turn policy distinguishes reply rounds.
-                "kind": "tool",
+                "kind": kind,  # "tool": tools offered | "reply": the closing, tool-less reply
+                "max_tokens": max_tokens,
                 "est_input": est_input,
                 "count_kind": count_kind,
                 "input_total": None,
@@ -60,6 +68,17 @@ class TurnRecord:
 
     def _current(self) -> dict | None:
         return self.rounds[-1] if self.rounds else None
+
+    def first_event(self) -> None:
+        current = self._current()
+        if current is not None and current["first_event_ms"] is None and self._round_started:
+            current["first_event_ms"] = _ms(self._clock() - self._round_started)
+
+    def round_stop(self, reason: str) -> None:
+        """How the round in flight ended: complete | tool_calls | truncated | calls_ignored."""
+        current = self._current()
+        if current is not None:
+            current["stop"] = reason
 
     def first_text(self) -> None:
         current = self._current()
@@ -137,4 +156,5 @@ class TurnRecord:
             "count_kind": admission.get("count_kind"),
             "rounds": self.rounds,
             "stop": self.stop,
+            "output_overshoot": self.output_overshoot,
         }

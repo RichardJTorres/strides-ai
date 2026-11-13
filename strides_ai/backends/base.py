@@ -6,11 +6,15 @@ from typing import Callable
 from .. import db
 from ..budget import (
     DEFAULT_BYTES_PER_TOKEN,
+    TOOL_BUDGET_NOTE,
     Limits,
+    RoundPlan,
     TurnBudget,
+    TurnStop,
     bounded_turn,
     BudgetExceeded,
     estimate,
+    normalize_limits,
 )
 from ..kinds import (
     KINDS,
@@ -357,12 +361,16 @@ class BaseBackend(ABC):
             return self._limits
         overrides = get_settings().chat_limits
         provider = self.__class__.__name__.replace("Backend", "").lower()
-        values = {
-            **overrides.get("default", {}),
-            **overrides.get(provider, {}),
-            **overrides.get(self.label, {}),
-        }
-        self._limits = Limits(**values)
+        values: dict = {}
+        for layer in (overrides.get("default"), overrides.get(provider), overrides.get(self.label)):
+            values.update(normalize_limits(layer or {}))
+        try:
+            profile = self.profile
+        except Exception:
+            from .model_profile import ModelProfile
+
+            profile = ModelProfile()
+        self._limits = Limits.derive(profile, values, self.label)
         return self._limits
 
     def prepare_turn(self, system, message, attachments=None):
@@ -425,7 +433,7 @@ class BaseBackend(ABC):
         def fits(prompt, messages, margin=reserve):
             return (
                 estimate([prompt, messages, self._tool_definitions()], ratio) + margin
-                <= self.limits.input_tokens
+                <= self.limits.input_ceiling
             )
 
         b.counter = self._count_once
@@ -551,7 +559,7 @@ class BaseBackend(ABC):
         import time
 
         for attempt in range(self.limits.retries + 1):
-            self._check_cancelled()
+            self._tick()
             try:
                 return call()
             except Exception as exc:
@@ -567,7 +575,7 @@ class BaseBackend(ABC):
                 if not retryable:
                     raise
                 if attempt == self.limits.retries:
-                    raise BudgetExceeded("Transport retry limit reached.") from exc
+                    raise TurnStop("retry_limit", "Transport retry limit reached.") from exc
                 record = getattr(getattr(self, "_budget", None), "record", None)
                 if record is not None:
                     record.retry(min(2**attempt, 4))
@@ -621,10 +629,60 @@ class BaseBackend(ABC):
             if hasattr(module, n)
         ]
 
-    def _before_request(self, system):
-        self._check_cancelled()
-        self._budget.request(system, self._history, self._tool_definitions())
+    def _begin_round(self, system) -> RoundPlan:
+        """Start the next provider request and say what it may do.
+
+        A tool round offers tools; the reply round (``plan.kind == "reply"``) does not, carries
+        the app's note after the tool results, and is the last. The caller builds its request
+        from ``plan``: ``max_tokens``, and tools off for a reply. Raises TurnStop when even the
+        reply cannot be sent.
+        """
+        self._tick()
+        budget = self._budget
+        tools = self._tool_definitions()
+        plan = budget.plan_round(system, self._history, tools)
+        if plan.kind == "reply" and budget.rounds:
+            self._add_app_note(TOOL_BUDGET_NOTE)
+        budget.request(system, self._history, tools, plan)
         self._reported_usage = None
+        return plan
+
+    def _add_app_note(self, note: str) -> None:
+        """Put the app's note after the tool results in this provider's history format."""
+        self._history.append({"role": "user", "content": note})
+
+    def _tick(self):
+        """Called on every provider event (and before each request): cancel and deadline checks."""
+        self._check_cancelled()
+        budget = getattr(self, "_budget", None)
+        if budget is not None:
+            budget.check_deadline()
+
+    def _on_event(self):
+        self._tick()
+        self._budget.record.first_event()
+
+    def _end_round(self, plan: RoundPlan, *, cut_off: bool, calls: int) -> bool:
+        """The response is complete. True when its tool calls should run and the loop continue.
+
+        A response cut off at its token limit never has its tool calls run (their arguments may be
+        incomplete), and neither does a reply round's: tools were off.
+        """
+        budget = self._budget
+        budget.end_round()
+        record = budget.record
+        if cut_off:
+            record.round_stop("truncated")
+            budget.stop("truncated")
+            return False
+        if not calls:
+            record.round_stop("complete")
+            return False
+        if plan.kind == "reply":
+            record.round_stop("calls_ignored")
+            return False
+        record.round_stop("tool_calls")
+        return True
 
     @property
     @abstractmethod
@@ -693,6 +751,26 @@ class BaseBackend(ABC):
             plan_changes.extend(changes)
             return result
         return None
+
+    def _run_call(
+        self,
+        name: str,
+        args: dict | None,
+        memories_saved: list[tuple[str, str]],
+        plan_changes: list[dict],
+    ) -> str:
+        """The tool result for one call; every call gets one so the history stays valid.
+
+        ``args`` is None when the model's arguments could not be parsed: nothing is run.
+        """
+        if args is None:
+            return (
+                "Error: the arguments were not valid JSON, so nothing was run. Send the call again."
+            )
+        if self._budget.tools >= self.limits.tools:
+            return "Not executed: tool limit reached"
+        result = self._run_tool(name, args, memories_saved, plan_changes)
+        return result if result is not None else f"Unknown tool: {name}"
 
     def _execute_save_memory(self, args: dict) -> tuple[str, str, str]:
         """

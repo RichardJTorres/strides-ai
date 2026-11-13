@@ -16,9 +16,19 @@ from ..db import chat_turns, conversations, mutations
 from ..db.engine import get_engine
 from ..turn_notice import notice_text, receipt_text
 
-# An unattended turn keeps running after the client leaves, so it needs a ceiling of its own.
+# An unattended turn keeps running after the client leaves, so it needs a ceiling of its own. The
+# backend ends a slow turn itself (stop code "deadline", with its receipt); this is the backstop
+# for one that does not, and is only used when the backend has no limits to read.
 MAX_TURN_SECONDS = 600
 FLUSH_INTERVAL_S = 1.0
+
+
+def _backstop_seconds(turn) -> float:
+    """The backend's turn deadline plus the idle timeout that can still be pending after it."""
+    limits = getattr(turn.backend, "_limits", None)
+    if limits is None:
+        return MAX_TURN_SECONDS
+    return limits.turn_deadline_s + limits.stream_idle_s
 
 
 def _store_reply(session, mode, turn_id, text, notice=None, model=None) -> tuple[int, dict | None]:
@@ -188,7 +198,7 @@ class ConversationCoordinator:
         def check_cancel():
             if turn.cancel.is_set():
                 raise InterruptedError("cancelled")
-            if time.monotonic() - turn.started > MAX_TURN_SECONDS:
+            if time.monotonic() - turn.started > _backstop_seconds(turn):
                 turn.cancel.set()
                 raise InterruptedError("turn exceeded its time limit")
 
