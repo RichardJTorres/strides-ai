@@ -110,6 +110,11 @@ class PromptResult:
         return not self.problems
 
 
+def section_sent(section: dict) -> bool:
+    """Required sections are always sent; a reducible one is left out when it rendered empty."""
+    return section.get("kind") == "required" or section.get("bytes", 0) > 0
+
+
 def copy_database(source: Path, dest_dir: Path) -> Path:
     """A consistent copy of ``source`` in ``dest_dir``; the source is opened read-only."""
     source = Path(source).expanduser()
@@ -223,8 +228,8 @@ def run_prompt(prompt: ReplayPrompt, coordinator, build_system, timeout_s: float
     result.est_input = record.get("est_input")
     result.total_ms = record.get("total_ms")
     sections = record.get("sections") or []
-    result.sections_sent = [s["key"] for s in sections if s.get("level") is not None]
-    result.sections_left_out = [s["key"] for s in sections if s.get("level") is None]
+    result.sections_sent = [s["key"] for s in sections if section_sent(s)]
+    result.sections_left_out = [s["key"] for s in sections if not section_sent(s)]
     result.rounds = [
         {
             k: r.get(k)

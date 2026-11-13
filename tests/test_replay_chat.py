@@ -12,6 +12,7 @@ from strides_ai.replay_chat import (
     format_results,
     main,
     run_replay,
+    section_sent,
 )
 from tests.policy_helpers import make_backend
 
@@ -121,3 +122,10 @@ def test_a_rejected_message_is_reported_not_raised(mocker, tmp_db):
     prompts = [ReplayPrompt("big", "running", "x" * 600_000)]
     (result,) = run(mocker, tmp_db, [[{"text": "never sent"}]], prompts)
     assert result.status == "rejected" and not result.ok
+
+
+def test_required_sections_count_as_sent_and_empty_reducible_ones_as_left_out():
+    assert section_sent({"key": "profile", "kind": "required", "bytes": 900})
+    assert section_sent({"key": "voice", "kind": "required"})  # sent even if empty text
+    assert section_sent({"key": "recent_activities", "kind": "reducible", "bytes": 10})
+    assert not section_sent({"key": "older_summary", "kind": "reducible", "bytes": 0})
