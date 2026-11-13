@@ -804,3 +804,32 @@ def test_ollama_stream_turn_initial_history_preserved(mocker):
 
     assert b._history[0]["content"] == "prev q"
     assert b._history[1]["content"] == "prev a"
+
+
+def test_gemini_token_count_sends_system_and_tools_as_text(mocker):
+    # The developer API rejects system_instruction / tools on count_tokens; the SDK raises
+    # ValueError for them, which admission would turn into a 413.
+    client = mocker.patch("strides_ai.backends.gemini.genai.Client").return_value
+    client.models.count_tokens.return_value.total_tokens = 1234
+    from google.genai import types
+
+    from strides_ai.backends.gemini import GeminiBackend
+
+    backend = GeminiBackend("key", [])
+    history = [types.Content(role="user", parts=[types.Part.from_text(text="hi")])]
+
+    assert backend._count_request("SYSTEM PROMPT", history, [{"name": "save_memory"}]) == 1234
+
+    kwargs = client.models.count_tokens.call_args.kwargs
+    assert "config" not in kwargs
+    first, *rest = kwargs["contents"]
+    assert "SYSTEM PROMPT" in first.parts[0].text and "save_memory" in first.parts[0].text
+    assert rest == history
+
+
+def test_gemini_token_count_falls_back_to_the_estimate_on_value_error(mocker):
+    client = mocker.patch("strides_ai.backends.gemini.genai.Client").return_value
+    client.models.count_tokens.side_effect = ValueError("not supported")
+    from strides_ai.backends.gemini import GeminiBackend
+
+    assert GeminiBackend("key", [])._count_request("s", [], []) is None

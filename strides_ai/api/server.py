@@ -29,6 +29,16 @@ def main() -> None:
         print("Missing STRAVA_CLIENT_ID or STRAVA_CLIENT_SECRET.")
         sys.exit(1)
 
+    import logging
+
+    # The app's own diagnostics (chat_budget, chat_admission_rejected) are INFO; uvicorn only
+    # configures its own loggers, so without this they never reach the console.
+    logging.getLogger("strides_ai").setLevel(logging.INFO)
+    if not logging.getLogger("strides_ai").handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(levelname)s:     %(name)s: %(message)s"))
+        logging.getLogger("strides_ai").addHandler(handler)
+
     from .. import db
 
     db.init_db()

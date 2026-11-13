@@ -23,6 +23,16 @@ for (const status of [400, 409]) {
     assert.match(error, status === 409 ? /already responding.*retry/ : /try again/);
   });
 }
+test('HTTP 413 shows the server reason, or the generic message without one', () => {
+  const reasons = [];
+  const reject = message => reasons.push(message);
+  handleChatAdmission({ ok: false, status: 413 }, () => assert.fail(), reject, 'Input context limit reached. Shorten your message.');
+  handleChatAdmission({ ok: false, status: 413 }, () => assert.fail(), reject);
+  handleChatAdmission({ ok: false, status: 400 }, () => assert.fail(), reject, 'ignored for other statuses');
+  assert.deepEqual(reasons, ['Input context limit reached. Shorten your message.',
+    'Your message could not be accepted. Please try again.',
+    'Your message could not be accepted. Please try again.']);
+});
 test('accepted stream clears the composer exactly once', () => {
   let clears = 0;
   assert.equal(handleChatAdmission({ ok: true, status: 200 }, () => { clears++; }, () => assert.fail()), true);
