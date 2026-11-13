@@ -495,7 +495,16 @@ def build_initial_history(
     activities: list, prior_messages: list[dict], mode: str = "running"
 ) -> list[dict]:
     """Recall persisted messages without seeding or duplicating activity data."""
-    return [{"role": m["role"], "content": m["content"]} for m in prior_messages[-RECALL_MESSAGES:]]
+    from .turn_notice import replay_content
+
+    # App notices are replayed as a note after the model's own words, never as part of them.
+    return [
+        {
+            "role": m["role"],
+            "content": replay_content(m["content"], m.get("notice"), m.get("receipt_json")),
+        }
+        for m in prior_messages[-RECALL_MESSAGES:]
+    ]
 
 
 def older_activity_summary(

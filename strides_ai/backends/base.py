@@ -668,6 +668,9 @@ class BaseBackend(ABC):
         category = args.get("category", "other")
         content = args.get("content", "")
         metadata = {k: args[k] for k in SAVE_MEMORY_TIMING_PROPERTIES if k in args}
+        turn_id = getattr(self, "turn_id", None)
+        if turn_id is not None:
+            metadata["turn_id"] = turn_id
         result = db.save_memory(category, content, **metadata)
         if not result.startswith("Error:"):
             self._budget.memories.append((category, content))
@@ -689,6 +692,12 @@ class BaseBackend(ABC):
         except ValueError as exc:
             return f"Rejected, nothing proposed. {exc}"
         self._budget.profile_proposals.append(proposal)
+        db.log_mutation(
+            getattr(self, "turn_id", None),
+            "profile_proposal",
+            "pending",
+            {k: proposal[k] for k in ("label", "op", "proposed") if k in proposal},
+        )
         return (
             f"Proposed {proposal['op']} for '{proposal['label']}': {proposal['proposed']}. "
             "Not saved yet; the athlete must accept it."
@@ -723,7 +732,12 @@ class BaseBackend(ABC):
                 [],
             )
         try:
-            result = db.apply_calendar_changes(ops)
+            turn_id = getattr(self, "turn_id", None)
+            result = (
+                db.apply_calendar_changes(ops, turn_id=turn_id)
+                if turn_id is not None
+                else db.apply_calendar_changes(ops)
+            )
         except EntryError as exc:
             return f"Rejected, no changes made. {exc}", []
 

@@ -81,6 +81,7 @@ __all__ = [
     "set_setting",
     "save_message",
     "get_recent_messages",
+    "log_mutation",
     "get_messages_before",
     "get_message_count",
     "search_messages",
@@ -227,6 +228,13 @@ def save_message(role: str, content: str, mode: str = "running", model: str | No
         _conv.save(s, role, content, mode, model)
 
 
+def log_mutation(turn_id: int | None, kind: str, state: str, payload: dict) -> None:
+    from . import mutations
+
+    with _session() as s:
+        mutations.log_now(s, turn_id, kind, state, payload)
+
+
 def get_recent_messages(n: int = 40, mode: str | None = None) -> list[dict]:
     with _session() as s:
         return [r.model_dump() for r in _conv.get_recent(s, n, mode)]
@@ -279,9 +287,11 @@ def get_training_plan(start_date: str | None = None, end_date: str | None = None
         return _cal.get_plan_rows(s, start_date, end_date)
 
 
-def apply_calendar_changes(ops: list[dict], request_id: str | None = None) -> dict:
+def apply_calendar_changes(
+    ops: list[dict], request_id: str | None = None, turn_id: int | None = None
+) -> dict:
     with _session() as s:
-        return _cal.apply_changes(s, ops, request_id)
+        return _cal.apply_changes(s, ops, request_id, turn_id)
 
 
 def get_upcoming_planned_workouts(days: int = 14) -> list[dict]:

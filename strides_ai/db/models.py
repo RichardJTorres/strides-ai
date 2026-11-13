@@ -109,6 +109,26 @@ class Conversation(SQLModel, table=True):
     content: str
     mode: str = Field(default="running")
     model: Optional[str] = None
+    # How the turn ended (a code, see turn_notice.py) and what it changed (JSON receipt).
+    # Both are app-authored and kept out of ``content``, which holds only the model's words.
+    notice: Optional[str] = Field(default=None, sa_column=Column(sa.Text, nullable=True))
+    receipt_json: Optional[str] = Field(default=None, sa_column=Column(sa.Text, nullable=True))
+    created_at: Optional[str] = Field(
+        default=None,
+        sa_column=Column(sa.Text, server_default=sa.text("datetime('now')")),
+    )
+
+
+class ChatTurnMutation(SQLModel, table=True):
+    """One change a chat turn made, written in the same transaction as the change itself."""
+
+    __tablename__ = "chat_turn_mutations"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    turn_id: int = Field(index=True)
+    kind: str  # calendar | memory | profile_proposal
+    state: str = "committed"  # committed | pending
+    payload_json: str = Field(sa_column=Column(sa.Text, nullable=False))
     created_at: Optional[str] = Field(
         default=None,
         sa_column=Column(sa.Text, server_default=sa.text("datetime('now')")),
