@@ -17,6 +17,8 @@ from .base import (
 )
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
+# Below this much remaining output budget a round skips thinking so the reply still fits.
+MIN_THINKING_ROOM = 4000
 
 # Anthropic tool-use format
 SAVE_MEMORY_TOOL = {
@@ -119,19 +121,19 @@ class ClaudeBackend(BaseBackend):
                 return None
             raise
 
-    def _thinking_param(self):
-        """Bounded thinking for chat turns.
+    def _thinking_kwargs(self):
+        """Thinking settings for chat turns, as extra messages.stream kwargs.
 
-        Newer models think by default and reasoning counts against max_tokens, so an unbounded
-        default can starve the reply. Give it a fixed budget instead, and fall back to disabled
-        when the budget is off, below the API minimum, or would leave no room for the reply.
+        Newer models think by default and reasoning counts against max_tokens, so an
+        unmanaged default can starve the reply. Use adaptive thinking at a configured effort,
+        and disable it when set to "off" or when too little output budget is left.
         """
         from ..config import get_settings
 
-        budget = get_settings().claude_thinking_budget
-        if budget < 1024 or self._budget.output_remaining < budget + 1024:
-            return {"type": "disabled"}
-        return {"type": "enabled", "budget_tokens": budget}
+        effort = get_settings().claude_thinking_effort
+        if effort == "off" or self._budget.output_remaining < MIN_THINKING_ROOM:
+            return {"thinking": {"type": "disabled"}}
+        return {"thinking": {"type": "adaptive"}, "output_config": {"effort": effort}}
 
     def stream_turn(self, system, user_input, on_token, attachments=None):
         if attachments:
@@ -149,7 +151,7 @@ class ClaudeBackend(BaseBackend):
                 lambda: self._client.messages.stream(
                     model=self._model,
                     max_tokens=self._budget.output_remaining,
-                    thinking=self._thinking_param(),
+                    **self._thinking_kwargs(),
                     system=system,
                     messages=self._history,
                     tools=[SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL, UPDATE_PROFILE_TOOL],
