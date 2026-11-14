@@ -13,6 +13,7 @@ from sqlmodel import Session
 
 from ..config import VALID_MODES
 from ..db import chat_turns, conversations, mutations
+from ..db import usage as usage_log
 from ..db.engine import get_engine
 from ..turn_notice import notice_text, receipt_text
 
@@ -72,6 +73,25 @@ def _turn_record(turn) -> dict | None:
     except Exception:
         logging.getLogger(__name__).exception("chat turn record could not be built")
         return None
+
+
+def _record_usage(turn) -> None:
+    """Log the turn's provider usage once, however it ended. Never raises."""
+    try:
+        record = getattr(getattr(turn.backend, "_budget", None), "record", None)
+        rounds = list(getattr(record, "rounds", None) or [])
+        if not rounds:
+            return
+        usage_log.record_safely(
+            source="chat",
+            provider=turn.backend.provider,
+            model=turn.backend.label,
+            mode=turn.mode,
+            turn_id=turn.turn_id,
+            **usage_log.sum_rounds(rounds),
+        )
+    except Exception:
+        logging.getLogger(__name__).exception("chat turn usage could not be logged")
 
 
 def recover_interrupted_turns() -> None:
@@ -234,6 +254,7 @@ class ConversationCoordinator:
                     session, turn.mode, turn.turn_id, text, notice, turn.backend.label
                 )
                 finalized = True  # the reply is stored; never write a second one below
+                _record_usage(turn)  # before the status write, whose failure re-raises
                 chat_turns.update(
                     session,
                     turn.turn_id,
@@ -272,6 +293,7 @@ class ConversationCoordinator:
                     budget=_turn_record(turn),
                 )
                 finalized = True
+                _record_usage(turn)
                 # What was saved before the stop is shown too, not only the failure.
                 if events.get("memories"):
                     turn.tokens.put("[MEMORIES]" + json.dumps(events["memories"]))

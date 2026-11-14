@@ -8,6 +8,7 @@ from ..budget import (
     DEFAULT_BYTES_PER_TOKEN,
     Limits,
     TurnBudget,
+    Usage,
     bounded_turn,
     BudgetExceeded,
     estimate,
@@ -356,7 +357,7 @@ class BaseBackend(ABC):
         if hasattr(self, "_limits"):
             return self._limits
         overrides = get_settings().chat_limits
-        provider = self.__class__.__name__.replace("Backend", "").lower()
+        provider = self.provider
         values = {
             **overrides.get("default", {}),
             **overrides.get(provider, {}),
@@ -811,12 +812,17 @@ class BaseBackend(ABC):
             summary += " Consider revising the plan to stay within the Training State guardrails."
         return summary, self._budget.changes[change_start:]
 
-    @abstractmethod
+    @property
+    def provider(self) -> str:
+        """The provider's short name: claude, gemini, openai or ollama."""
+        return self.__class__.__name__.replace("Backend", "").lower()
+
     def stateless_turn(
         self,
         system: str,
         user_input: str,
         on_token: Callable[[str], None],
+        source: str = "other",
     ) -> str:
         """
         Send a single [system + user] exchange to the LLM with no conversation
@@ -824,7 +830,32 @@ class BaseBackend(ABC):
 
         Used for one-shot analysis tasks (e.g. deep-dive) where carrying the
         full chat history would overflow small-context local models and is
-        irrelevant to the task at hand.
+        irrelevant to the task at hand. ``source`` names the feature for the usage log.
 
         Returns the full response text.
         """
+        text, usage = self._stateless_turn(system, user_input, on_token)
+        from ..db import usage as usage_log
+
+        usage = usage or Usage()  # a call that reported nothing is still logged, as unpriced
+        usage_log.record_safely(
+            source=source,
+            provider=self.provider,
+            model=self.label,
+            input_total=usage.input_total,
+            cache_read=usage.cache_read,
+            cache_write=usage.cache_write,
+            output_total=usage.output_total,
+            reasoning=usage.reasoning,
+        )
+        return text
+
+    @abstractmethod
+    def _stateless_turn(
+        self,
+        system: str,
+        user_input: str,
+        on_token: Callable[[str], None],
+    ) -> tuple[str, "Usage | None"]:
+        """Provider call behind ``stateless_turn``: the reply text and its usage (None if the
+        provider reported none)."""

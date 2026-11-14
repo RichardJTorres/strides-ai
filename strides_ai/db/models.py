@@ -162,6 +162,30 @@ class ChatTurn(SQLModel, table=True):
     )
 
 
+class LlmUsage(SQLModel, table=True):
+    """Provider-reported usage of one chat turn (all its rounds, summed) or one one-shot call.
+
+    None means the provider did not report it. A chat round cut off mid-stream reports nothing,
+    so a stopped turn's row can undercount."""
+
+    __tablename__ = "llm_usage"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    ts: Optional[str] = Field(
+        default=None, sa_column=Column(sa.Text, server_default=sa.text("datetime('now')"))
+    )
+    source: str  # chat | deep_dive | insights | memory_review | plan_generation | route_analysis
+    provider: str
+    model: str
+    mode: Optional[str] = None
+    turn_id: Optional[int] = None
+    input_total: Optional[int] = None  # everything sent, cached or not
+    cache_read: Optional[int] = None
+    cache_write: Optional[int] = None
+    output_total: Optional[int] = None  # everything generated, including reasoning
+    reasoning: Optional[int] = None
+
+
 class Memory(SQLModel, table=True):
     __tablename__ = "memories"
 

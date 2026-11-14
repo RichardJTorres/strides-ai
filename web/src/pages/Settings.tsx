@@ -5,6 +5,7 @@ import PageHeader from "../ui/PageHeader";
 import { Notice } from "../ui/states";
 import { MODES, THEMES, type Mode, type ThemeConfig } from "../ui/theme";
 import { useUnits } from "../UnitsContext";
+import UsagePanel from "./UsagePanel";
 import type { UnitSystem } from "../units";
 
 interface Provider {
@@ -600,6 +601,8 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
               </div>
             </div>
           </section>
+
+          <UsagePanel />
         </div>
       </div>
     </div>
