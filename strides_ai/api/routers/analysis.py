@@ -128,7 +128,9 @@ async def deep_dive(
         system_prompt += f"\n\n{planned}"
 
     def _run_llm():
-        return backend.stateless_turn(system_prompt, user_content, on_token=lambda _: None)
+        return backend.stateless_turn(
+            system_prompt, user_content, on_token=lambda _: None, source="deep_dive"
+        )
 
     try:
         report = await asyncio.get_event_loop().run_in_executor(None, _run_llm)

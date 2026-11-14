@@ -103,7 +103,7 @@ class _StubBackend:
         self.reply = json.dumps(_GOOD_REPORT) if reply is None else reply
         self.calls = 0
 
-    def stateless_turn(self, system, user_input, on_token):
+    def stateless_turn(self, system, user_input, on_token, source="other"):
         self.calls += 1
         return self.reply
 

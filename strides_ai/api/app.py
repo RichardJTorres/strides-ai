@@ -24,6 +24,7 @@ from .routers import (
     settings,
     status,
     sync,
+    usage,
 )
 
 
@@ -60,6 +61,7 @@ app.include_router(analysis.router, prefix="/api")
 app.include_router(calendar.router, prefix="/api")
 app.include_router(progress.router, prefix="/api")
 app.include_router(status.router, prefix="/api")
+app.include_router(usage.router, prefix="/api")
 
 
 @app.get("/api/modes")

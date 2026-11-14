@@ -35,3 +35,19 @@ export function formatDuration(seconds: number | null | undefined, empty = "—"
   const m = minutes % 60;
   return h > 0 ? `${h}h ${String(m).padStart(2, "0")}m` : `${m}m`;
 }
+
+/** A token count, compact: 950 -> "950", 1_500 -> "1.5K", 12_400 -> "12K", 3_200_000 -> "3.2M". */
+export function formatTokens(n: number | null | undefined, empty = "—"): string {
+  if (n == null || !Number.isFinite(n) || n < 0) return empty;
+  if (n < 1_000) return String(Math.round(n));
+  if (n < 10_000) return `${(n / 1_000).toFixed(1)}K`;
+  if (n < 999_500) return `${Math.round(n / 1_000)}K`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
+/** US dollars: "$0.0042" under a cent, "$1.23" otherwise. Null (no estimate) returns `empty`. */
+export function formatCost(usd: number | null | undefined, empty = "—"): string {
+  if (usd == null || !Number.isFinite(usd) || usd < 0) return empty;
+  if (usd === 0) return "$0.00";
+  return usd < 0.01 ? `$${usd.toFixed(4)}` : `$${usd.toFixed(2)}`;
+}
