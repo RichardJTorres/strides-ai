@@ -312,9 +312,13 @@ def compute_metrics(streams: dict[str, list], activity: dict, max_hr: int = 190)
 
     metrics: dict = {}
 
-    # Cardiac decoupling
+    # Elevation (from the activity summary field — see _elevation_metrics docstring)
+    climb_m_per_km, elev_flag = _elevation_metrics(activity.get("elevation_gain_m"), distance_m)
+
+    # Cardiac decoupling — not computed on hilly courses: it compares the first and second
+    # half of raw HR/velocity, so a climb-then-descend course measures terrain, not fatigue.
     metrics["cardiac_decoupling_pct"] = (
-        _cardiac_decoupling(hr, velocity) if hr and velocity else None
+        _cardiac_decoupling(hr, velocity) if hr and velocity and not elev_flag else None
     )
 
     # HR zones
@@ -338,8 +342,6 @@ def compute_metrics(streams: dict[str, list], activity: dict, max_hr: int = 190)
         activity.get("avg_pace_s_per_km"), activity.get("avg_hr")
     )
 
-    # Elevation (from the activity summary field — see _elevation_metrics docstring)
-    climb_m_per_km, elev_flag = _elevation_metrics(activity.get("elevation_gain_m"), distance_m)
     metrics["climb_m_per_km"] = climb_m_per_km
     metrics["high_elevation_flag"] = elev_flag
 
@@ -744,9 +746,12 @@ def build_precomputed_brief(
     else:
         hr_drift_str = "-"
 
-    # Cardiac decoupling
-    cd = _cardiac_decoupling(hr, velocity)
-    if cd is not None:
+    # Cardiac decoupling (skipped on hilly courses, as in compute_metrics)
+    _, hilly = _elevation_metrics(activity.get("elevation_gain_m"), distance_m)
+    cd = None if hilly else _cardiac_decoupling(hr, velocity)
+    if hilly:
+        cd_str = "n/a on hilly terrain (terrain skews it)"
+    elif cd is not None:
         if cd < 5:
             cd_str = f"{cd:.1f}% (well-coupled — good aerobic efficiency)"
         elif cd < 10:

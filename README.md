@@ -217,7 +217,7 @@ Every activity synced from Strava is automatically analysed using time-series st
 
 | Metric | Description | Threshold |
 |---|---|---|
-| **Cardiac decoupling %** | Aerobic efficiency — how much the HR/pace ratio drifts across the run | <5% excellent, 5–10% acceptable, >10% high stress |
+| **Cardiac decoupling %** | Aerobic efficiency — how much the HR/pace ratio drifts across the run | <5% excellent, 5–10% acceptable, >10% high stress; not computed on hilly courses (>100 ft/mi) |
 | **HR zones (Z1–Z5)** | Time distribution across HR intensity zones (based on `max_hr` setting, default 190) | Z1 recovery, Z2 aerobic, Z3 tempo, Z4 threshold, Z5 VO2max |
 | **Pace fade** | Last-third avg pace minus first-third avg pace (stored in s/km, shown in s/km or s/mi) | Positive = slowing, negative = negative split |
 | **Cadence avg / std dev** | Mean and variability of step rate (spm for runs, rpm for rides) | — |

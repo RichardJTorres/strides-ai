@@ -383,7 +383,8 @@ def _analysis_guide_section(cfg, recent: list, units: UnitSystem = DEFAULT_UNIT_
         "first third; "
         "positive = slowing (fatigue or poor pacing), negative = negative split (strong finish)\n"
         "- **Cardiac decoupling %**: HR drift relative to pace; <5% = well-coupled, "
-        "5–10% = moderate drift, >10% = high drift; most meaningful for steady aerobic runs"
+        "5–10% = moderate drift, >10% = high drift; most meaningful for steady aerobic runs. "
+        "Not computed on hilly courses (terrain, not fatigue, skews it); a missing value on a hilly run is expected, not a data problem"
     )
 
 
