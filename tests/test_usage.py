@@ -221,7 +221,7 @@ def test_warns_when_measured_input_exceeds_the_estimate_by_more_than_15_percent(
 
 
 def test_usage_still_accepts_a_bare_output_count():
-    budget = TurnBudget(Limits(total_output_tokens=5000), RATIO)
+    budget = TurnBudget(Limits(turn_output_ceiling=5000), RATIO)
     budget.request("sys", [], [])
     budget.usage(3900)
     assert budget.output_remaining == 1100
@@ -281,8 +281,8 @@ def test_two_round_claude_turn_records_usage_and_never_counts_tokens(mocker):
 
 def test_count_tokens_confirms_a_message_the_estimate_would_reject(mocker):
     backend, client = _claude(mocker, count=1500)
-    # About 37k tokens by the estimate, 1.5k by the provider's own count.
-    system = backend.prepare_turn("mandatory", "x" * 90000)
+    # About 167k tokens by the estimate, 1.5k by the provider's own count.
+    system = backend.prepare_turn("mandatory", "x" * 400000)
     assert system == "mandatory"
     assert client.messages.count_tokens.call_count == 1
     # The turn has used its one count.
@@ -291,33 +291,32 @@ def test_count_tokens_confirms_a_message_the_estimate_would_reject(mocker):
 
 
 def test_count_tokens_that_agrees_with_the_estimate_rejects_once(mocker):
-    backend, client = _claude(mocker, count=90000)
+    backend, client = _claude(mocker, count=400000)
     with pytest.raises(BudgetExceeded):
-        backend.prepare_turn("mandatory", "x" * 90000)
+        backend.prepare_turn("mandatory", "x" * 400000)
     assert client.messages.count_tokens.call_count == 1
 
 
-def test_a_later_round_over_the_estimate_counts_once_and_not_again(mocker):
-    mocker.patch("strides_ai.backends.base.db.save_memory", return_value="y" * 90000)
+def test_a_later_round_over_the_ceiling_becomes_the_reply_round_and_never_counts(mocker):
+    mocker.patch("strides_ai.backends.base.db.save_memory", return_value="y" * 400000)
     args = {"category": "goal", "content": "race"}
     streams = [
         _claude_stream(["a"], "tool_use", [_claude_tool_block("save_memory", args, "t1")]),
-        _claude_stream(["b"], "tool_use", [_claude_tool_block("save_memory", args, "t2")]),
-        _claude_stream(["c"], "end_turn"),
+        _claude_stream(["b"], "end_turn"),
     ]
     backend, client = _claude(mocker, *streams, count=2000)
     backend.stream_turn("mandatory", "hello", lambda _: None)
-    # Rounds 2 and 3 are both over the estimate; only round 2 may ask the provider, so round 3
-    # is judged on the estimate alone and the turn stops there.
+    # The count is only for admitting a message; a later round is judged on the estimate alone.
     assert client.messages.stream.call_count == 2
-    assert client.messages.count_tokens.call_count == 1
-    assert backend._budget.stop_reason.startswith("Input context limit")
+    assert client.messages.count_tokens.call_count == 0
+    assert backend._budget.stop_reason == "input_ceiling"
+    assert [r["kind"] for r in backend._budget.record.rounds] == ["tool", "reply"]
 
 
 def test_no_count_tokens_when_the_estimate_fits_on_every_provider(
     adapter, monkeypatch, mocker
 ):  # noqa: F811
-    monkeypatch.setattr(BaseBackend, "limits", property(lambda _: Limits(rounds=2, tools=16)))
+    monkeypatch.setattr(BaseBackend, "limits", property(lambda _: Limits(tool_rounds=2, tools=16)))
     mocker.patch("strides_ai.backends.base.db.save_memory", return_value="saved")
     backend, _ = adapter()
     spy = mocker.patch.object(backend, "_count_request", wraps=backend._count_request)
@@ -328,7 +327,7 @@ def test_no_count_tokens_when_the_estimate_fits_on_every_provider(
 def test_missing_provider_usage_leaves_the_record_null_and_the_estimate_growing(
     adapter, monkeypatch, mocker  # noqa: F811
 ):
-    monkeypatch.setattr(BaseBackend, "limits", property(lambda _: Limits(rounds=2, tools=16)))
+    monkeypatch.setattr(BaseBackend, "limits", property(lambda _: Limits(tool_rounds=1, tools=16)))
     mocker.patch("strides_ai.backends.base.db.save_memory", return_value="saved")
     backend, _ = adapter()
     backend.stream_turn("mandatory", "hello", lambda _: None)
@@ -342,7 +341,7 @@ def test_missing_provider_usage_leaves_the_record_null_and_the_estimate_growing(
 
 def test_a_message_admitted_by_the_measured_count_is_not_rejected_again_in_round_one(mocker):
     backend, client = _claude(mocker, _claude_stream(["ok"], "end_turn"), count=1500)
-    text, _, _ = backend.stream_turn("mandatory", "x" * 90000, lambda _: None)
+    text, _, _ = backend.stream_turn("mandatory", "x" * 400000, lambda _: None)
     assert text == "ok"
     assert client.messages.count_tokens.call_count == 1
     assert backend._budget.record.rounds[0]["count_kind"] == "measured"

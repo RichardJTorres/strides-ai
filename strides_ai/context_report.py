@@ -41,10 +41,8 @@ def build_report(mode: str, measure: bool = False) -> dict:
     return report
 
 
-def _row(name: str, size: int | None, est: int | None, sent: str) -> str:
-    size_text = f"{size:,}" if size is not None else ""
-    est_text = f"{est:,}" if est is not None else ""
-    return f"{name:<28}{size_text:>10}{est_text:>10}  {sent}"
+def _row(name: str, *cells) -> str:
+    return f"{name:<26}" + "".join(f"{cell:>12}" for cell in cells)
 
 
 def format_report(report: dict) -> str:
@@ -59,44 +57,53 @@ def format_report(report: dict) -> str:
         ),
         "Limits: " + ", ".join(f"{key}={value:,}" for key, value in limits.items()),
         "",
-        f"{'Section':<28}{'bytes':>10}{'est':>10}  Sent",
     ]
     if report.get("rejected"):
         lines.append(f"REJECTED: {report['rejected']}")
         return "\n".join(lines)
     fixed = report.get("fixed") or {}
-    for key in ("mandatory", "tools", "submission"):
-        lines.append(_row(key, None, fixed.get(key), "yes"))
-    activity_rows = []
-    for section in report.get("sections", []):
-        if str(section["key"]).startswith("activity:"):
-            activity_rows.append(section)
-            continue
+    target = report.get("context_target") or 0
+    sections = report.get("sections", [])
+    required = [s for s in sections if s.get("kind") == "required"]
+    reducible = [s for s in sections if s.get("kind") == "reducible"]
+    lines.append(_row("Required (never cut)", "est tokens"))
+    lines.append(_row("  tool definitions", fixed.get("tools")))
+    lines.append(_row("  your message", fixed.get("submission")))
+    lines.append(_row("  date_time", fixed.get("date_time")))
+    for section in required:
+        lines.append(_row(f"  {section['key']}", section["est"]))
+    lines += [
+        f"Required context: {report.get('required_est', 0):,} of a {target:,}-token target.",
+        "",
+        _row("Reducible", "level", "of", "cap", "est", "est at full"),
+    ]
+    for section in reducible:
         lines.append(
             _row(
-                section["key"],
-                section["bytes"],
-                section["est"],
-                "yes" if section["level"] is not None else "NO",
-            )
-        )
-    if activity_rows:
-        sent = [s for s in activity_rows if s["level"] is not None]
-        lines.append(
-            _row(
-                "recent activities",
-                sum(s["bytes"] for s in activity_rows),
-                sum(s["est"] for s in activity_rows),
-                f"{len(sent)} of {len(activity_rows)}",
+                f"  {section['key']}",
+                section["level"],
+                section["full"],
+                f"{section['cap']:,}",
+                f"{section['est']:,}",
+                f"{section['full_est']:,}",
             )
         )
     history = report.get("history") or {}
+    lines.append(
+        _row(
+            "  history (pairs)",
+            history.get("pairs", 0),
+            history.get("of", 0),
+            f"{history.get('cap', 0):,}",
+            f"{history.get('est', 0):,}",
+        )
+    )
+    ladder = report.get("ladder") or []
     lines += [
         "",
-        f"History: {history.get('messages', 0)} messages sent, "
-        f"{history.get('dropped', 0)} left out (est {history.get('est', 0):,}).",
-        f"System prompt before trimming: {report.get('system_bytes', 0):,} bytes.",
-        f"Request as sent: {report.get('est_input', 0):,} ({report.get('count_kind')}).",
+        "Ladder steps applied: " + (", ".join(ladder) if ladder else "none (everything fits)"),
+        f"System prompt at full size: {report.get('system_bytes', 0):,} bytes.",
+        f"Request as sent: {report.get('est_input', 0):,} of {target:,} ({report.get('count_kind')}).",
         f"Admission took {report.get('admission_ms', 0)} ms.",
     ]
     return "\n".join(lines)

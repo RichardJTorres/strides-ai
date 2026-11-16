@@ -146,6 +146,10 @@ class OllamaBackend(BaseBackend):
 
         return ollama_thinking(self.profile, "low" if oneshot else get_settings().thinking_effort)
 
+    def _timeout(self):
+        """Connect within first_event_s; a stream silent for stream_idle_s is a stall."""
+        return httpx.Timeout(self.limits.stream_idle_s, connect=self.limits.first_event_s)
+
     def stream_turn(self, system, user_input, on_token, attachments=None):
         if attachments:
             raise NotImplementedError("Ollama backend does not support file attachments")
@@ -155,86 +159,92 @@ class OllamaBackend(BaseBackend):
         plan_changes: list[dict] = []
 
         while True:
-            self._before_request(system)
+            plan = self._begin_round(system)
             # Prepend system message each call (Ollama has no separate system param)
             messages = [{"role": "system", "content": system}, *self._history]
 
             full_content = ""
             tool_calls: list[dict] = []
+            finish = None
 
             body: dict = {
                 "model": self._model,
                 "messages": messages,
                 "stream": True,
                 "options": {
-                    "num_predict": self._budget.output_remaining,
+                    "num_predict": plan.max_tokens,
                     "num_ctx": self.limits.context_window,
                 },
             }
             body.update(self._thinking_kwargs())
-            if self._supports_tools is not False:
+            # Ollama has no tool_choice: the reply round simply leaves the tools out.
+            if plan.kind == "tool" and self._supports_tools is not False:
                 body["tools"] = [SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL, UPDATE_PROFILE_TOOL]
 
             provider_usage = Usage()
-            retry_without_tools = False
-            with httpx.Client(timeout=120) as client:
-                with self._transport_stream(
-                    lambda: client.stream("POST", f"{self._host}/api/chat", json=body),
-                    validate=lambda response: (
-                        response.raise_for_status()
-                        if response.status_code == 429 or response.status_code >= 500
-                        else None
-                    ),
-                ) as resp:
-                    if resp.status_code == 400 and "tools" in body:
-                        # Model doesn't support tool calling (e.g. Gemma) — retry without
-                        self._supports_tools = False
-                        retry_without_tools = True
-                    else:
-                        resp.raise_for_status()
-                        for line in resp.iter_lines():
-                            self._check_cancelled()
-                            if not line:
-                                continue
-                            chunk = json.loads(line)
-                            msg = chunk.get("message", {})
+            for _ in range(2):  # the second pass is the retry without tools
+                retry_without_tools = False
+                with httpx.Client(timeout=self._timeout()) as client:
+                    with self._transport_stream(
+                        lambda: client.stream("POST", f"{self._host}/api/chat", json=body),
+                        validate=lambda response: (
+                            response.raise_for_status()
+                            if response.status_code == 429 or response.status_code >= 500
+                            else None
+                        ),
+                    ) as resp:
+                        if resp.status_code == 400 and "tools" in body:
+                            # Model doesn't support tool calling (e.g. Gemma) — retry without
+                            self._supports_tools = False
+                            retry_without_tools = True
+                        else:
+                            resp.raise_for_status()
+                            for line in resp.iter_lines():
+                                self._on_event()
+                                if not line:
+                                    continue
+                                chunk = json.loads(line)
+                                msg = chunk.get("message", {})
 
-                            text = msg.get("content", "")
-                            if text:
-                                on_token(text)
-                                full_content += text
-                                response_text += text
+                                text = msg.get("content", "")
+                                if text:
+                                    on_token(text)
+                                    full_content += text
+                                    response_text += text
 
-                            # Tool calls typically arrive in the final chunk
-                            if msg.get("tool_calls"):
-                                tool_calls = msg["tool_calls"]
+                                # Tool calls typically arrive in the final chunk
+                                if msg.get("tool_calls"):
+                                    tool_calls = msg["tool_calls"]
 
-                            if chunk.get("done"):
-                                provider_usage = ollama_usage(chunk)
-                                break
-
-            if retry_without_tools:
-                continue
+                                if chunk.get("done"):
+                                    provider_usage = ollama_usage(chunk)
+                                    finish = chunk.get("done_reason")
+                                    break
+                if not retry_without_tools:
+                    break
+                body.pop("tools")
 
             self._history.append(
                 {"role": "assistant", "content": full_content, "tool_calls": tool_calls}
             )
 
-            if not tool_calls:
-                self._budget.usage(provider_usage)
+            for tc in tool_calls:
+                self._budget.output(tc.get("function", {}))
+            self._budget.usage(provider_usage)
+            if not self._end_round(plan, cut_off=finish == "length", calls=len(tool_calls)):
                 break
 
             # Execute tool calls and add results to history
             for tc in tool_calls:
-                self._budget.output(tc.get("function", {}))
-            self._budget.usage(provider_usage)
-            for tc in tool_calls:
                 fn = tc.get("function", {})
-                result = self._run_tool(
-                    fn.get("name"), fn.get("arguments", {}), memories_saved, plan_changes
+                args = fn.get("arguments", {})
+                result = self._run_call(
+                    fn.get("name"),
+                    args if isinstance(args, dict) else None,
+                    memories_saved,
+                    plan_changes,
                 )
-                if result is not None:
-                    self._history.append({"role": "tool", "content": result})
+                self._history.append({"role": "tool", "content": result})
 
         return response_text, memories_saved, plan_changes
 

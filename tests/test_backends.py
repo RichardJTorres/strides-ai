@@ -33,6 +33,14 @@ def _claude_stream(tokens, stop_reason="end_turn", content_blocks=None):
     s.__enter__.return_value = s
     s.__exit__.return_value = False
     s.text_stream = iter(tokens)
+    events = []
+    for token in tokens:
+        event = MagicMock()
+        event.type = "content_block_delta"
+        event.delta.type = "text_delta"
+        event.delta.text = token
+        events.append(event)
+    s.__iter__.side_effect = lambda: iter(events)
     final = MagicMock()
     final.stop_reason = stop_reason
     final.content = content_blocks or []
@@ -80,22 +88,22 @@ def test_claude_stream_turn_uses_adaptive_thinking(mock_anthropic, monkeypatch, 
     kwargs = _claude_thinking_kwargs(mock_anthropic, monkeypatch, effort)
     assert kwargs["thinking"] == {"type": "adaptive"}
     assert kwargs["output_config"] == {"effort": effort}
-    assert kwargs["max_tokens"] == 10000
+    assert kwargs["max_tokens"] == 16000
+
+
+def test_claude_requests_ask_for_automatic_caching_and_carry_the_stall_timeout(
+    mock_anthropic, monkeypatch
+):
+    kwargs = _claude_thinking_kwargs(mock_anthropic, monkeypatch, "medium")
+    assert kwargs["cache_control"] == {"type": "ephemeral"}
+    assert "tool_choice" not in kwargs  # tools are on in a tool round
+    assert kwargs["timeout"].read == 120 and kwargs["timeout"].connect == 60
 
 
 def test_claude_stream_turn_thinking_off(mock_anthropic, monkeypatch):
     kwargs = _claude_thinking_kwargs(mock_anthropic, monkeypatch, "off")
     assert kwargs["thinking"] == {"type": "disabled"}
     assert "output_config" not in kwargs
-
-
-def test_claude_stream_turn_skips_thinking_when_little_output_left(mock_anthropic, monkeypatch):
-    from strides_ai.budget import Limits
-    from strides_ai.backends.base import BaseBackend
-
-    monkeypatch.setattr(BaseBackend, "limits", property(lambda _: Limits(output_tokens=3000)))
-    kwargs = _claude_thinking_kwargs(mock_anthropic, monkeypatch, "medium")
-    assert kwargs["thinking"] == {"type": "disabled"}
 
 
 def _claude_thinking_kwargs(mock_anthropic, monkeypatch, effort):

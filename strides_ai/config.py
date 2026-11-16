@@ -5,7 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -28,8 +28,19 @@ class Settings(BaseSettings):
         "medium", validation_alias=AliasChoices("thinking_effort", "claude_thinking_effort")
     )
 
-    # JSON overrides keyed by default, provider, or provider/model label.
-    chat_limits: dict[str, dict[str, int]] = {}
+    # JSON overrides keyed by default, provider, or provider/model label. They may raise or lower
+    # the limits derived from the model (budget.Limits); a value past what the model supports is
+    # clamped with a warning. The older key names (output_tokens, rounds, ...) still work.
+    chat_limits: dict[str, dict[str, int | float]] = {}
+
+    @field_validator("chat_limits")
+    @classmethod
+    def _chat_limits_are_valid(cls, value):
+        from .budget import normalize_limits
+
+        for layer in value.values():
+            normalize_limits(layer)  # raises on an unknown key or a bad value
+        return value
 
     # Strava
     strava_client_id: str = ""

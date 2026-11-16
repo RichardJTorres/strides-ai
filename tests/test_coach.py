@@ -276,16 +276,11 @@ def test_lifting_coach_gets_no_cardio_streak(tmp_db):
     assert "Streak and Records" not in build_system("", [], mode="lifting", activities=rows)
 
 
-def test_coach_voice_comes_before_the_long_computed_sections(tmp_db):
-    # Optional sections are dropped from the first one that does not fit, so the short voice
-    # instruction must not sit behind the long ones.
-    tomorrow = (date.today() + timedelta(days=1)).isoformat()
-    save_planned_workout(tomorrow, "Easy Run", None, 5.0, None, 30, "easy")
+def test_voice_and_training_state_are_required_so_a_long_section_cannot_remove_them(tmp_db):
     prompt = build_system("", [], coach_voice="technical")
-    voice = next(i for i, p in enumerate(prompt.priority) if "Coaching Voice" in p)
-    assert all(
-        "Streak and Records" not in p and "Training State" not in p for p in prompt.priority[:voice]
-    )
+    required = {p.key for p in prompt.required}
+    assert {"voice", "training_state", "profile", "calendar_constraints"} <= required
+    assert "Coaching Voice" in next(p.text for p in prompt.required if p.key == "voice")
 
 
 def test_digest_flags_reach_the_coach_without_a_cached_readout(tmp_db):
