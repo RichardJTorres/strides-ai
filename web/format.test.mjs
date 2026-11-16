@@ -33,3 +33,19 @@ test('formatDate reads a date-only string as a local calendar day', () => {
 test('formatDate rejects missing or unparseable input', () => {
   for (const bad of [null, undefined, '', 'not a date']) assert.equal(f.formatDate(bad), '—');
 });
+
+test('formatTokens is compact and rejects bad input', () => {
+  assert.equal(f.formatTokens(950), '950');
+  assert.equal(f.formatTokens(1500), '1.5K');
+  assert.equal(f.formatTokens(12400), '12K');
+  assert.equal(f.formatTokens(3200000), '3.2M');
+  assert.equal(f.formatTokens(999700), '1.0M'); // never "1000K"
+  for (const bad of [null, undefined, NaN, -1]) assert.equal(f.formatTokens(bad), '—');
+});
+
+test('formatCost shows sub-cent amounts and null as a dash', () => {
+  assert.equal(f.formatCost(0.0042), '$0.0042');
+  assert.equal(f.formatCost(1.234), '$1.23');
+  assert.equal(f.formatCost(0), '$0.00');
+  assert.equal(f.formatCost(null), '—');
+});

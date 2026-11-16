@@ -150,7 +150,9 @@ async def generate_insights(
     prompt = build_insights_prompt(digest, units)
 
     def _run_llm() -> str:
-        return backend.stateless_turn(INSIGHTS_SYSTEM_PROMPT, prompt, lambda _: None)
+        return backend.stateless_turn(
+            INSIGHTS_SYSTEM_PROMPT, prompt, lambda _: None, source="insights"
+        )
 
     try:
         text = await asyncio.get_event_loop().run_in_executor(None, _run_llm)

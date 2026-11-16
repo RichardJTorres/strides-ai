@@ -85,7 +85,7 @@ def review_memories(session: Session = Depends(get_session), backend=Depends(get
     prompt = _build_review_prompt(memory_dicts)
 
     try:
-        raw = backend.stateless_turn(REVIEW_SYSTEM, prompt, lambda _: None)
+        raw = backend.stateless_turn(REVIEW_SYSTEM, prompt, lambda _: None, source="memory_review")
         flagged = _parse_review_json(raw)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Model review failed: {exc}")

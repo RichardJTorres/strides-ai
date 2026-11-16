@@ -491,7 +491,7 @@ class GeminiBackend(BaseBackend):
 
         return response_text, memories_saved, plan_changes
 
-    def stateless_turn(self, system, user_input, on_token):
+    def _stateless_turn(self, system, user_input, on_token):
         config = types.GenerateContentConfig(
             system_instruction=system,
             thinking_config=self._thinking_config(oneshot=True),
@@ -499,6 +499,7 @@ class GeminiBackend(BaseBackend):
         )
         contents = [types.Content(role="user", parts=[types.Part.from_text(text=user_input)])]
         response_text = ""
+        usage = None
         for attempt in range(_MAX_RETRIES):
             try:
                 for chunk in self._client.models.generate_content_stream(
@@ -506,6 +507,8 @@ class GeminiBackend(BaseBackend):
                     contents=contents,
                     config=config,
                 ):
+                    if getattr(chunk, "usage_metadata", None) is not None:
+                        usage = gemini_usage(chunk.usage_metadata)  # the last chunk's is final
                     if chunk.text:
                         on_token(chunk.text)
                         response_text += chunk.text
@@ -514,4 +517,4 @@ class GeminiBackend(BaseBackend):
                 if exc.code != 429 or attempt == _MAX_RETRIES - 1:
                     raise
                 time.sleep(_RETRY_DELAY_S)
-        return response_text
+        return response_text, usage

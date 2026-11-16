@@ -248,7 +248,7 @@ class OllamaBackend(BaseBackend):
 
         return response_text, memories_saved, plan_changes
 
-    def stateless_turn(self, system, user_input, on_token):
+    def _stateless_turn(self, system, user_input, on_token):
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": user_input},
@@ -260,6 +260,7 @@ class OllamaBackend(BaseBackend):
             **self._thinking_kwargs(oneshot=True),
         }
         response_text = ""
+        usage = None
         with httpx.Client(timeout=120) as client:
             with client.stream("POST", f"{self._host}/api/chat", json=body) as resp:
                 resp.raise_for_status()
@@ -272,5 +273,6 @@ class OllamaBackend(BaseBackend):
                         on_token(text)
                         response_text += text
                     if chunk.get("done"):
+                        usage = ollama_usage(chunk)
                         break
-        return response_text
+        return response_text, usage

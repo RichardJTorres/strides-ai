@@ -398,7 +398,10 @@ async def generate_plan(
 
     def _run_llm():
         return backend.stateless_turn(
-            plan_generation_system_prompt(units), prompt, on_token=lambda _: None
+            plan_generation_system_prompt(units),
+            prompt,
+            on_token=lambda _: None,
+            source="plan_generation",
         )
 
     text = ""
@@ -522,7 +525,9 @@ async def analyze_workout_route(
     )
 
     def _run_llm():
-        return backend.stateless_turn(ROUTE_ANALYSIS_SYSTEM_PROMPT, prompt, on_token=lambda _: None)
+        return backend.stateless_turn(
+            ROUTE_ANALYSIS_SYSTEM_PROMPT, prompt, on_token=lambda _: None, source="route_analysis"
+        )
 
     try:
         text = await asyncio.get_event_loop().run_in_executor(None, _run_llm)
