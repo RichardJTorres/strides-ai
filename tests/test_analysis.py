@@ -427,6 +427,39 @@ def test_summary_no_cardiac_data():
 # ── compute_metrics ───────────────────────────────────────────────────────────
 
 
+def _drift_streams():
+    return {
+        "heartrate": [150] * 300 + [165] * 300,
+        "velocity_smooth": [3.0] * 600,
+    }
+
+
+def _drift_activity(elevation_gain_m):
+    return {
+        "sport_type": "Run",
+        "distance_m": 10000.0,
+        "avg_pace_s_per_km": 360.0,
+        "avg_hr": 157.0,
+        "elevation_gain_m": elevation_gain_m,
+    }
+
+
+def test_decoupling_skipped_on_hilly_course():
+    m = compute_metrics(_drift_streams(), _drift_activity(400.0))  # 40 m/km
+    assert m["high_elevation_flag"] == 1
+    assert m["cardiac_decoupling_pct"] is None
+
+
+def test_decoupling_computed_on_flat_course():
+    m = compute_metrics(_drift_streams(), _drift_activity(50.0))  # 5 m/km
+    assert m["cardiac_decoupling_pct"] == pytest.approx(10.0, abs=1.0)
+
+
+def test_decoupling_computed_when_elevation_unknown():
+    m = compute_metrics(_drift_streams(), _drift_activity(None))
+    assert m["cardiac_decoupling_pct"] == pytest.approx(10.0, abs=1.0)
+
+
 def test_compute_metrics_full_streams():
     streams = {
         "time": list(range(0, 600, 1)),

@@ -125,7 +125,7 @@ Every stored measurement is SI-based: meters, s/km, m/km, kg, ml (`distance_km` 
 ### Analysis pipeline (`strides_ai/analysis.py`)
 
 Two stages:
-1. **Metric computation** (run automatically on sync): fetches Strava streams (heartrate, velocity, cadence, altitude), computes cardiac decoupling %, HR zone distribution (Z1–Z5), pace fade, cadence std dev, effort efficiency score (0–100), and elevation flags. Writes results back to the `activities` table. Produces a rule-based NL summary (no LLM) stored as `analysis_summary`.
+1. **Metric computation** (run automatically on sync): fetches Strava streams (heartrate, velocity, cadence, altitude), computes cardiac decoupling % (skipped on hilly courses, where terrain skews the half-vs-half split), HR zone distribution (Z1–Z5), pace fade, cadence std dev, effort efficiency score (0–100), and elevation flags. Writes results back to the `activities` table. Produces a rule-based NL summary (no LLM) stored as `analysis_summary`.
 2. **Deep dive** (on-demand via `/api/activities/{id}/deep-dive`): calls `backend.stateless_turn()` with downsampled stream data (60-sec intervals + inflection points). The prompt also carries the planned workout for that day and how it was scored (`activity_context.planned_workout_block`), so the report can judge the session against its intent. Result cached in `deep_dive_report`; re-triggerable.
 
 Sync backfills up to 10 pending/unanalyzed activities per cycle. Strava 429 responses mark activities `analysis_status='pending'` for retry.

@@ -28,7 +28,7 @@ export const METRIC_COPY: Record<string, MetricCopy> = {
   cardiac_decoupling_trend: {
     icon: "🫀",
     description:
-      "How much your heart rate drifts relative to pace within a single activity, trended over time. Compare steady, longer efforts on similar terrain; intervals, hills, and weather can affect drift.",
+      "How much your heart rate drifts relative to pace within a single activity, trended over time. Hilly activities are excluded because terrain skews it. Compare steady, longer efforts; intervals and weather can affect drift.",
   },
   weekly_elevation: {
     icon: "⛰️",
