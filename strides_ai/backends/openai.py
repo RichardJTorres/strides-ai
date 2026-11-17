@@ -5,6 +5,7 @@ import time
 
 import openai as _openai
 
+from .. import lookup_tools
 from ..budget import Usage
 from .model_profile import openai_thinking, resolve_profile
 from .base import (
@@ -71,6 +72,14 @@ UPDATE_TRAINING_PLAN_TOOL = {
         "parameters": UPDATE_TRAINING_PLAN_PARAMETERS,
     },
 }
+
+READ_TOOLS = [
+    {
+        "type": "function",
+        "function": {"name": t.name, "description": t.description, "parameters": t.parameters},
+    }
+    for t in lookup_tools.READ_TOOLS
+]
 
 
 def openai_usage(usage) -> Usage:
@@ -172,7 +181,7 @@ class OpenAIBackend(BaseBackend):
                 lambda: self._client.chat.completions.create(
                     model=self._model,
                     messages=messages,
-                    tools=[SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL, UPDATE_PROFILE_TOOL],
+                    tools=self._tool_definitions(),
                     # The reply round keeps the tools in the request and forbids calling them.
                     tool_choice="none" if plan.kind == "reply" else "auto",
                     stream=True,

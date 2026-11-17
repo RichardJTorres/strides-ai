@@ -4,6 +4,7 @@ import time
 
 import anthropic
 
+from .. import lookup_tools
 from ..budget import Usage
 from .model_profile import claude_thinking, resolve_profile
 from .base import (
@@ -78,6 +79,12 @@ UPDATE_TRAINING_PLAN_TOOL = {
     "description": UPDATE_TRAINING_PLAN_DESCRIPTION,
     "input_schema": UPDATE_TRAINING_PLAN_PARAMETERS,
 }
+
+
+READ_TOOLS = [
+    {"name": t.name, "description": t.description, "input_schema": t.parameters}
+    for t in lookup_tools.READ_TOOLS
+]
 
 
 def system_blocks(system):
@@ -215,7 +222,7 @@ class ClaudeBackend(BaseBackend):
                     **self._thinking_kwargs(max_tokens=plan.max_tokens),
                     system=system_blocks(system),
                     messages=self._history,
-                    tools=[SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL, UPDATE_PROFILE_TOOL],
+                    tools=self._tool_definitions(),
                     timeout=self._timeout(),
                     **extra,
                 )

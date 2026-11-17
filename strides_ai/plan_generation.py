@@ -7,6 +7,7 @@ import re
 from datetime import date as date_cls
 
 from .coach import build_training_log, units_section
+from .dates import fmt_day
 from .db.models import PlanRow
 from .modes import MODES
 from .units import DEFAULT_UNIT_SYSTEM, Quantity, UnitSystem, to_si, unit_label
@@ -99,8 +100,8 @@ def _current_date_section() -> str:
 
 
 def _plan_table(rows: list[dict], units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
-    header = "Date       | Type             | Distance | Elevation | Duration | Intensity"
-    sep = "-" * 76
+    header = "Date           | Type             | Distance | Elevation | Duration | Intensity"
+    sep = "-" * 80
     lines = []
     for w in rows:
         m = PlanRow.measure_field(w, "distance_km", units) if w.get("distance_km") else None
@@ -109,7 +110,7 @@ def _plan_table(rows: list[dict], units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> st
         elev = e.formatted if e else "—"
         dur = f"{w['duration_min']} min" if w.get("duration_min") else "—"
         line = (
-            f"{w['date']:10s} | {(w['workout_type'] or '')[:16]:16s} | "
+            f"{fmt_day(w['date']):14s} | {(w['workout_type'] or '')[:16]:16s} | "
             f"{dist:8s} | {elev:9s} | {dur:8s} | {w.get('intensity') or '—'}"
         )
         structure = structure_from_json(w.get("structure_json"))
@@ -137,8 +138,8 @@ def build_plan_generation_prompt(
         cfg.system_prompt,
         units_section(units),
         _current_date_section(),
-        f"## Requested Block\nGenerate a training block for {start_date} through "
-        f"{end_date} (inclusive).",
+        f"## Requested Block\nGenerate a training block for {fmt_day(start_date)} through "
+        f"{fmt_day(end_date)} (inclusive). Output each workout's date as YYYY-MM-DD only.",
     ]
 
     if freeform_text.strip():

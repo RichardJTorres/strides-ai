@@ -72,7 +72,7 @@ export function renderChartDataset({ dataset, since, until, isAllTime, unit, loa
       );
     case "atl_ctl":
       if (dataset.chart_type !== "atl_ctl") return null;
-      return <AtlCtlCard dataset={dataset} since={since} until={until} isAllTime={isAllTime} unit={unit} loadContext={loadContext} />;
+      return <AtlCtlCard dataset={dataset} since={since} until={until} isAllTime={isAllTime} loadContext={loadContext} />;
     case "aerobic_efficiency":
       if (dataset.chart_type !== "scatter") return null;
       return <AerobicEfficiencyCard dataset={dataset} since={since} until={until} />;

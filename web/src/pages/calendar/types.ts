@@ -114,13 +114,23 @@ export interface GeneratePlanResult {
   warnings?: string[];
 }
 
-// strides_ai/training_state.py (GET /api/calendar/training-state). Volumes are in the athlete's
-// display unit; ramp_pct is vs the prior 4-week average.
+// strides_ai/training_state.py (GET /api/calendar/training-state). Load and volumes are hours of
+// moving time (`unit` = "h"); ramp_pct is vs `baseline` (the smaller of the 4-week average and
+// the 8-week median, named in `baseline_basis`).
 export interface TrainingState {
   load: { ctl: number | null; atl: number | null; ratio: number | null };
   thresholds: { acwr_low: number; acwr_high: number; ramp_elevated: number; ramp_high: number };
   unit: string;
-  weeks: { week_start: string; volume: number; ramp_pct: number | null; flags: string[] }[];
+  weeks: {
+    week_start: string;
+    volume: number;
+    ramp_pct: number | null;
+    baseline: number | null;
+    baseline_basis: string | null;
+    ramp_comparisons: { ramp_pct: number; baseline: number; basis: string }[];
+    flags: string[];
+  }[];
+  typical_week: { median: number; low: number; high: number; weeks: number } | null;
   conflicts: { kind: string; date: string; detail: string; hard: boolean }[];
 }
 

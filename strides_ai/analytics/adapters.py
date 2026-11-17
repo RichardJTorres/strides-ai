@@ -9,6 +9,7 @@ import math
 from datetime import date as date_cls
 
 from ..activity_types import SportType
+from ..decoupling import gate_decoupling
 from .models import CardioAnalyticsActivity
 
 ZONE_FIELDS = ("hr_zone_1_pct", "hr_zone_2_pct", "hr_zone_3_pct", "hr_zone_4_pct", "hr_zone_5_pct")
@@ -42,6 +43,7 @@ def to_cardio_analytics(rows: list[dict]) -> list[CardioAnalyticsActivity]:
     """Convert DB rows (Activity.model_dump()) into analytics inputs, dropping unparseable rows."""
     result = []
     for row in rows:
+        row = gate_decoupling(row)  # an invalid drift value must not reach trends or digests
         raw_date = row.get("date")
         try:
             parsed_date = date_cls.fromisoformat(raw_date) if raw_date else None

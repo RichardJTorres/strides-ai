@@ -5,6 +5,7 @@ import time
 
 import httpx
 
+from .. import lookup_tools
 from ..budget import Usage
 from .model_profile import ollama_thinking, resolve_profile
 from .base import (
@@ -71,6 +72,14 @@ UPDATE_TRAINING_PLAN_TOOL = {
         "parameters": UPDATE_TRAINING_PLAN_PARAMETERS,
     },
 }
+
+READ_TOOLS = [
+    {
+        "type": "function",
+        "function": {"name": t.name, "description": t.description, "parameters": t.parameters},
+    }
+    for t in lookup_tools.READ_TOOLS
+]
 
 
 def ollama_usage(chunk) -> Usage:
@@ -179,7 +188,7 @@ class OllamaBackend(BaseBackend):
             body.update(self._thinking_kwargs())
             # Ollama has no tool_choice: the reply round simply leaves the tools out.
             if plan.kind == "tool" and self._supports_tools is not False:
-                body["tools"] = [SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL, UPDATE_PROFILE_TOOL]
+                body["tools"] = self._tool_definitions()
 
             provider_usage = Usage()
             for _ in range(2):  # the second pass is the retry without tools

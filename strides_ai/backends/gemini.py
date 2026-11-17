@@ -7,6 +7,7 @@ from google import genai
 from google.genai import types
 from google.genai.errors import ClientError
 
+from .. import lookup_tools
 from ..budget import TurnStop
 from ..kinds import KINDS, RACE_PRIORITIES, RACE_SPORTS, WORKOUT_TYPES
 from ..workout_structure import WORKOUT_STRUCTURE_SCHEMA
@@ -180,6 +181,18 @@ UPDATE_TRAINING_PLAN_TOOL = types.Tool(
         )
     ]
 )
+
+# The lookups are plain JSON Schema, which the SDK takes as it is.
+READ_TOOLS = [
+    types.Tool(
+        function_declarations=[
+            types.FunctionDeclaration(
+                name=t.name, description=t.description, parameters_json_schema=t.parameters
+            )
+        ]
+    )
+    for t in lookup_tools.READ_TOOLS
+]
 
 
 def _parts(candidate) -> list:
@@ -363,7 +376,7 @@ class GeminiBackend(BaseBackend):
 
         config = types.GenerateContentConfig(
             system_instruction=system,
-            tools=[SAVE_MEMORY_TOOL, UPDATE_TRAINING_PLAN_TOOL, UPDATE_PROFILE_TOOL],
+            tools=self._tool_definitions(),
             thinking_config=self._thinking_config(),
         )
 

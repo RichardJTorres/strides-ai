@@ -53,7 +53,7 @@ def test_no_turn_id_writes_no_log(tmp_db):
 def test_memory_saved_updated_and_duplicate(tmp_db):
     with Session(db.get_engine()) as session:
         assert memories.save(session, "goal", "Run Boston", turn_id=3) == "Memory saved."
-        assert memories.save(session, "goal", "Run Boston", turn_id=3) == "Memory saved."
+        assert memories.save(session, "goal", "Run Boston", turn_id=3) == memories.DUPLICATE_RESULT
         memory_id = memories.get_all(session)[0].id
         memories.save(session, "goal", "Run Boston 2027", turn_id=3, memory_id=memory_id)
     items = _receipt(3)["committed"]

@@ -5,10 +5,13 @@ Analytics UIs all read this, so they cannot disagree about load thresholds, ramp
 days are off limits.
 
 Pure: no DB access, every function takes `today` explicitly (same rule as analytics/cardio.py).
-Load is distance-based in the athlete's display unit, matching `cardio.compute_atl_ctl`.
+Load is moving time in hours (`LOAD_UNIT`), matching `cardio.compute_atl_ctl`: one sport-neutral
+unit, so a run hour and a ride hour add up and a long climbing day is not undercounted the way
+distance undercounts it. Planned workouts count by `duration_min` (a race by its goal time).
 """
 
 import math
+import statistics
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -18,18 +21,25 @@ from .analytics import cardio
 from .analytics.adapters import to_cardio_analytics
 from .analytics.aggregation import monday_of
 from .compliance import SportGroup, classify_workout_type
-from .units import DEFAULT_UNIT_SYSTEM, Quantity, UnitSystem, convert, unit_label
+from .units import DEFAULT_UNIT_SYSTEM, UnitSystem
+from .workout_structure import structure_for_type, structure_to_json, total_seconds
 
 # Shared thresholds — insights flags, the load chart and the coach all read these.
 ACWR_LOW = 0.8
 ACWR_HIGH = 1.3
 ACWR_DANGER = 1.5
-RAMP_ELEVATED = 10.0  # % vs the prior-4-week average
+RAMP_ELEVATED = 10.0  # % above the athlete's typical week (see the ramp baselines below)
 RAMP_HIGH = 15.0
 
+LOAD_UNIT = cardio.LOAD_UNIT  # load, weekly volume and planned values: hours of moving time
 MIN_HISTORY_DAYS = 28  # load fields are None until the athlete has this much history
 DEFAULT_HORIZON_DAYS = 28
-RAMP_BASELINE_WEEKS = 4
+# A week's ramp is measured against two baselines and reported as the smaller of the two, so a
+# week is only flagged when it is high against both the recent mean AND the typical (median)
+# week. One or two travel or deload weeks cannot depress the median the way they depress a mean.
+RAMP_BASELINE_WEEKS = 4  # mean of the previous 4 weeks
+RAMP_MEDIAN_WEEKS = 8  # median of the previous 8 weeks
+RAMP_MEDIAN_MIN_WEEKS = 6  # of those 8, this many must be inside the athlete's history
 TAPER_WINDOW_DAYS = 21
 RECOVERY_RUN_WEEKS = 3  # this many consecutive rising weeks without a down week
 
@@ -61,16 +71,17 @@ class Violation:
 @dataclass
 class TrainingState:
     as_of: str
-    unit: str  # "km" | "miles": the unit load / planned_km values are in
+    unit: str  # LOAD_UNIT: the unit load, planned and weekly volume values are in
     thresholds: dict
     load: dict  # {ctl, atl, ratio} — each None when history is too short
     projection: list = field(default_factory=list)  # [{date, atl, ctl, ratio, planned}]
     weeks: list = field(
         default_factory=list
-    )  # [{week_start, volume, planned_only, ramp_pct, flags}]
+    )  # [{week_start, volume, ramp_pct, baseline, baseline_basis, is_current, flags}]
+    typical_week: Optional[dict] = None  # {median, low, high, weeks} of the previous 8 weeks
     constraints: dict = field(default_factory=dict)  # {races, blocked_days, next_race}
     conflicts: list = field(default_factory=list)  # [Violation.to_dict()]
-    unscored_planned: list = field(default_factory=list)  # planned dates with no usable distance
+    unscored_planned: list = field(default_factory=list)  # planned dates with no usable duration
 
     def to_dict(self) -> dict:
         return {
@@ -80,6 +91,7 @@ class TrainingState:
             "load": self.load,
             "projection": self.projection,
             "weeks": self.weeks,
+            "typical_week": self.typical_week,
             "constraints": self.constraints,
             "conflicts": self.conflicts,
             "unscored_planned": self.unscored_planned,
@@ -87,10 +99,6 @@ class TrainingState:
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────────
-
-
-def _unit_name(units: UnitSystem) -> str:
-    return "miles" if units is UnitSystem.IMPERIAL else "km"
 
 
 def _counts_for_mode(workout_type: Optional[str], mode: Optional[str]) -> bool:
@@ -122,11 +130,19 @@ def _is_race_type(workout_type: Optional[str]) -> bool:
     return "race" in (workout_type or "").lower()
 
 
+def _planned_hours(p: dict) -> Optional[float]:
+    """Planned moving time in hours: `duration_min`, or a race's goal time. None when unknown."""
+    minutes = p.get("duration_min")
+    if (minutes is None or minutes <= 0) and p.get("kind") == "race" and p.get("goal_time_s"):
+        minutes = p["goal_time_s"] / 60.0
+    return minutes / 60.0 if minutes is not None and minutes > 0 else None
+
+
 def _planned_by_date(
-    plan_rows: list[dict], mode: Optional[str], units: UnitSystem
+    plan_rows: list[dict], mode: Optional[str]
 ) -> tuple[dict[date, float], list[str]]:
-    """{date: planned distance in the display unit}, plus dates of volume-bearing workouts that
-    have no distance (they contribute nothing rather than a guess)."""
+    """{date: planned hours}, plus dates of load-bearing workouts that have no duration (they
+    contribute nothing rather than a guess)."""
     planned: dict[date, float] = defaultdict(float)
     unscored: list[str] = []
     for p in plan_rows:
@@ -136,13 +152,51 @@ def _planned_by_date(
             continue
         if not _counts_for_mode(p.get("workout_type"), mode):
             continue
-        km = p.get("distance_km")
-        if km is None or km <= 0:
+        hours = _planned_hours(p)
+        if hours is None:
             if (p.get("intensity") or "").lower() != "rest":
                 unscored.append(d.isoformat())
             continue
-        planned[d] += convert(km * 1000.0, Quantity.DISTANCE, units)
+        planned[d] += hours
     return dict(planned), sorted(set(unscored))
+
+
+def ramp_vs_baselines(
+    volume: float, prior: list[float]
+) -> tuple[Optional[float], Optional[float], Optional[str]]:
+    """(ramp %, baseline, basis) for one week's `volume` against the weeks before it.
+
+    `prior` is weekly volumes, oldest first, only for weeks inside the athlete's history (a week
+    before their first activity is "no data", not a zero week). Two baselines are tried: the mean
+    of the last RAMP_BASELINE_WEEKS (needs all of them) and the median of the last
+    RAMP_MEDIAN_WEEKS (needs RAMP_MEDIAN_MIN_WEEKS). The smaller ramp wins, so a week is high only
+    when it is high against both. (None, None, None) when neither baseline exists or is positive.
+    """
+    comparisons = ramp_comparisons(volume, prior)
+    return min(
+        ((c["ramp_pct"], c["baseline"], c["basis"]) for c in comparisons),
+        default=(None, None, None),
+    )
+
+
+def ramp_comparisons(volume: float, prior: list[float]) -> list[dict]:
+    """Expose both baselines so the selected screening value cannot hide a recent increase."""
+    prior = prior[-RAMP_MEDIAN_WEEKS:]
+    recent = prior[-RAMP_BASELINE_WEEKS:]
+    mean4 = sum(recent) / len(recent) if len(recent) == RAMP_BASELINE_WEEKS else None
+    median8 = statistics.median(prior) if len(prior) >= RAMP_MEDIAN_MIN_WEEKS else None
+    return [
+        {"ramp_pct": round(100 * (volume - base) / base, 1), "baseline": base, "basis": basis}
+        for base, basis in ((mean4, "4-week average"), (median8, "8-week median"))
+        if base is not None and base > 0
+    ]
+
+
+def render_ramp_comparisons(comparisons: list[dict]) -> str:
+    return "; ".join(
+        f"{c['ramp_pct']:+.0f}% vs the {c['basis']} ({c['baseline']:.1f} {LOAD_UNIT})"
+        for c in comparisons
+    )
 
 
 def _week_flags(volumes: list[tuple[date, float, Optional[float]]]) -> dict[date, list[str]]:
@@ -174,11 +228,14 @@ def build_training_state(
     today: date,
     horizon_days: int = DEFAULT_HORIZON_DAYS,
 ) -> TrainingState:
-    """Activity rows + plan rows + calendar prefs -> TrainingState. Same inputs, same output."""
-    units = UnitSystem.parse(units)
-    unit = _unit_name(units)
+    """Activity rows + plan rows + calendar prefs -> TrainingState. Same inputs, same output.
+
+    `units` is accepted so every caller keeps one call shape; load is moving time, so it does not
+    change any number here (display units only matter where a prompt prints distances).
+    """
+    UnitSystem.parse(units)
     acts = to_cardio_analytics(rows)
-    planned, unscored = _planned_by_date(plan_rows, mode, units)
+    planned, unscored = _planned_by_date(plan_rows, mode)
 
     prefs = prefs or {}
     races = sorted(
@@ -198,7 +255,7 @@ def build_training_state(
 
     daily_actual: dict[date, float] = defaultdict(float)
     for a in acts:
-        daily_actual[a.date] += convert(a.distance_m or 0.0, Quantity.DISTANCE, units)
+        daily_actual[a.date] += (a.moving_time_s or 0.0) / 3600.0
 
     load = {"ctl": None, "atl": None, "ratio": None}
     projection: list[dict] = []
@@ -224,7 +281,7 @@ def build_training_state(
             ratio = round(atl / ctl, 3) if ctl > 1e-3 else None
             if day == today:
                 # Current load = what is actually logged, matching the Analytics chart.
-                cur_actual = cardio.compute_atl_ctl(acts, unit, today).data[-1]
+                cur_actual = cardio.compute_atl_ctl(acts, LOAD_UNIT, today).data[-1]
                 load = {"ctl": cur_actual.ctl, "atl": cur_actual.atl, "ratio": cur_actual.ratio}
             else:
                 projection.append(
@@ -242,9 +299,9 @@ def build_training_state(
     # the plan, future weeks are planned only.
     cm = monday_of(today)
     horizon_end = today + timedelta(days=horizon_days)
-    # Look back far enough to give the earliest kept week a ramp baseline AND to let a rising
+    # Look back far enough to give the earliest kept week both ramp baselines AND to let a rising
     # streak that began in actual history be detected; only weeks from the current one are returned.
-    first_week = cm - timedelta(weeks=RAMP_BASELINE_WEEKS + RECOVERY_RUN_WEEKS)
+    first_week = cm - timedelta(weeks=RAMP_MEDIAN_WEEKS + RECOVERY_RUN_WEEKS)
     week_starts: list[date] = []
     w = first_week
     while w <= horizon_end:
@@ -264,20 +321,36 @@ def build_training_state(
         return total
 
     vols = {wk: volume(wk) for wk in week_starts}
+    # Weeks before the athlete's first activity are "no data", not "a zero week": counting them
+    # would pull both baselines down and inflate every ramp.
+    history_start = monday_of(min(daily_actual)) if daily_actual else None
+
+    def prior_volumes(i: int, n: int) -> list[float]:
+        return [
+            vols[week_starts[j]]
+            for j in range(i - n, i)
+            if history_start is not None and week_starts[j] >= history_start
+        ]
+
     chrono: list[tuple[date, float, Optional[float]]] = []
+    bases: dict[date, tuple[Optional[float], Optional[str]]] = {}
+    comparisons: dict[date, list[dict]] = {}
     for i, wk in enumerate(week_starts):
-        if i < RAMP_BASELINE_WEEKS:
+        if i < RAMP_MEDIAN_WEEKS:
             continue
-        prior = [vols[week_starts[j]] for j in range(i - RAMP_BASELINE_WEEKS, i)]
-        base = sum(prior) / len(prior)
-        ramp = round(100 * (vols[wk] - base) / base, 1) if base > 0 else None
+        ramp, base, basis = ramp_vs_baselines(vols[wk], prior_volumes(i, RAMP_MEDIAN_WEEKS))
         chrono.append((wk, vols[wk], ramp))
+        bases[wk] = (base, basis)
+        comparisons[wk] = ramp_comparisons(vols[wk], prior_volumes(i, RAMP_MEDIAN_WEEKS))
     flags = _week_flags(chrono)
     weeks = [
         {
             "week_start": wk.isoformat(),
             "volume": round(vol, 2),
             "ramp_pct": ramp,
+            "baseline": None if bases[wk][0] is None else round(bases[wk][0], 2),
+            "baseline_basis": bases[wk][1],
+            "ramp_comparisons": comparisons[wk],
             "is_current": wk == cm,
             "flags": flags[wk],
         }
@@ -285,13 +358,28 @@ def build_training_state(
         if wk >= cm
     ]
 
+    # What the athlete's weeks usually look like: the 8 completed weeks before this one.
+    cm_index = week_starts.index(cm)
+    typical = prior_volumes(cm_index, RAMP_MEDIAN_WEEKS)
+    typical_week = (
+        {
+            "median": round(statistics.median(typical), 2),
+            "low": round(min(typical), 2),
+            "high": round(max(typical), 2),
+            "weeks": len(typical),
+        }
+        if len(typical) >= RAMP_MEDIAN_MIN_WEEKS
+        else None
+    )
+
     state = TrainingState(
         as_of=today.isoformat(),
-        unit=unit,
+        unit=LOAD_UNIT,
         thresholds=dict(THRESHOLDS),
         load=load,
         projection=projection,
         weeks=weeks,
+        typical_week=typical_week,
         constraints=constraints,
         unscored_planned=[d for d in unscored if d >= today.isoformat()],
     )
@@ -335,8 +423,9 @@ def _find_conflicts(state: TrainingState, plan_rows: list[dict]) -> list[Violati
                 Violation(
                     "ramp_high",
                     wk["week_start"],
-                    f"Week of {wk['week_start']} is {wk['ramp_pct']:+.0f}% vs the prior 4-week "
-                    f"average (limit +{RAMP_HIGH:.0f}%).",
+                    f"Week of {wk['week_start']} is {wk['ramp_pct']:+.0f}% vs the "
+                    f"{wk['baseline_basis']} ({wk['baseline']:.1f} {LOAD_UNIT}); limit "
+                    f"+{RAMP_HIGH:.0f}%.",
                 )
             )
         if "no_recovery_week" in wk["flags"]:
@@ -366,6 +455,23 @@ def _find_conflicts(state: TrainingState, plan_rows: list[dict]) -> list[Violati
 # ── guardrails for proposed plan edits ──────────────────────────────────────────
 
 
+def _normalize_planned_structure(row: dict) -> None:
+    """Mirror calendar storage: retained or supplied structure overrides duration.
+
+    An explicit null removes structure; an omitted field retains the stored JSON.
+    Invalid structures and non-cycling types leave the supplied duration unchanged.
+    """
+    if row.get("kind", "workout") != "workout":
+        return
+    structure = structure_for_type(
+        row.get("workout_type"), row.get("structure", row.get("structure_json"))
+    )
+    if structure:
+        row["duration_min"] = round(total_seconds(structure) / 60)
+    row.pop("structure", None)
+    row["structure_json"] = structure_to_json(structure)
+
+
 def apply_changes(plan_rows: list[dict], changes: dict) -> list[dict]:
     """Return plan_rows with an entry change set applied. Does not mutate the input.
 
@@ -379,7 +485,9 @@ def apply_changes(plan_rows: list[dict], changes: dict) -> list[dict]:
         by_id.pop(entry_id, None)
     for u in changes.get("update") or []:
         if u.get("id") in by_id:
-            by_id[u["id"]].update({k: v for k, v in u.items() if k != "id"})
+            merged = by_id[u["id"]]
+            merged.update({k: v for k, v in u.items() if k != "id"})
+            _normalize_planned_structure(merged)
     created = []
     for w in changes.get("create") or []:
         if w.get("date"):
@@ -390,9 +498,13 @@ def apply_changes(plan_rows: list[dict], changes: dict) -> list[dict]:
                     "workout_type": w.get("workout_type", "Workout"),
                     "distance_km": w.get("distance_km"),
                     "duration_min": w.get("duration_min"),
+                    "structure": w.get("structure", w.get("structure_json")),
+                    "goal_time_s": w.get("goal_time_s"),
                     "intensity": w.get("intensity"),
                 }
             )
+    for row in created:
+        _normalize_planned_structure(row)
     return list(by_id.values()) + anonymous + created
 
 
@@ -441,7 +553,7 @@ def check_plan_changes(
 
 def render_for_prompt(state: TrainingState, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
     """The "Training State" section shared by the chat coach and plan generation."""
-    u = unit_label(Quantity.DISTANCE, units)
+    u = LOAD_UNIT
     ld = state.load
     lines = []
     if ld["ctl"] is None:
@@ -449,8 +561,8 @@ def render_for_prompt(state: TrainingState, units: UnitSystem = DEFAULT_UNIT_SYS
     else:
         ratio = "n/a" if ld["ratio"] is None else f"{ld['ratio']:.2f}"
         lines.append(
-            f"Current load: fitness (CTL) {ld['ctl']:.1f} {u}/day, fatigue (ATL) "
-            f"{ld['atl']:.1f} {u}/day, fatigue/fitness ratio {ratio}."
+            f"Current load: fitness (CTL) {ld['ctl']:.2f} {u}/day, fatigue (ATL) "
+            f"{ld['atl']:.2f} {u}/day, fatigue/fitness ratio {ratio}."
         )
         peak = max(
             (p for p in state.projection[:UPCOMING_DAYS_FOR_PROMPT] if p["ratio"] is not None),
@@ -461,27 +573,45 @@ def render_for_prompt(state: TrainingState, units: UnitSystem = DEFAULT_UNIT_SYS
             lines.append(
                 f"As currently planned, the ratio peaks at {peak['ratio']:.2f} on {peak['date']}."
             )
+    tw = state.typical_week
+    if tw:
+        lines.append(
+            f"Typical week (the previous {tw['weeks']} completed weeks): median {tw['median']:.1f} "
+            f"{u}, range {tw['low']:.1f}-{tw['high']:.1f} {u}."
+        )
     if state.weeks:
-        lines.append("Weekly volume (actual to date + planned):")
+        lines.append(f"Weekly volume in {u} (actual to date + planned):")
         for w in state.weeks:
-            ramp = "" if w["ramp_pct"] is None else f", {w['ramp_pct']:+.0f}% vs prior 4-wk avg"
+            ramp = ""
+            if w["ramp_pct"] is not None:
+                ramp = f", {w['ramp_pct']:+.0f}% vs the {w['baseline_basis']} ({w['baseline']:.1f} {u})"
+            if w.get("ramp_comparisons"):
+                ramp = ", " + render_ramp_comparisons(w["ramp_comparisons"])
             flags = f" [{', '.join(w['flags'])}]" if w["flags"] else ""
             lines.append(f"  - week of {w['week_start']}: {w['volume']:.1f} {u}{ramp}{flags}")
     if state.unscored_planned:
         lines.append(
-            "Planned workouts with no distance (not counted in load): "
-            + ", ".join(state.unscored_planned)
+            "Planned entries with no duration are not counted in load (a race counts only when it "
+            "has a goal time, so a race week reads low): " + ", ".join(state.unscored_planned)
         )
     if state.conflicts:
         lines.append("Open problems in the current plan:")
         lines += [f"  - {c['detail']}" for c in state.conflicts]
     lines.append(
-        f"Guardrails: ratio {ACWR_LOW}-{ACWR_HIGH} is the target band (>{ACWR_HIGH} raises injury "
-        f"risk, >{ACWR_DANGER} is danger); keep week-on-week ramp under +{RAMP_ELEVATED:.0f}% "
-        f"(never above +{RAMP_HIGH:.0f}%); add a down week after {RECOVERY_RUN_WEEKS} rising "
-        "weeks; taper before races; never schedule on blocked-out days or race days."
+        "Guardrails are screening heuristics, not injury predictions. Before calling a plan risky, "
+        "weigh them against the typical week above, the athlete's own fatigue, sleep, travel and "
+        "recent history, and say which of those you used. The smaller ramp drives screening "
+        "flags, but consider BOTH comparisons: a low selected ramp does not cancel a recent "
+        "increase. Distinguish travel or planned recovery from illness or injury before endorsing "
+        "a return to historical volume. Moving time is a volume proxy, not an intensity-weighted "
+        "measure of physiological or mechanical stress. "
+        f"Fatigue/fitness ratio {ACWR_LOW}-{ACWR_HIGH} is the usual target band (above {ACWR_HIGH} "
+        f"fatigue is high relative to fitness; above {ACWR_DANGER} it is very high). Week-on-week "
+        f"volume more than +{RAMP_ELEVATED:.0f}% above the typical week deserves a look, and more "
+        f"than +{RAMP_HIGH:.0f}% needs a reason. Add a down week after {RECOVERY_RUN_WEEKS} rising "
+        "weeks and taper before races. Never schedule on blocked-out days or race days."
     )
-    return "## Training State (computed from the data, not an estimate)\n" + "\n".join(lines)
+    return "## Training State (load = moving time, logged and planned)\n" + "\n".join(lines)
 
 
 UPCOMING_DAYS_FOR_PROMPT = 14

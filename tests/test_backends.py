@@ -203,7 +203,12 @@ def test_claude_stream_turn_multiple_tool_calls(mock_anthropic, mocker):
 
 
 def test_claude_stream_turn_updates_training_plan(mock_anthropic, mocker):
-    mocker.patch("strides_ai.backends.base.db.get_training_plan", return_value=[])
+    mocker.patch(
+        "strides_ai.backends.base.db.get_training_plan",
+        return_value=[
+            {"id": 7, "date": "2026-09-30", "kind": "workout", "workout_type": "Easy Run"}
+        ],
+    )
     mock_apply = mocker.patch(
         "strides_ai.backends.base.db.apply_calendar_changes",
         return_value={"created": [41], "updated": [], "deleted": [7]},
@@ -355,7 +360,12 @@ def test_gemini_stream_turn_saves_memory(mock_genai, mocker):
 
 
 def test_gemini_stream_turn_updates_training_plan(mock_genai, mocker):
-    mocker.patch("strides_ai.backends.base.db.get_training_plan", return_value=[])
+    mocker.patch(
+        "strides_ai.backends.base.db.get_training_plan",
+        return_value=[
+            {"id": 7, "date": "2026-09-30", "kind": "workout", "workout_type": "Easy Run"}
+        ],
+    )
     mock_apply = mocker.patch(
         "strides_ai.backends.base.db.apply_calendar_changes",
         return_value={"created": [41], "updated": [], "deleted": [7]},
@@ -564,7 +574,12 @@ def test_openai_assembles_split_tool_arguments(mock_openai, mocker):
 
 
 def test_openai_stream_turn_updates_training_plan(mock_openai, mocker):
-    mocker.patch("strides_ai.backends.base.db.get_training_plan", return_value=[])
+    mocker.patch(
+        "strides_ai.backends.base.db.get_training_plan",
+        return_value=[
+            {"id": 7, "date": "2026-09-30", "kind": "workout", "workout_type": "Easy Run"}
+        ],
+    )
     mock_apply = mocker.patch(
         "strides_ai.backends.base.db.apply_calendar_changes",
         return_value={"created": [41], "updated": [], "deleted": [7]},
@@ -716,7 +731,12 @@ def test_ollama_stream_turn_saves_memory(mocker):
 
 
 def test_ollama_stream_turn_updates_training_plan(mocker):
-    mocker.patch("strides_ai.backends.base.db.get_training_plan", return_value=[])
+    mocker.patch(
+        "strides_ai.backends.base.db.get_training_plan",
+        return_value=[
+            {"id": 7, "date": "2026-09-30", "kind": "workout", "workout_type": "Easy Run"}
+        ],
+    )
     mock_apply = mocker.patch(
         "strides_ai.backends.base.db.apply_calendar_changes",
         return_value={"created": [41], "updated": [], "deleted": [7]},

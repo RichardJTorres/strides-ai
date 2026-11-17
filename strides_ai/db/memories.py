@@ -10,6 +10,14 @@ from .models import Memory
 from ..memory_context import MemoryTiming
 
 
+DUPLICATE_RESULT = "Already saved: an identical note exists, so nothing was changed."
+
+
+def was_saved(result: str) -> bool:
+    """Whether a `save` result means the memory changed (not an error, not a duplicate)."""
+    return not result.startswith("Error:") and result != DUPLICATE_RESULT
+
+
 def save(
     session: Session, category: str, content: str, turn_id: int | None = None, **metadata
 ) -> str:
@@ -40,6 +48,8 @@ def save(
                 {"action": "saved", "category": category, "content": content.strip()},
             )
         session.commit()
+        if not inserted:
+            return DUPLICATE_RESULT
         return "Memory saved."
     except Exception as exc:
         session.rollback()

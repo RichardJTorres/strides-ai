@@ -10,6 +10,7 @@ from .memory_context import NOTES_HEADER, split_memories
 from .modes import MODES
 from .training_state import build_training_state, render_for_prompt
 from .workout_structure import render_text, structure_from_json
+from .dates import days_away, fmt_day, local_stamp, week_bounds
 from .units import (
     DEFAULT_UNIT_SYSTEM,
     Quantity,
@@ -87,9 +88,14 @@ def _datetime_section() -> str:
     now = datetime.now().astimezone()
     day_str = now.strftime("%A, %B %-d, %Y")
     time_str = now.strftime("%-I:%M %p %Z")
+    monday, sunday = week_bounds(now.date())
     return (
         f"## Current Date & Time\n"
-        f"Today is {day_str} at {time_str}. "
+        f"Today is {day_str} ({now.date().isoformat()}) at {time_str}. "
+        f"This week runs {fmt_day(monday)} to {fmt_day(sunday)}. "
+        "Every date in this prompt carries its weekday; copy it rather than working it out. "
+        'Resolve "tomorrow" or "next Tuesday" to an exact date from today\'s date, and '
+        "write dates as YYYY-MM-DD in update_training_plan. "
         "Use this to reason about training timing, upcoming workouts, recovery windows, "
         "and time elapsed since past activities. "
         "Do not mention the date or time in responses unless directly relevant to the athlete's question."
@@ -115,7 +121,11 @@ PLAN_CHUNK_RULE = (
     "When creating or rewriting a training block, make several update_training_plan calls in a "
     "row, each covering up to 14 workouts (about two weeks), rather than one call for the whole "
     "block; a single call may change at most 31 entries (set items plus deleted ids) and a "
-    "larger one is rejected whole. Keep workout notes short. Briefly summarise afterwards."
+    "larger one is rejected whole. Keep workout notes short. Briefly summarise afterwards.\n"
+    "Changing the calendar: make a change the athlete asked for. When you merely think a change "
+    "would help, say exactly what you would change (entry, date, new values) and wait for their "
+    "yes before calling the tool. After any change, report it from the tool result, which echoes "
+    "what was saved; if the result is an error or differs from what you meant, say so."
 )
 
 
@@ -151,7 +161,7 @@ def _compliance_section(activities: list[dict], units: UnitSystem = DEFAULT_UNIT
     if flagged:
         lines.append("Flagged days:")
         lines.extend(
-            f"  - {d.date.isoformat()} ({d.workout_type}): {d.status.value} — {d.note}"
+            f"  - {fmt_day(d.date)} ({d.workout_type}): {d.status.value} — {d.note}"
             for d in flagged
         )
     return "## Plan-vs-Actual Compliance\n" + "\n".join(lines)
@@ -228,11 +238,17 @@ def _workout_detail_lines(workout: dict) -> str:
     import json
 
     out = ""
-    description = " ".join((workout.get("description") or "").split())
+    description = " ".join((workout.get("objective") or workout.get("description") or "").split())
+    full_description = description
     if description:
         if len(description) > WORKOUT_NOTE_CHARS:
             description = description[: WORKOUT_NOTE_CHARS - 1].rstrip() + "…"
         out += f"\n{'':10s}   notes: {description}"
+    notes = " ".join((workout.get("notes") or "").split())
+    if notes and notes != full_description:
+        if len(notes) > WORKOUT_NOTE_CHARS:
+            notes = notes[: WORKOUT_NOTE_CHARS - 1].rstrip() + "…"
+        out += f"\n{'':10s}   notes: {notes}"
     try:
         route = json.loads(workout.get("route_analysis_json") or "null")
     except (TypeError, ValueError):
@@ -246,6 +262,68 @@ def _workout_detail_lines(workout: dict) -> str:
     return out
 
 
+def entry_summary(w: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM, with_id: bool = True) -> str:
+    """One calendar entry in a line: `[id 68] Sun 2026-11-15: Long Ride, 19.0 mi, 150 min, moderate`.
+
+    What update_training_plan reads back after a write, so the coach (and the athlete) can check
+    what was actually stored: weekday, type, measurements in the athlete's units, intensity.
+    """
+    kind = w.get("kind") or "workout"
+    label = w.get("workout_type") or kind.title()
+    title = (w.get("title") or "").strip()
+    bits = [f"{title} ({label})" if title and kind != "workout" else label]
+    m = PlanRow.measure_field(w, "distance_km", units) if w.get("distance_km") else None
+    if m:
+        bits.append(m.formatted)
+    e = PlanRow.measure_field(w, "elevation_m", units) if w.get("elevation_m") else None
+    if e:
+        bits.append(f"{e.formatted} climbing")
+    if w.get("duration_min"):
+        bits.append(f"{w['duration_min']} min")
+    if w.get("goal_time_s"):
+        bits.append(f"goal {format_goal(w['goal_time_s'])}")
+    elif w.get("goal_text"):
+        bits.append(f"goal {w['goal_text']}")
+    if w.get("priority"):
+        bits.append(f"priority {w['priority']}")
+    if w.get("intensity") and w["intensity"] != "rest":
+        bits.append(w["intensity"])
+    if w.get("structure_json"):
+        bits.append("structured")
+    prefix = f"[id {w['id']}] " if with_id and w.get("id") is not None else ""
+    return f"{prefix}{fmt_day(w.get('date'))}: " + ", ".join(bits) + _workout_detail_lines(w)
+
+
+def plan_row_text(
+    w: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM, *, include_details: bool = True
+) -> str:
+    """One planned entry as a table row (id, weekday date, type, measurements) plus its race and
+    structure lines. Shared by the upcoming-workouts table and the get_calendar lookup tool."""
+    m = PlanRow.measure_field(w, "distance_km", units) if w.get("distance_km") else None
+    dist = m.formatted if m else "—"
+    e = PlanRow.measure_field(w, "elevation_m", units) if w.get("elevation_m") else None
+    elev = e.formatted if e else "—"
+    dur = f"{w['duration_min']} min" if w.get("duration_min") else "—"
+    row = (
+        f"{w.get('id') or '':<5} | {fmt_day(w['date']):14s} | {(w['workout_type'] or '')[:16]:16s} | "
+        f"{dist:9s} | {elev:9s} | "
+        f"{dur:8s} | {w.get('intensity') or '—'}"
+    )
+    if w.get("kind") == "race":
+        bits = [w.get("title") or "Race"]
+        if w.get("goal_time_s"):
+            bits.append(f"goal {format_goal(w['goal_time_s'])}")
+        elif w.get("goal_text"):
+            bits.append(f"goal {w['goal_text']}")
+        if w.get("priority"):
+            bits.append(f"priority {w['priority']}")
+        row += f"\n{'':10s}   race: " + ", ".join(bits)
+    structure = structure_from_json(w.get("structure_json"))
+    if structure:
+        row += f"\n{'':10s}   structure: {render_text(structure)}"
+    return row + (_workout_detail_lines(w) if include_details else "")
+
+
 def _upcoming_workouts(
     units: UnitSystem = DEFAULT_UNIT_SYSTEM,
 ) -> tuple[str, list[tuple[int, str]]]:
@@ -256,31 +334,10 @@ def _upcoming_workouts(
     detail_until = (today + timedelta(days=WORKOUT_DETAIL_DAYS)).isoformat()
     near, later = [], []
     for w in upcoming:
-        m = PlanRow.measure_field(w, "distance_km", units) if w.get("distance_km") else None
-        dist = m.formatted if m else "—"
-        e = PlanRow.measure_field(w, "elevation_m", units) if w.get("elevation_m") else None
-        elev = e.formatted if e else "—"
-        dur = f"{w['duration_min']} min" if w.get("duration_min") else "—"
-        row = (
-            f"{w.get('id') or '':<5} | {w['date']:10s} | {(w['workout_type'] or '')[:16]:16s} | "
-            f"{dist:9s} | {elev:9s} | "
-            f"{dur:8s} | {w.get('intensity') or '—'}"
-        )
-        if w.get("kind") == "race":
-            bits = [w.get("title") or "Race"]
-            if w.get("goal_time_s"):
-                bits.append(f"goal {format_goal(w['goal_time_s'])}")
-            elif w.get("goal_text"):
-                bits.append(f"goal {w['goal_text']}")
-            if w.get("priority"):
-                bits.append(f"priority {w['priority']}")
-            row += f"\n{'':10s}   race: " + ", ".join(bits)
-        structure = structure_from_json(w.get("structure_json"))
-        if structure:
-            row += f"\n{'':10s}   structure: {render_text(structure)}"
+        row = plan_row_text(w, units, include_details=w["date"] <= detail_until)
         if w["date"] <= detail_until:
             # The athlete's notes and route verdict, for the sessions close enough to discuss.
-            near.append(row + _workout_detail_lines(w))
+            near.append(row)
             continue
         try:
             ahead = (date_type.fromisoformat(w["date"][:10]) - today).days
@@ -290,15 +347,15 @@ def _upcoming_workouts(
     return _upcoming_table(near), later
 
 
-_UPCOMING_HEADER = (
-    "Id    | Date       | Type             | Distance  | Elevation | Duration | Intensity"
+PLAN_TABLE_HEADER = (
+    "Id    | Date           | Type             | Distance  | Elevation | Duration | Intensity"
 )
 
 
 def _upcoming_table(rows: list[str]) -> str:
     if not rows:
         return ""
-    return "\n".join(["## Upcoming Planned Workouts", _UPCOMING_HEADER, "-" * 84, *rows])
+    return "\n".join(["## Upcoming Planned Workouts", PLAN_TABLE_HEADER, "-" * 88, *rows])
 
 
 _WEEK_WORDS = {
@@ -338,13 +395,14 @@ def _progress_section(
         lines.append("New personal records (last 14 days):")
         for r in fresh:
             was = f", was {r.previous.formatted}" if r.previous else ""
-            lines.append(f"  - {r.label}: {r.formatted} on {r.date}{was}")
+            lines.append(f"  - {r.label}: {r.formatted} on {fmt_day(r.date)}{was}")
     return "## Streak and Records\n" + "\n".join(lines)
 
 
 def _calendar_prefs_section() -> str:
     prefs = db.get_calendar_prefs()
-    today = datetime.now().date().isoformat()
+    today_date = datetime.now().date()
+    today = today_date.isoformat()
     races = sorted(
         (r for r in prefs.get("races", []) if r.get("date", "") >= today), key=lambda r: r["date"]
     )
@@ -361,30 +419,46 @@ def _calendar_prefs_section() -> str:
             if r.get("priority"):
                 extras.append(f"priority {r['priority']}")
             suffix = f" ({', '.join(extras)})" if extras else ""
-            lines.append(f"  - {r['date']}: {r.get('name', 'Race')}{suffix}")
+            when = f"{fmt_day(r['date'])}, {days_away(r['date'], today_date)}"
+            lines.append(f"  - {when}: {r.get('name', 'Race')}{suffix}")
     if blocked:
         lines.append("Blocked-out days (do not schedule workouts on these dates):")
-        lines.extend(f"  - {d}" for d in blocked)
+        lines.extend(f"  - {fmt_day(d)}" for d in blocked)
     return "## Calendar Constraints\n" + "\n".join(lines)
 
 
 def _analysis_guide_section(cfg, recent: list, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
     if not cfg.has_analysis or not any(a.get("analysis_summary") for a in recent):
         return ""
+    fade_u = unit_label(Quantity.PACE_DELTA, units)
+    climb_u = unit_label(Quantity.CLIMB_RATE, units)
     return (
         "## Analysis Metrics Guide\n"
-        "The ANALYSIS column in the training log contains auto-generated summaries. "
-        "Treat all metrics as equally important inputs — no single metric defines a run.\n"
-        "- **HR zones**: Z1=recovery, Z2=aerobic base, Z3=tempo, Z4=threshold, Z5=VO2max; "
-        "Z1/Z2 time builds aerobic base, high Z4/Z5 indicates intensity work\n"
-        "- **Effort efficiency score**: 0–100, normalized vs athlete's full history; "
-        "higher = more efficient pace for a given HR; tracks fitness trends over time\n"
-        f"- **Pace fade**: {unit_label(Quantity.PACE_DELTA, units)} change in final third vs "
-        "first third; "
-        "positive = slowing (fatigue or poor pacing), negative = negative split (strong finish)\n"
-        "- **Cardiac decoupling %**: HR drift relative to pace; <5% = well-coupled, "
-        "5–10% = moderate drift, >10% = high drift; most meaningful for steady aerobic runs. "
-        "Not computed on hilly courses (terrain, not fatigue, skews it); a missing value on a hilly run is expected, not a data problem"
+        "The last columns of the training log are computed from each activity's streams. "
+        '"—" means no data (never zero). They are evidence of different strength, so say which '
+        "you relied on:\n"
+        f"- **CLIMB({climb_u})**: elevation gained per distance. High values mean speed follows "
+        "the terrain.\n"
+        f"- **FADE({fade_u})**: change in speed between the first and final third; positive = "
+        "slowing, negative = faster at the end. On hilly (high CLIMB) or virtual (Zwift) courses it "
+        "mostly reflects terrain, so never call it fatigue or fitness on its own.\n"
+        "- **DECPL%** (cardiac decoupling): HR drift relative to speed between the two halves of "
+        "a steady run; <5% = well-coupled, 5–10% = moderate drift, >10% = high drift. It is "
+        "**n/a** for cycling (speed is set by grade, wind and coasting, not effort), hilly courses "
+        "and activities under 20 minutes. Hilly-course values are no longer computed and "
+        "historical values were cleared, so missing decoupling on a hilly activity is expected. "
+        "A numeric value only means these exclusions did not "
+        "apply; it does not establish a steady aerobic effort. Before inferring aerobic fitness, "
+        "confirm steady aerobic pacing from the workout context or streams. Intervals and "
+        "progression runs are not aerobic drift tests; if steadiness is unknown, say so. "
+        "n/a means the metric is not valid there, not zero and "
+        "not good news: do not draw fitness conclusions from it and do not explain it away.\n"
+        "- **Z1-2% / Z4-5%**: share of time in HR zones 1-2 (easy) and 4-5 (hard); zones are fixed "
+        "percentages of max HR, so they shift if max HR is wrong.\n"
+        "- **EFF**: effort efficiency 0–100, normalized against this athlete's own history "
+        "(it shifts as history grows); higher = more speed for the heart rate. Weak evidence on "
+        "hilly or mixed-sport days.\n"
+        "- **HR?**: suffer score and zone time disagree, so HR data may be unreliable that day."
     )
 
 
@@ -579,17 +653,22 @@ def build_training_log(
 def build_initial_history(
     activities: list, prior_messages: list[dict], mode: str = "running"
 ) -> list[dict]:
-    """Recall persisted messages without seeding or duplicating activity data."""
+    """Recall persisted messages without seeding or duplicating activity data.
+
+    The athlete's messages carry the local time they were sent, so "tomorrow's ride" or "this
+    week" in an old exchange is read against the day it was said, not today.
+    """
     from .turn_notice import replay_content
 
-    # App notices are replayed as a note after the model's own words, never as part of them.
-    return [
-        {
-            "role": m["role"],
-            "content": replay_content(m["content"], m.get("notice"), m.get("receipt_json")),
-        }
-        for m in prior_messages[-RECALL_MESSAGES:]
-    ]
+    out = []
+    for m in prior_messages[-RECALL_MESSAGES:]:
+        # App notices are replayed as a note after the model's own words, never as part of them.
+        content = replay_content(m["content"], m.get("notice"), m.get("receipt_json"))
+        stamp = local_stamp(m.get("created_at")) if m["role"] == "user" else None
+        out.append(
+            {"role": m["role"], "content": f"[sent {stamp}] {content}" if stamp else content}
+        )
+    return out
 
 
 def older_activity_summary(

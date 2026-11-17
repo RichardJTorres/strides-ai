@@ -8,6 +8,7 @@ sent only for the turn it's attached to.
 """
 
 from .db.models import LIFT_TYPES, RUN_TYPES, Activity
+from .decoupling import gate_decoupling, na_text
 from .units import DEFAULT_UNIT_SYSTEM, UnitSystem, format_speed_from_pace
 
 
@@ -66,8 +67,11 @@ def _lifting_stats_line(activity: dict, units: UnitSystem) -> str:
 
 def _computed_metrics_line(activity: dict, units: UnitSystem) -> str | None:
     parts = []
+    activity = gate_decoupling(activity)
     if activity.get("cardiac_decoupling_pct") is not None:
         parts.append(f"cardiac decoupling {activity['cardiac_decoupling_pct']:.1f}%")
+    elif na_text(activity):
+        parts.append(f"cardiac decoupling {na_text(activity)}")
     if activity.get("effort_efficiency_score") is not None:
         parts.append(f"effort efficiency {activity['effort_efficiency_score']:.0f}/100")
     pace_fade = _measured(activity, "pace_fade_s_per_km", units)

@@ -40,6 +40,7 @@ from .models import (
 )
 
 WEEKLY_ROLLING_WINDOW = 4
+LOAD_UNIT = "h"  # ATL/CTL are hours of moving time per day, whatever the display unit system
 ATL_TIME_CONSTANT_DAYS = 7
 CTL_TIME_CONSTANT_DAYS = 42
 AEROBIC_EFFICIENCY_MIN_QUALIFYING = 10
@@ -174,11 +175,15 @@ def compute_weekly_distance_by_sport(
 def compute_atl_ctl(
     activities: list[CardioAnalyticsActivity], unit: str, today: date
 ) -> AtlCtlDataset:
+    """Fatigue (ATL, 7 d) and fitness (CTL, 42 d) from daily moving time in hours.
+
+    `unit` is the display distance unit shared by every chart spec; load does not use it.
+    """
     base = dict(
         id="atl_ctl",
         metric_key="atl_ctl",
         title="Training Load — ATL / CTL",
-        unit=_unit_label(unit),
+        unit=LOAD_UNIT,
     )
     if not activities:
         return AtlCtlDataset(
@@ -192,7 +197,7 @@ def compute_atl_ctl(
 
     daily: dict[date, float] = defaultdict(float)
     for a in activities:
-        daily[a.date] += to_distance_unit(a.distance_m, unit)
+        daily[a.date] += (a.moving_time_s or 0.0) / 3600.0
 
     alpha_atl = 1 - math.exp(-1 / ATL_TIME_CONSTANT_DAYS)
     alpha_ctl = 1 - math.exp(-1 / CTL_TIME_CONSTANT_DAYS)
