@@ -11,7 +11,8 @@ Decoupling here is the change in HR per unit of *speed* between the two halves o
 - **Short activities**: too little time for drift to exceed noise.
 
 The check reads only stored columns, so it applies to historical rows without refetching streams.
-The raw value stays in the database; callers show "n/a" with the reason instead.
+Where a raw value remains stored, callers show "n/a" with the reason instead. Hilly-course
+values are no longer computed, and migration 020 clears historical hilly values.
 """
 
 from .activity_types import CYCLE_TYPES
