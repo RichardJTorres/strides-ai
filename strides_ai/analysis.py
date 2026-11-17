@@ -412,9 +412,13 @@ def build_analysis_summary(metrics: dict, units: UnitSystem = DEFAULT_UNIT_SYSTE
     cd = metrics.get("cardiac_decoupling_pct")
     if cd is not None and cd >= 5:
         if cd < 10:
-            parts.append(f"Moderate cardiac decoupling ({cd:.1f}%) — some aerobic drift.")
+            parts.append(
+                f"Moderate cardiac decoupling ({cd:.1f}%) — interpret only for steady aerobic efforts."
+            )
         else:
-            parts.append(f"High cardiac decoupling ({cd:.1f}%) — significant cardiovascular drift.")
+            parts.append(
+                f"High cardiac decoupling ({cd:.1f}%) — interpret only for steady aerobic efforts."
+            )
 
     # Elevation
     if metrics.get("high_elevation_flag"):
@@ -760,12 +764,11 @@ def build_precomputed_brief(
     if cd is not None and not valid:
         cd_str = f"n/a ({NA_LABELS[na_reason]})"
     elif cd is not None:
-        if cd < 5:
-            cd_str = f"{cd:.1f}% (well-coupled — good aerobic efficiency)"
-        elif cd < 10:
-            cd_str = f"{cd:.1f}% (moderate cardiovascular stress)"
-        else:
-            cd_str = f"{cd:.1f}% (high cardiovascular drift — significant fatigue)"
+        cd_str = (
+            f"{cd:.1f}% (not excluded by terrain, sport or duration; confirm a steady aerobic "
+            "effort from the streams before drawing fitness conclusions; intervals and "
+            "progressions are not drift tests)"
+        )
     else:
         cd_str = "-"
 

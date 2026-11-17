@@ -238,11 +238,17 @@ def _workout_detail_lines(workout: dict) -> str:
     import json
 
     out = ""
-    description = " ".join((workout.get("description") or "").split())
+    description = " ".join((workout.get("objective") or workout.get("description") or "").split())
+    full_description = description
     if description:
         if len(description) > WORKOUT_NOTE_CHARS:
             description = description[: WORKOUT_NOTE_CHARS - 1].rstrip() + "…"
         out += f"\n{'':10s}   notes: {description}"
+    notes = " ".join((workout.get("notes") or "").split())
+    if notes and notes != full_description:
+        if len(notes) > WORKOUT_NOTE_CHARS:
+            notes = notes[: WORKOUT_NOTE_CHARS - 1].rstrip() + "…"
+        out += f"\n{'':10s}   notes: {notes}"
     try:
         route = json.loads(workout.get("route_analysis_json") or "null")
     except (TypeError, ValueError):
@@ -285,10 +291,12 @@ def entry_summary(w: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM, with_id: boo
     if w.get("structure_json"):
         bits.append("structured")
     prefix = f"[id {w['id']}] " if with_id and w.get("id") is not None else ""
-    return f"{prefix}{fmt_day(w.get('date'))}: " + ", ".join(bits)
+    return f"{prefix}{fmt_day(w.get('date'))}: " + ", ".join(bits) + _workout_detail_lines(w)
 
 
-def plan_row_text(w: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
+def plan_row_text(
+    w: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM, *, include_details: bool = True
+) -> str:
     """One planned entry as a table row (id, weekday date, type, measurements) plus its race and
     structure lines. Shared by the upcoming-workouts table and the get_calendar lookup tool."""
     m = PlanRow.measure_field(w, "distance_km", units) if w.get("distance_km") else None
@@ -313,7 +321,7 @@ def plan_row_text(w: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
     structure = structure_from_json(w.get("structure_json"))
     if structure:
         row += f"\n{'':10s}   structure: {render_text(structure)}"
-    return row
+    return row + (_workout_detail_lines(w) if include_details else "")
 
 
 def _upcoming_workouts(
@@ -326,10 +334,10 @@ def _upcoming_workouts(
     detail_until = (today + timedelta(days=WORKOUT_DETAIL_DAYS)).isoformat()
     near, later = [], []
     for w in upcoming:
-        row = plan_row_text(w, units)
+        row = plan_row_text(w, units, include_details=w["date"] <= detail_until)
         if w["date"] <= detail_until:
             # The athlete's notes and route verdict, for the sessions close enough to discuss.
-            near.append(row + _workout_detail_lines(w))
+            near.append(row)
             continue
         try:
             ahead = (date_type.fromisoformat(w["date"][:10]) - today).days
@@ -437,7 +445,11 @@ def _analysis_guide_section(cfg, recent: list, units: UnitSystem = DEFAULT_UNIT_
         "- **DECPL%** (cardiac decoupling): HR drift relative to speed between the two halves of "
         "a steady run; <5% = well-coupled, 5–10% = moderate drift, >10% = high drift. It is "
         "**n/a** for cycling (speed is set by grade, wind and coasting, not effort), hilly courses "
-        "and activities under 20 minutes. n/a means the metric is not valid there, not zero and "
+        "and activities under 20 minutes. A numeric value only means these exclusions did not "
+        "apply; it does not establish a steady aerobic effort. Before inferring aerobic fitness, "
+        "confirm steady aerobic pacing from the workout context or streams. Intervals and "
+        "progression runs are not aerobic drift tests; if steadiness is unknown, say so. "
+        "n/a means the metric is not valid there, not zero and "
         "not good news: do not draw fitness conclusions from it and do not explain it away.\n"
         "- **Z1-2% / Z4-5%**: share of time in HR zones 1-2 (easy) and 4-5 (hard); zones are fixed "
         "percentages of max HR, so they shift if max HR is wrong.\n"

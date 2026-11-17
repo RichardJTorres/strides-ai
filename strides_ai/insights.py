@@ -31,6 +31,8 @@ from .training_state import (
     RAMP_MEDIAN_WEEKS,
     TrainingState,
     ramp_vs_baselines,
+    ramp_comparisons,
+    render_ramp_comparisons,
 )
 from .units import (
     DEFAULT_UNIT_SYSTEM,
@@ -318,10 +320,9 @@ def build_digest(
     last_week = cm - timedelta(weeks=1)
     first_week = monday_of(min(a.date for a in acts))
     prior_weeks = [last_week - timedelta(weeks=k) for k in range(RAMP_MEDIAN_WEEKS, 0, -1)]
-    _, ramp_base, ramp_basis = ramp_vs_baselines(
-        _weekly_avg(acts, hrs, last_week, 1),
-        [_weekly_avg(acts, hrs, w, 1) for w in prior_weeks if w >= first_week],
-    )
+    prior_volumes = [_weekly_avg(acts, hrs, w, 1) for w in prior_weeks if w >= first_week]
+    last_volume = _weekly_avg(acts, hrs, last_week, 1)
+    _, ramp_base, ramp_basis = ramp_vs_baselines(last_volume, prior_volumes)
     ramp = _metric(
         "volume.ramp",
         "Last full week vs typical week",
@@ -332,6 +333,7 @@ def build_digest(
     )
     if ramp:
         ramp["basis"] = ramp_basis
+        ramp["ramp_comparisons"] = ramp_comparisons(last_volume, prior_volumes)
     metrics.append(ramp)
     metrics.append(
         _metric(
@@ -606,7 +608,8 @@ def _flags(digest: dict) -> list[dict]:
             add(
                 "decoupling_high",
                 "warning",
-                f"{m['label']} averages {m['formatted']} (>5%): aerobic base may be lagging.",
+                f"{m['label']} averages {m['formatted']} (>5%): confirm steady aerobic efforts "
+                "before interpreting this as aerobic drift; intervals and progressions do not qualify.",
                 [m["id"]],
             )
         if m["id"].endswith("easy_share") and m["value"] < 70:
@@ -649,7 +652,7 @@ def _flags(digest: dict) -> list[dict]:
 
 # Bump when the digest's rules or units change (v2: moving-time load and ramp, decoupling gate),
 # so a cached readout written under the old rules is neither shown nor handed to the coach.
-DIGEST_VERSION = 2
+DIGEST_VERSION = 3  # both ramp comparisons and qualified decoupling interpretation
 
 
 def digest_fingerprint(
@@ -739,6 +742,10 @@ Respond with ONLY a valid JSON object — no prose, no markdown fences. Exactly 
                       Add "date" (YYYY-MM-DD) when the action targets a specific day.
                       Tie advice to the next race or planned-workout adherence when present.
 
+Both ramp comparisons matter: a historical median must not hide a recent increase after illness
+or injury. Moving time measures volume, not intensity or mechanical stress. Numeric decoupling
+only passes exclusion filters; confirm a steady aerobic effort before inferring aerobic fitness.
+
 The digest's "Already on the calendar" section lists sessions, blocked-out days and race dates.
 Work with it, never against it: never recommend training on a blocked-out day or a race day;
 if a planned deload, taper or rest day already delivers the advice, say it is already planned
@@ -764,6 +771,8 @@ def build_insights_prompt(digest: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM)
             elif m["delta"] is not None:
                 extra += f", {m['delta']:+.1f} pts"
             extra += ")"
+        if m.get("ramp_comparisons"):
+            extra = " (" + render_ramp_comparisons(m["ramp_comparisons"]) + ")"
         lines.append(f"[{m['id']}] {m['label']}: {m['formatted']}{extra}")
     if digest["flags"]:
         lines += ["", "## Flags"]
@@ -803,6 +812,8 @@ def build_insights_prompt(digest: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM)
                 if w["ramp_pct"] is None
                 else f" ({w['ramp_pct']:+.0f}% vs the {w['baseline_basis']})"
             )
+            if w.get("ramp_comparisons"):
+                ramp = " (" + render_ramp_comparisons(w["ramp_comparisons"]) + ")"
             lines.append(f"Week of {w['week_start']}: {w['volume']:.1f} h planned{ramp}")
         lines += [f"- Plan issue: {c['detail']}" for c in up["conflicts"]]
     if digest["missing"]:

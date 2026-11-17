@@ -335,6 +335,7 @@ def _plan_ops(args: dict, plan_rows: list[dict]) -> tuple[list[dict], dict, list
                     "workout_type": display_type(kind, data.get("workout_type"), data.get("sport")),
                     "distance_km": data.get("distance_km"),
                     "duration_min": data.get("duration_min"),
+                    "structure": data.get("structure"),
                     "goal_time_s": data.get("goal_time_s"),
                     "intensity": data.get("intensity"),
                 }
@@ -353,6 +354,7 @@ def _plan_ops(args: dict, plan_rows: list[dict]) -> tuple[list[dict], dict, list
                             "workout_type",
                             "distance_km",
                             "duration_min",
+                            "structure",
                             "goal_time_s",
                             "intensity",
                         )

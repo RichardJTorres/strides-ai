@@ -127,6 +127,7 @@ export interface TrainingState {
     ramp_pct: number | null;
     baseline: number | null;
     baseline_basis: string | null;
+    ramp_comparisons: { ramp_pct: number; baseline: number; basis: string }[];
     flags: string[];
   }[];
   typical_week: { median: number; low: number; high: number; weeks: number } | null;

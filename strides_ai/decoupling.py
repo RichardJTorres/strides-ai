@@ -30,7 +30,10 @@ NA_LABELS = {
 
 
 def decoupling_validity(row: dict) -> tuple[bool, str | None]:
-    """(True, None) when the decoupling value is a usable drift signal, else (False, reason).
+    """(True, None) when no exclusion is detected, else (False, reason).
+
+    Passing does not establish a steady aerobic effort. Intervals, progressions and other
+    changes in effort must be ruled out before interpreting this as aerobic fitness.
 
     `reason` is a key of `NA_LABELS`. A missing climb ratio (with no elevation and distance to
     derive it from) or moving time never invalidates a value on its own: no evidence against is

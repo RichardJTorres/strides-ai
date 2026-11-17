@@ -196,3 +196,9 @@ Shared UI lives in `web/src/ui/` — use it instead of hand-rolling Tailwind per
 Streak and records reach the UI through `web/src/progress/` (`useProgress`, `ProgressStrip` on the Calendar, `ProgressCard` in Analytics → Progress, `NewRecordBanner` in chat). Pages hand things to the chat through `pages/chatActivityHandoff.ts` (one-shot sessionStorage, never a URL, so a reload cannot re-fire it). Vite HMR picks up React changes instantly; Python changes require a server restart.
 
 File attachments (images as base64, text as UTF-8) are uploaded to `~/.strides_ai/uploads/` and forwarded to `stream_turn` as `attachments`.
+
+### Coach accuracy safeguards
+
+Guardrail previews preserve structured workouts and normalize their duration with the same structure validators used by calendar storage. This includes retained structures on duration-only updates, explicit removal, and invalid or unsupported structures. Calendar lookup rows and mutation receipts include bounded objectives and notes; automatic prompt context still limits detailed notes to the near-term window.
+
+Weekly state and the insights ramp metric expose `ramp_comparisons` for both the recent 4-week mean and the historical 8-week median. The smaller ramp still drives screening flags, but prompts and calendar rows show both comparisons so historical volume cannot conceal a recent increase. Moving time is a volume proxy, not intensity-weighted stress. Passing the decoupling exclusion gate does not establish a steady aerobic test: summaries, deep-dive briefs, and coach/insights instructions require steady aerobic context before inferring fitness. Insights digest version 3 invalidates older interpretations.

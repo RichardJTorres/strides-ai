@@ -22,6 +22,7 @@ from .analytics.adapters import to_cardio_analytics
 from .analytics.aggregation import monday_of
 from .compliance import SportGroup, classify_workout_type
 from .units import DEFAULT_UNIT_SYSTEM, UnitSystem
+from .workout_structure import structure_for_type, structure_to_json, total_seconds
 
 # Shared thresholds — insights flags, the load chart and the coach all read these.
 ACWR_LOW = 0.8
@@ -171,15 +172,31 @@ def ramp_vs_baselines(
     RAMP_MEDIAN_WEEKS (needs RAMP_MEDIAN_MIN_WEEKS). The smaller ramp wins, so a week is high only
     when it is high against both. (None, None, None) when neither baseline exists or is positive.
     """
+    comparisons = ramp_comparisons(volume, prior)
+    return min(
+        ((c["ramp_pct"], c["baseline"], c["basis"]) for c in comparisons),
+        default=(None, None, None),
+    )
+
+
+def ramp_comparisons(volume: float, prior: list[float]) -> list[dict]:
+    """Expose both baselines so the selected screening value cannot hide a recent increase."""
     prior = prior[-RAMP_MEDIAN_WEEKS:]
     recent = prior[-RAMP_BASELINE_WEEKS:]
     mean4 = sum(recent) / len(recent) if len(recent) == RAMP_BASELINE_WEEKS else None
     median8 = statistics.median(prior) if len(prior) >= RAMP_MEDIAN_MIN_WEEKS else None
-    candidates: list[tuple[float, float, str]] = []
-    for base, basis in ((mean4, "4-week average"), (median8, "8-week median")):
-        if base is not None and base > 0:
-            candidates.append((round(100 * (volume - base) / base, 1), base, basis))
-    return min(candidates, default=(None, None, None))
+    return [
+        {"ramp_pct": round(100 * (volume - base) / base, 1), "baseline": base, "basis": basis}
+        for base, basis in ((mean4, "4-week average"), (median8, "8-week median"))
+        if base is not None and base > 0
+    ]
+
+
+def render_ramp_comparisons(comparisons: list[dict]) -> str:
+    return "; ".join(
+        f"{c['ramp_pct']:+.0f}% vs the {c['basis']} ({c['baseline']:.1f} {LOAD_UNIT})"
+        for c in comparisons
+    )
 
 
 def _week_flags(volumes: list[tuple[date, float, Optional[float]]]) -> dict[date, list[str]]:
@@ -317,12 +334,14 @@ def build_training_state(
 
     chrono: list[tuple[date, float, Optional[float]]] = []
     bases: dict[date, tuple[Optional[float], Optional[str]]] = {}
+    comparisons: dict[date, list[dict]] = {}
     for i, wk in enumerate(week_starts):
         if i < RAMP_MEDIAN_WEEKS:
             continue
         ramp, base, basis = ramp_vs_baselines(vols[wk], prior_volumes(i, RAMP_MEDIAN_WEEKS))
         chrono.append((wk, vols[wk], ramp))
         bases[wk] = (base, basis)
+        comparisons[wk] = ramp_comparisons(vols[wk], prior_volumes(i, RAMP_MEDIAN_WEEKS))
     flags = _week_flags(chrono)
     weeks = [
         {
@@ -331,6 +350,7 @@ def build_training_state(
             "ramp_pct": ramp,
             "baseline": None if bases[wk][0] is None else round(bases[wk][0], 2),
             "baseline_basis": bases[wk][1],
+            "ramp_comparisons": comparisons[wk],
             "is_current": wk == cm,
             "flags": flags[wk],
         }
@@ -435,6 +455,23 @@ def _find_conflicts(state: TrainingState, plan_rows: list[dict]) -> list[Violati
 # ── guardrails for proposed plan edits ──────────────────────────────────────────
 
 
+def _normalize_planned_structure(row: dict) -> None:
+    """Mirror calendar storage: retained or supplied structure overrides duration.
+
+    An explicit null removes structure; an omitted field retains the stored JSON.
+    Invalid structures and non-cycling types leave the supplied duration unchanged.
+    """
+    if row.get("kind", "workout") != "workout":
+        return
+    structure = structure_for_type(
+        row.get("workout_type"), row.get("structure", row.get("structure_json"))
+    )
+    if structure:
+        row["duration_min"] = round(total_seconds(structure) / 60)
+    row.pop("structure", None)
+    row["structure_json"] = structure_to_json(structure)
+
+
 def apply_changes(plan_rows: list[dict], changes: dict) -> list[dict]:
     """Return plan_rows with an entry change set applied. Does not mutate the input.
 
@@ -448,7 +485,9 @@ def apply_changes(plan_rows: list[dict], changes: dict) -> list[dict]:
         by_id.pop(entry_id, None)
     for u in changes.get("update") or []:
         if u.get("id") in by_id:
-            by_id[u["id"]].update({k: v for k, v in u.items() if k != "id"})
+            merged = by_id[u["id"]]
+            merged.update({k: v for k, v in u.items() if k != "id"})
+            _normalize_planned_structure(merged)
     created = []
     for w in changes.get("create") or []:
         if w.get("date"):
@@ -459,10 +498,13 @@ def apply_changes(plan_rows: list[dict], changes: dict) -> list[dict]:
                     "workout_type": w.get("workout_type", "Workout"),
                     "distance_km": w.get("distance_km"),
                     "duration_min": w.get("duration_min"),
+                    "structure": w.get("structure", w.get("structure_json")),
                     "goal_time_s": w.get("goal_time_s"),
                     "intensity": w.get("intensity"),
                 }
             )
+    for row in created:
+        _normalize_planned_structure(row)
     return list(by_id.values()) + anonymous + created
 
 
@@ -543,6 +585,8 @@ def render_for_prompt(state: TrainingState, units: UnitSystem = DEFAULT_UNIT_SYS
             ramp = ""
             if w["ramp_pct"] is not None:
                 ramp = f", {w['ramp_pct']:+.0f}% vs the {w['baseline_basis']} ({w['baseline']:.1f} {u})"
+            if w.get("ramp_comparisons"):
+                ramp = ", " + render_ramp_comparisons(w["ramp_comparisons"])
             flags = f" [{', '.join(w['flags'])}]" if w["flags"] else ""
             lines.append(f"  - week of {w['week_start']}: {w['volume']:.1f} {u}{ramp}{flags}")
     if state.unscored_planned:
@@ -556,7 +600,11 @@ def render_for_prompt(state: TrainingState, units: UnitSystem = DEFAULT_UNIT_SYS
     lines.append(
         "Guardrails are screening heuristics, not injury predictions. Before calling a plan risky, "
         "weigh them against the typical week above, the athlete's own fatigue, sleep, travel and "
-        "recent history, and say which of those you used. "
+        "recent history, and say which of those you used. The smaller ramp drives screening "
+        "flags, but consider BOTH comparisons: a low selected ramp does not cancel a recent "
+        "increase. Distinguish travel or planned recovery from illness or injury before endorsing "
+        "a return to historical volume. Moving time is a volume proxy, not an intensity-weighted "
+        "measure of physiological or mechanical stress. "
         f"Fatigue/fitness ratio {ACWR_LOW}-{ACWR_HIGH} is the usual target band (above {ACWR_HIGH} "
         f"fatigue is high relative to fitness; above {ACWR_DANGER} it is very high). Week-on-week "
         f"volume more than +{RAMP_ELEVATED:.0f}% above the typical week deserves a look, and more "

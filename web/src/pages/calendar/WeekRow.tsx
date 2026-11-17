@@ -30,10 +30,17 @@ export default function WeekRow({ weekCells, grid }: { weekCells: GridCell[]; gr
     const basis = w.baseline !== null && w.baseline_basis
       ? `Moving time vs the ${w.baseline_basis} (${w.baseline.toFixed(1)} h)`
       : "Moving time vs recent weeks";
-    const title = w.flags.length ? `${basis}: ${w.flags.join(", ").replace(/_/g, " ")}` : basis;
+    const comparisons = w.ramp_comparisons ?? [];
+    const details = comparisons.map(c => `${c.ramp_pct > 0 ? "+" : ""}${Math.round(c.ramp_pct)}% vs ${c.basis} (${c.baseline.toFixed(1)} h)`).join("; ");
+    const title = `${details || basis}${w.flags.length ? `: ${w.flags.join(", ").replace(/_/g, " ")}` : ""}`;
     return (
       <div className={`text-[10px] ${color}`} title={title}>
-        {w.ramp_pct > 0 ? "+" : ""}{Math.round(w.ramp_pct)}% ramp{w.flags.includes("no_recovery_week") ? " ⚠" : ""}
+        {comparisons.length > 1 ? comparisons.map(c => (
+          <div key={c.basis} className={c.ramp_pct > t.ramp_high ? "text-red-400" : c.ramp_pct > t.ramp_elevated ? "text-amber-400" : "text-gray-500"}>
+            {c.ramp_pct > 0 ? "+" : ""}{Math.round(c.ramp_pct)}% vs {c.basis === "4-week average" ? "4wk avg" : "8wk median"}
+          </div>
+        )) : <>{w.ramp_pct > 0 ? "+" : ""}{Math.round(w.ramp_pct)}% ramp</>}
+        {w.flags.includes("no_recovery_week") ? " ⚠" : ""}
       </div>
     );
   };
