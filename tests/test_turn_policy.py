@@ -319,7 +319,12 @@ def _plan_call(mocker, args, violations=(), created=()):
 
 
 def _workout(day, workout_type):
-    return {"date": f"2026-12-{day:02d}", "workout_type": workout_type, "distance": 5}
+    return {
+        "date": f"2026-12-{day:02d}",
+        "workout_type": workout_type,
+        "distance": 5,
+        "distance_unit": "km",
+    }
 
 
 def test_the_largest_possible_plan_result_stays_small_and_keeps_every_id(mocker):
@@ -332,7 +337,9 @@ def test_the_largest_possible_plan_result_stays_small_and_keeps_every_id(mocker)
     longest = max(WORKOUT_TYPES, key=lambda t: len(display_type("workout", t, None)))
     ids = [900_000 + i for i in range(MAX_PLAN_OPERATIONS)]
     warnings = [
-        SimpleNamespace(hard=False, date="2026-12-01", detail=f"warning {i} " + "w" * 500)
+        SimpleNamespace(
+            hard=False, kind="ramp_high", date="2026-12-01", detail=f"warning {i} " + "w" * 500
+        )
         for i in range(40)
     ]
     args = {"set": [_workout(1 + i % 28, longest) for i in range(MAX_PLAN_OPERATIONS)]}

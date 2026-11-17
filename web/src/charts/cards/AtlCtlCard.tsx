@@ -10,7 +10,6 @@ interface Props {
   since: string | null;
   until: string | null;
   isAllTime: boolean;
-  unit: "miles" | "km";
   /** Thresholds + calendar projection from the backend; defaults keep the card usable without. */
   loadContext?: LoadContext;
 }
@@ -21,7 +20,7 @@ function ratioZone(
   ratio: number,
   t: { acwr_low: number; acwr_high: number } = DEFAULT_THRESHOLDS,
 ): { label: string; color: string } {
-  if (ratio > t.acwr_high) return { label: "⚠ Injury risk", color: "#ef4444" };
+  if (ratio > t.acwr_high) return { label: "⚠ High fatigue", color: "#ef4444" };
   if (ratio < t.acwr_low) return { label: "↓ Detraining", color: "#9ca3af" };
   return { label: "✓ Optimal", color: "#22c55e" };
 }
@@ -30,13 +29,13 @@ function ATLTooltip({
   active,
   payload,
   label,
-  unit,
+  ul,
   th,
 }: {
   active?: boolean;
   payload?: { dataKey: string; value: number }[];
   label?: string;
-  unit: "miles" | "km";
+  ul: string;
   th: { acwr_low: number; acwr_high: number };
 }) {
   if (!active || !payload?.length) return null;
@@ -45,7 +44,6 @@ function ATLTooltip({
   const atl = get("atl");
   const ctl = get("ctl");
   const ratio = get("ratio");
-  const ul = unit === "miles" ? "mi" : "km";
 
   const zone = ratio != null ? ratioZone(ratio, th).label : "";
 
@@ -71,7 +69,7 @@ function ATLTooltip({
   );
 }
 
-export default function AtlCtlCard({ dataset, since, until, isAllTime, unit, loadContext }: Props) {
+export default function AtlCtlCard({ dataset, since, until, isAllTime, loadContext }: Props) {
   const [showPlanned, setShowPlanned] = useState(false);
   if (!dataset.available) {
     return (
@@ -91,7 +89,8 @@ export default function AtlCtlCard({ dataset, since, until, isAllTime, unit, loa
     );
   }
 
-  const ul = unit === "miles" ? "mi" : "km";
+  // Load is hours of moving time per day (strides_ai/analytics/cardio.py LOAD_UNIT).
+  const ul = dataset.unit ?? "h";
   const th = loadContext?.thresholds ?? DEFAULT_THRESHOLDS;
 
   // Planned workouts on the calendar extend ATL/CTL forward as dashed lines. The last actual
@@ -170,10 +169,10 @@ export default function AtlCtlCard({ dataset, since, until, isAllTime, unit, loa
       statsRow={statsRow}
       subtitle={
         <>
-          ATL = 7-day EWA · CTL = 42-day EWA · Ratio zones:{" "}
+          Load = moving time · ATL = 7-day EWA · CTL = 42-day EWA · Ratio zones:{" "}
           <span className="text-green-400">optimal {th.acwr_low}–{th.acwr_high}</span>
           {" · "}
-          <span className="text-red-400">injury risk &gt;{th.acwr_high}</span>
+          <span className="text-red-400">high fatigue &gt;{th.acwr_high}</span>
           {" · "}
           <span className="text-gray-400">detraining &lt;{th.acwr_low}</span>
           {showProjection && " · dashed = projected from planned workouts"}
@@ -202,7 +201,7 @@ export default function AtlCtlCard({ dataset, since, until, isAllTime, unit, loa
         { yAxisId: "ratio", y1: th.acwr_high, y2: ratioMaxRounded, fill: "#ef4444" },
         { yAxisId: "ratio", y1: 0, y2: th.acwr_low, fill: "#6b7280" },
       ]}
-      customTooltip={<ATLTooltip unit={unit} th={th} />}
+      customTooltip={<ATLTooltip ul={ul} th={th} />}
       height={300}
       rightMargin={52}
     />

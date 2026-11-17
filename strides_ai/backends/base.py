@@ -1,9 +1,12 @@
 """Abstract base class for LLM backends."""
 
+import logging
 from abc import ABC, abstractmethod
 from typing import Callable
 
-from .. import db
+from .. import db, lookup_tools
+from ..coach import entry_summary
+from ..dates import fmt_day
 from ..budget import (
     DEFAULT_BYTES_PER_TOKEN,
     TOOL_BUDGET_NOTE,
@@ -33,8 +36,11 @@ from ..kinds import (
     WORKOUT_TYPES,
 )
 from ..db.calendar import EntryError
+from ..db.memories import was_saved
 from ..units import Quantity, UnitSystem, to_si
 from ..workout_structure import INDOOR_RIDE_GUIDANCE, WORKOUT_STRUCTURE_SCHEMA
+
+log = logging.getLogger(__name__)
 
 # Mirrors ROUTE_CAPABLE_WORKOUT_TYPES in web/src/pages/calendar/constants.ts.
 ROUTE_CAPABLE_WORKOUT_TYPES = RUN_DISPLAY_TYPES | RIDE_DISPLAY_TYPES
@@ -227,6 +233,30 @@ def _entry_kind(w: dict, existing: dict | None) -> tuple[str, str | None]:
     return "workout", None
 
 
+def _measurement_errors(w: dict) -> list[str]:
+    """Problems with a tool item's distance / elevation. A number with no unit, or an unknown
+    unit, is refused instead of guessed: a silent kilometre for a mile is a wrong plan."""
+    problems = []
+    for key, unit_key, units in (
+        ("distance", "distance_unit", DISTANCE_UNITS),
+        ("elevation", "elevation_unit", ELEVATION_UNITS),
+    ):
+        if w.get(key) is None:
+            continue
+        options = " or ".join(units)
+        try:
+            float(w[key])
+        except (TypeError, ValueError):
+            problems.append(f"`{key}` must be a number, got {w[key]!r}")
+            continue
+        unit = w.get(unit_key)
+        if unit is None:
+            problems.append(f"`{key}` needs `{unit_key}` ({options})")
+        elif unit not in units:
+            problems.append(f"`{unit_key}` must be {options}, got {unit!r}")
+    return problems
+
+
 def _plan_ops(args: dict, plan_rows: list[dict]) -> tuple[list[dict], dict, list[str]]:
     """update_training_plan args -> (ops for the calendar, guardrail changes, errors).
 
@@ -241,9 +271,19 @@ def _plan_ops(args: dict, plan_rows: list[dict]) -> tuple[list[dict], dict, list
         except (TypeError, ValueError):
             errors.append(f"Not an entry id: {entry_id!r}")
             continue
+        if entry_id not in by_id:
+            errors.append(f"No calendar entry with id {entry_id} to delete")
+            continue
         ops.append({"op": "delete", "id": entry_id})
         deletes.append(entry_id)
-    for w in args.get("set", []) or []:
+    for position, w in enumerate(args.get("set", []) or [], start=1):
+        if not isinstance(w, dict):
+            errors.append(f"Item {position} of `set` is not an object")
+            continue
+        problems = _measurement_errors(w)
+        if problems:
+            errors.extend(f"Item {position}: {problem}" for problem in problems)
+            continue
         entry_id = w.get("id")
         existing = by_id.get(entry_id) if entry_id is not None else None
         if entry_id is not None and existing is None:
@@ -295,6 +335,7 @@ def _plan_ops(args: dict, plan_rows: list[dict]) -> tuple[list[dict], dict, list
                     "workout_type": display_type(kind, data.get("workout_type"), data.get("sport")),
                     "distance_km": data.get("distance_km"),
                     "duration_min": data.get("duration_min"),
+                    "goal_time_s": data.get("goal_time_s"),
                     "intensity": data.get("intensity"),
                 }
             )
@@ -306,16 +347,33 @@ def _plan_ops(args: dict, plan_rows: list[dict]) -> tuple[list[dict], dict, list
                     **{
                         k: v
                         for k, v in data.items()
-                        if k in ("date", "workout_type", "distance_km", "duration_min", "intensity")
+                        if k
+                        in (
+                            "date",
+                            "workout_type",
+                            "distance_km",
+                            "duration_min",
+                            "goal_time_s",
+                            "intensity",
+                        )
                     },
                 }
             )
     return ops, {"create": creates, "update": updates, "delete": deletes}, errors
 
 
+GUARDRAIL_UNAVAILABLE = "guardrail_unavailable"
+
+
+def _listing(verb: str, lines: list[str]) -> str:
+    noun = "entry" if len(lines) == 1 else "entries"
+    return f"{verb} {len(lines)} {noun}:\n" + "\n".join(f"  {text}" for text in lines)
+
+
 def _check_proposed_changes(changes: dict, mode: str | None = None) -> list:
     """Guardrail violations for a proposed plan edit. Never raises: a failure here must not stop
-    the coach from editing the calendar."""
+    the coach from editing the calendar, but it is reported (one soft violation of kind
+    GUARDRAIL_UNAVAILABLE) so a plan saved unchecked is never presented as checked."""
     try:
         from datetime import date as date_cls
 
@@ -339,7 +397,17 @@ def _check_proposed_changes(changes: dict, mode: str | None = None) -> list:
             changes,
         )
     except Exception:
-        return []
+        log.warning("plan guardrail check failed", exc_info=True)
+        from ..training_state import Violation
+
+        return [
+            Violation(
+                GUARDRAIL_UNAVAILABLE,
+                "",
+                "The ramp, fatigue and blocked-day checks could not run, so this change was "
+                "saved without them; say so rather than calling the plan checked.",
+            )
+        ]
 
 
 class BaseBackend(ABC):
@@ -616,11 +684,13 @@ class BaseBackend(ABC):
         import sys
 
         module = sys.modules[self.__class__.__module__]
-        return [
+        tools = [
             getattr(module, n)
             for n in ("SAVE_MEMORY_TOOL", "UPDATE_TRAINING_PLAN_TOOL", "UPDATE_PROFILE_TOOL")
             if hasattr(module, n)
         ]
+        # The read-only lookups (lookup_tools.READ_TOOLS) in this provider's format.
+        return tools + list(getattr(module, "READ_TOOLS", []))
 
     def _begin_round(self, system) -> RoundPlan:
         """Start the next provider request and say what it may do.
@@ -735,7 +805,8 @@ class BaseBackend(ABC):
         """
         if name == "save_memory":
             result, category, content = self._execute_save_memory(args)
-            memories_saved.append((category, content))
+            if was_saved(result):
+                memories_saved.append((category, content))
             return result
         if name == "update_profile":
             return self._execute_update_profile(args)
@@ -743,6 +814,8 @@ class BaseBackend(ABC):
             result, changes = self._execute_update_training_plan(args)
             plan_changes.extend(changes)
             return result
+        if name in lookup_tools.READ_TOOL_NAMES:
+            return self._execute_read_tool(name, args)
         return None
 
     def _run_call(
@@ -762,8 +835,39 @@ class BaseBackend(ABC):
             )
         if self._budget.tools >= self.limits.tools:
             return "Not executed: tool limit reached"
-        result = self._run_tool(name, args, memories_saved, plan_changes)
+        try:
+            result = self._run_tool(name, args, memories_saved, plan_changes)
+        except (InterruptedError, BudgetExceeded):
+            raise  # the athlete left, or the turn's own limits: not a tool failure
+        except Exception as exc:
+            # A bad argument shape must not end the turn with the model none the wiser. The
+            # message cannot promise nothing changed: the failure may have come after a write.
+            log.warning("tool %s raised", name, exc_info=True)
+            return (
+                f"Error: {name} failed ({type(exc).__name__}). Check the calendar with "
+                "get_calendar before assuming anything changed, and tell the athlete what happened."
+            )
         return result if result is not None else f"Unknown tool: {name}"
+
+    def _execute_read_tool(self, name: str, args: dict) -> str:
+        """Run a read-only lookup (lookup_tools.py) against the live database, in the athlete's
+        units. Nothing is written, and a failure is returned to the model as text."""
+        from datetime import date as date_cls
+
+        self._check_cancelled()
+        self._budget.tool(args)
+        try:
+            return lookup_tools.run_read_tool(
+                name,
+                args,
+                load_activities=db.get_all_activities,
+                load_plan=db.get_training_plan,
+                units=db.get_unit_system(),
+                today=date_cls.today(),
+            )
+        except Exception as exc:  # a lookup must never end the turn
+            log.warning("lookup %s failed: %s", name, exc, exc_info=True)
+            return f"Error: the lookup failed ({type(exc).__name__}). Tell the athlete you could not check."
 
     def _execute_save_memory(self, args: dict) -> tuple[str, str, str]:
         """
@@ -782,7 +886,7 @@ class BaseBackend(ABC):
         if turn_id is not None:
             metadata["turn_id"] = turn_id
         result = db.save_memory(category, content, **metadata)
-        if not result.startswith("Error:"):
+        if was_saved(result):  # not an error, and not a duplicate that changed nothing
             self._budget.memories.append((category, content))
         return result, category, content
 
@@ -839,7 +943,8 @@ class BaseBackend(ABC):
                 f"{MAX_PLAN_OPERATIONS} or fewer (for example one per two weeks).",
                 [],
             )
-        ops, proposed, errors = _plan_ops(args, db.get_training_plan())
+        plan_rows_before = db.get_training_plan()
+        ops, proposed, errors = _plan_ops(args, plan_rows_before)
         if errors:
             return "Rejected, no changes made. " + bounded_reasons(errors), []
         violations = _check_proposed_changes(proposed, getattr(self, "mode", None))
@@ -863,33 +968,71 @@ class BaseBackend(ABC):
             return f"Rejected, no changes made. {exc}", []
 
         created_ids = iter(result["created"])
-        created, updated, removed = [], [], []
+        before = {p["id"]: p for p in plan_rows_before}
+        try:
+            after = {p["id"]: p for p in db.get_training_plan()}
+            units = db.get_unit_system()
+        except Exception:  # the write is done; a failed read-back must not hide that
+            log.warning("could not read the calendar back after a write", exc_info=True)
+            after, units = {}, UnitSystem.METRIC
+
+        def line(entry_id: int, fallback: str) -> str:
+            row = after.get(entry_id)
+            return entry_summary(row, units) if row else fallback
+
+        created, updated, removed, dropped = [], [], [], []
         for op in ops:
             if op["op"] == "create":
                 entry_id = next(created_ids)
                 label = display_type(op["kind"], op.get("workout_type"), op.get("sport"))
-                created.append(f"{op['date']} ({label}) [id {entry_id}]")
+                created.append(line(entry_id, f"[id {entry_id}] {fmt_day(op['date'])}: {label}"))
                 self._budget.changes.append(
                     {"action": "set", "id": entry_id, "date": op["date"], "workout_type": label}
                 )
             elif op["op"] == "update":
-                updated.append(f"[id {op['id']}]")
-                self._budget.changes.append({"action": "set", "id": op["id"]})
+                entry_id = op["id"]
+                updated.append(line(entry_id, f"[id {entry_id}]"))
+                self._budget.changes.append({"action": "set", "id": entry_id})
             else:
-                removed.append(f"[id {op['id']}]")
-                self._budget.changes.append({"action": "delete", "id": op["id"]})
+                entry_id = op["id"]
+                gone = before.get(entry_id)
+                removed.append(
+                    f"{entry_summary(gone, units)} (deleted)"
+                    if gone
+                    else f"[id {entry_id}] (deleted)"
+                )
+                self._budget.changes.append({"action": "delete", "id": entry_id})
+                continue
+            # A structured workout the calendar did not keep (invalid, or not a Ride) is said so.
+            if (
+                op.get("structure")
+                and after
+                and not (after.get(entry_id) or {}).get("structure_json")
+            ):
+                dropped.append(f"[id {entry_id}]")
 
         parts = []
         if created:
-            parts.append(f"Created {len(created)} entr(ies): {', '.join(created)}")
+            parts.append(_listing("Created", created))
         if updated:
-            parts.append(f"Updated {len(updated)} entr(ies): {', '.join(updated)}")
+            parts.append(_listing("Updated (now)", updated))
         if removed:
-            parts.append(f"Removed {len(removed)} entr(ies): {', '.join(removed)}")
-        summary = ". ".join(parts) if parts else "No changes made."
+            parts.append(_listing("Removed", removed))
+        summary = "\n".join(parts) if parts else "No changes made."
+        if dropped:
+            summary += (
+                "\nNot saved: the structured workout on " + ", ".join(dropped) + " was invalid or "
+                "not allowed for that workout type; the entry was kept without it."
+            )
+        if after:
+            summary += "\nThese lines are what is stored now; report them, not what you intended."
         warnings = [v for v in violations if not v.hard]
-        if warnings:
-            summary += ". Warnings: " + bounded_reasons(v.detail for v in warnings)
+        unchecked = [v for v in warnings if v.kind == GUARDRAIL_UNAVAILABLE]
+        real = [v for v in warnings if v.kind != GUARDRAIL_UNAVAILABLE]
+        if unchecked:
+            summary += "\nNot checked: " + bounded_reasons(v.detail for v in unchecked)
+        if real:
+            summary += "\nWarnings: " + bounded_reasons(v.detail for v in real)
             summary += " Consider revising the plan to stay within the Training State guardrails."
         return summary, self._budget.changes[change_start:]
 

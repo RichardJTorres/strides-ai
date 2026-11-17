@@ -1,5 +1,6 @@
 """Unit tests for strides_ai.analytics.cardio — every metric's math and qualification rules."""
 
+import math
 from datetime import date
 
 import pytest
@@ -132,6 +133,24 @@ def test_atl_ctl_decays_without_activity():
     ds = compute_atl_ctl(acts, "km", date(2024, 1, 20))
     by_date = {p.date: p for p in ds.data}
     assert by_date["2024-01-08"].atl < by_date["2024-01-01"].atl
+
+
+def test_atl_ctl_is_hours_of_moving_time_not_distance():
+    day = date(2024, 1, 1)
+    short_far = [make_activity(day, distance_m=100_000, moving_time_s=3600)]
+    long_near = [make_activity(day, distance_m=1_000, moving_time_s=7200)]
+    a = compute_atl_ctl(short_far, "km", day).data[0]
+    b = compute_atl_ctl(long_near, "miles", day).data[0]  # display unit never matters
+    assert compute_atl_ctl(short_far, "km", day).unit == "h"
+    assert b.atl == pytest.approx(2 * a.atl)
+    # 1 h on day one: atl = (1 - exp(-1/7)) * 1 h
+    assert a.atl == pytest.approx(1 - math.exp(-1 / 7), abs=1e-3)
+
+
+def test_atl_ctl_activity_without_moving_time_adds_no_load():
+    day = date(2024, 1, 1)
+    ds = compute_atl_ctl([make_activity(day, moving_time_s=None)], "km", day)
+    assert ds.available and ds.data[0].atl == 0
 
 
 def test_atl_ctl_is_deterministic_on_injected_today():

@@ -28,7 +28,9 @@ from .training_state import (
     ACWR_LOW,
     RAMP_ELEVATED,
     RAMP_HIGH,
+    RAMP_MEDIAN_WEEKS,
     TrainingState,
+    ramp_vs_baselines,
 )
 from .units import (
     DEFAULT_UNIT_SYSTEM,
@@ -311,17 +313,25 @@ def build_digest(
             _weekly_avg(acts, hrs, base[0], BASELINE_WEEKS),
         )
     )
+    # Same ramp rule as the coach's Training State (moving time; the smaller of the 4-week mean
+    # and the 8-week median), so the dashboard and the coach cannot disagree about a ramp.
     last_week = cm - timedelta(weeks=1)
-    last_week_dist = _weekly_avg(acts, dist_of, last_week, 1)
-    prior_avg = _weekly_avg(acts, dist_of, last_week - timedelta(weeks=RECENT_WEEKS), RECENT_WEEKS)
+    first_week = monday_of(min(a.date for a in acts))
+    prior_weeks = [last_week - timedelta(weeks=k) for k in range(RAMP_MEDIAN_WEEKS, 0, -1)]
+    _, ramp_base, ramp_basis = ramp_vs_baselines(
+        _weekly_avg(acts, hrs, last_week, 1),
+        [_weekly_avg(acts, hrs, w, 1) for w in prior_weeks if w >= first_week],
+    )
     ramp = _metric(
         "volume.ramp",
-        "Last full week vs prior 4-wk avg",
+        "Last full week vs typical week",
         "volume",
-        last_week_dist,
-        dist_u,
-        prior_avg if prior_avg > 0 else None,
+        _weekly_avg(acts, hrs, last_week, 1),
+        hours,
+        ramp_base,
     )
+    if ramp:
+        ramp["basis"] = ramp_basis
     metrics.append(ramp)
     metrics.append(
         _metric(
@@ -362,7 +372,8 @@ def build_digest(
                     )
                 )
 
-    # Load (ATL/CTL are distance-based in the chart unit)
+    # Load (ATL/CTL are hours of moving time per day)
+    load_u = lambda v: f"{v:.2f} h/day"
     atl_ctl = cardio.compute_atl_ctl(acts, unit, today)
     if atl_ctl.available and atl_ctl.data:
         by_date = {p.date: p for p in atl_ctl.data}
@@ -374,11 +385,11 @@ def build_digest(
                 "Fitness (CTL, 42 d)",
                 "load",
                 latest.ctl,
-                dist_u,
+                load_u,
                 past.ctl if past else None,
             )
         )
-        metrics.append(_metric("load.atl", "Fatigue (ATL, 7 d)", "load", latest.atl, dist_u))
+        metrics.append(_metric("load.atl", "Fatigue (ATL, 7 d)", "load", latest.atl, load_u))
         metrics.append(
             _metric(
                 "load.acwr",
@@ -418,7 +429,7 @@ def build_digest(
         )
 
     if state is not None:
-        metrics.extend(_plan_metrics(state, dist_u))
+        metrics.extend(_plan_metrics(state, hours))
     digest["metrics"] = [m for m in metrics if m]
 
     # Context: next race, recent plan compliance
@@ -465,7 +476,7 @@ def build_digest(
     return digest
 
 
-def _plan_metrics(state: TrainingState, dist_u: Callable[[float], str]) -> list[Optional[dict]]:
+def _plan_metrics(state: TrainingState, hours: Callable[[float], str]) -> list[Optional[dict]]:
     out: list[Optional[dict]] = []
     ratios = [p["ratio"] for p in state.projection[:UPCOMING_DAYS] if p["ratio"] is not None]
     if ratios:
@@ -487,7 +498,7 @@ def _plan_metrics(state: TrainingState, dist_u: Callable[[float], str]) -> list[
                 f"Planned volume, week of {nxt['week_start']}",
                 "plan",
                 nxt["volume"],
-                dist_u,
+                hours,
                 base if base and base > 0 else None,
             )
         )
@@ -544,14 +555,14 @@ def _flags(digest: dict) -> list[dict]:
             add(
                 "ramp_high",
                 "warning",
-                f"Last full week was {ramp['delta_pct']:+.0f}% vs the prior 4-week average.",
+                f"Last full week was {ramp['delta_pct']:+.0f}% vs the {ramp['basis']}.",
                 ["volume.ramp"],
             )
         elif ramp["delta_pct"] > RAMP_ELEVATED:
             add(
                 "ramp_elevated",
                 "info",
-                f"Last full week was {ramp['delta_pct']:+.0f}% vs the prior 4-week average.",
+                f"Last full week was {ramp['delta_pct']:+.0f}% vs the {ramp['basis']}.",
                 ["volume.ramp"],
             )
 
@@ -636,6 +647,11 @@ def _flags(digest: dict) -> list[dict]:
     return flags
 
 
+# Bump when the digest's rules or units change (v2: moving-time load and ramp, decoupling gate),
+# so a cached readout written under the old rules is neither shown nor handed to the coach.
+DIGEST_VERSION = 2
+
+
 def digest_fingerprint(
     rows: list[dict],
     mode: str,
@@ -652,6 +668,7 @@ def digest_fingerprint(
     dates = [r.get("date") or "" for r in rows]
     iso = today.isocalendar()
     payload = [
+        DIGEST_VERSION,
         mode,
         UnitSystem.parse(units).value,
         len(rows),
@@ -781,8 +798,12 @@ def build_insights_prompt(digest: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM)
         if up["race_dates"]:
             lines.append("Race dates: " + ", ".join(up["race_dates"]))
         for w in up["weeks"]:
-            ramp = "" if w["ramp_pct"] is None else f" ({w['ramp_pct']:+.0f}% vs prior 4-wk avg)"
-            lines.append(f"Week of {w['week_start']}: {w['volume']:.1f} planned{ramp}")
+            ramp = (
+                ""
+                if w["ramp_pct"] is None
+                else f" ({w['ramp_pct']:+.0f}% vs the {w['baseline_basis']})"
+            )
+            lines.append(f"Week of {w['week_start']}: {w['volume']:.1f} h planned{ramp}")
         lines += [f"- Plan issue: {c['detail']}" for c in up["conflicts"]]
     if digest["missing"]:
         lines += ["", "Unavailable (not enough data): " + ", ".join(digest["missing"])]

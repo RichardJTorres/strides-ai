@@ -42,6 +42,8 @@ interface Activity {
   analysis_summary: string | null;
   analysis_status: string | null;
   cardiac_decoupling_pct: number | null;
+  // Set (with the value nulled) when the stored value is not a valid drift signal; see decoupling.py.
+  decoupling_na_reason?: "cycling" | "hilly" | "short" | null;
   effort_efficiency_score: number | null;
   effort_efficiency_raw: number | null;
   hr_zone_1_pct: number | null;
@@ -199,6 +201,13 @@ function EfficiencyBadge({ val }: { val: number | null }) {
 }
 
 /** Single metric tile for the panel grid. */
+// Mirrors decoupling.NA_LABELS (short form for the tile).
+const DECOUPLING_NA_TEXT = {
+  cycling: "Speed-based drift is unreliable for cycling",
+  hilly: "Hilly course: speed reflects terrain",
+  short: "Under 20 minutes",
+} as const;
+
 function MetricTile({
   label,
   value,
@@ -987,6 +996,13 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced, routePar
                         value={`${selectedActivity.cardiac_decoupling_pct.toFixed(1)}%`}
                         sub={selectedActivity.cardiac_decoupling_pct < 5 ? "Excellent" : selectedActivity.cardiac_decoupling_pct < 10 ? "Moderate stress" : "High drift"}
                         color={cdColor(selectedActivity.cardiac_decoupling_pct)}
+                      />
+                    )}
+                    {selectedActivity.cardiac_decoupling_pct === null && selectedActivity.decoupling_na_reason && (
+                      <MetricTile
+                        label="Cardiac Decoupling"
+                        value="n/a"
+                        sub={DECOUPLING_NA_TEXT[selectedActivity.decoupling_na_reason]}
                       />
                     )}
                     {selectedActivity.effort_efficiency_score !== null && (

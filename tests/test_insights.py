@@ -95,6 +95,16 @@ def test_ramp_flag_fires_on_big_last_week():
     assert "ramp_high" in {f["id"] for f in digest["flags"]}
 
 
+def test_ramp_is_time_based_and_names_its_baseline():
+    # A 200 km, one-minute "activity" in the last full week: distance spikes, hours do not.
+    rows = steady_rows() + [run_row(700, date(2026, 5, 26), moving_time_s=60, distance_m=200_000.0)]
+    digest = build_digest(rows, "running", UnitSystem.METRIC, TODAY)
+    ramp = metric(digest, "volume.ramp")
+    assert ramp["formatted"].endswith(" h")
+    assert ramp["basis"] in ("4-week average", "8-week median")
+    assert "ramp_high" not in {f["id"] for f in digest["flags"]}
+
+
 def test_gap_flag_and_none_metrics_omitted():
     rows = [r for r in steady_rows() if r["date"] < "2026-05-20"]
     digest = build_digest(rows, "running", UnitSystem.METRIC, TODAY)
@@ -241,3 +251,12 @@ def test_upcoming_context_flags_and_recommendation_filter():
     recs = parse_insights_response(text, digest)["recommendations"]
     assert [r["action"] for r in recs] == ["Run easy Saturday", "Hydrate"]
     assert recs[1]["date"] is None
+
+
+def test_changing_the_digest_rules_invalidates_cached_readouts(monkeypatch):
+    from strides_ai import insights
+
+    rows = steady_rows()
+    before = insights.digest_fingerprint(rows, "running", UnitSystem.METRIC, TODAY)
+    monkeypatch.setattr(insights, "DIGEST_VERSION", insights.DIGEST_VERSION + 1)
+    assert insights.digest_fingerprint(rows, "running", UnitSystem.METRIC, TODAY) != before

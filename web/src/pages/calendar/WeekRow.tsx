@@ -16,8 +16,8 @@ export default function WeekRow({ weekCells, grid }: { weekCells: GridCell[]; gr
   const lives = weekLives(weekCompliance.missed, grid.maxMisses ?? 0);
   const showLives = grid.maxMisses !== null && weekPlannedWorkouts > 0 && (weekCompliance.missed > 0 || weekCells.some(c => c.dateStr === grid.todayStr));
 
-  // Ramp vs the prior 4-week average for this row's week. Past weeks have no entry (the backend
-  // only returns the current and upcoming weeks).
+  // Ramp in moving time vs the athlete's typical week (the smaller of the 4-week average and the
+  // 8-week median). Past weeks have no entry (the backend only returns the current and upcoming weeks).
   const rampChip = (weekCells: GridCell[]) => {
     // The ramp belongs to the Monday-Sunday week, so use the row's Monday (a Sunday-first row
     // has it in its second column).
@@ -27,7 +27,10 @@ export default function WeekRow({ weekCells, grid }: { weekCells: GridCell[]; gr
     const t = trainingState.thresholds;
     const color =
       w.ramp_pct > t.ramp_high ? "text-red-400" : w.ramp_pct > t.ramp_elevated ? "text-amber-400" : "text-gray-500";
-    const title = w.flags.length ? w.flags.join(", ").replace(/_/g, " ") : "vs prior 4-week average";
+    const basis = w.baseline !== null && w.baseline_basis
+      ? `Moving time vs the ${w.baseline_basis} (${w.baseline.toFixed(1)} h)`
+      : "Moving time vs recent weeks";
+    const title = w.flags.length ? `${basis}: ${w.flags.join(", ").replace(/_/g, " ")}` : basis;
     return (
       <div className={`text-[10px] ${color}`} title={title}>
         {w.ramp_pct > 0 ? "+" : ""}{Math.round(w.ramp_pct)}% ramp{w.flags.includes("no_recovery_week") ? " ⚠" : ""}

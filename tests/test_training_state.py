@@ -40,11 +40,12 @@ def steady_rows(km: float = 10.0) -> list[dict]:
     return rows
 
 
-def plan(d: date, km: float | None, wtype: str = "Easy Run", intensity: str | None = "easy"):
+def plan(d: date, minutes: float | None, wtype: str = "Easy Run", intensity: str | None = "easy"):
     return {
         "date": d.isoformat(),
         "workout_type": wtype,
-        "distance_km": km,
+        "distance_km": None,  # load ignores distance: only the planned duration counts
+        "duration_min": minutes,
         "intensity": intensity,
     }
 
@@ -64,29 +65,46 @@ def test_load_is_none_under_28_days_of_history():
 def test_current_load_matches_analytics_chart():
     s = state()
     last = cardio.compute_atl_ctl(to_cardio_analytics(steady_rows()), "km", TODAY).data[-1]
+    assert last.ctl > 0
     assert s.load == {"ctl": last.ctl, "atl": last.atl, "ratio": last.ratio}
 
 
 def test_projection_follows_planned_volume():
     rest = state()
-    hard = state(plan_rows=[plan(TODAY + timedelta(days=i), 30.0) for i in range(1, 6)])
+    hard = state(plan_rows=[plan(TODAY + timedelta(days=i), 180.0) for i in range(1, 6)])
     assert hard.projection[4]["atl"] > rest.projection[4]["atl"]
-    assert hard.projection[0]["planned"] == pytest.approx(30.0)
+    assert hard.projection[0]["planned"] == pytest.approx(3.0)  # 180 min = 3 h
     assert len(rest.projection) == 28
 
 
 def test_deterministic():
-    plan_rows = [plan(TODAY + timedelta(days=2), 12.0)]
+    plan_rows = [plan(TODAY + timedelta(days=2), 72.0)]
     assert state(plan_rows=plan_rows).to_dict() == state(plan_rows=plan_rows).to_dict()
 
 
-def test_units_parity_planned_values():
-    plan_rows = [plan(TODAY + timedelta(days=1), 16.0934)]
+def test_load_is_the_same_in_every_unit_system_and_reported_in_hours():
+    plan_rows = [plan(TODAY + timedelta(days=1), 90.0)]
     metric = state(plan_rows=plan_rows)
     imperial = state(plan_rows=plan_rows, units=UnitSystem.IMPERIAL)
-    assert metric.projection[0]["planned"] == pytest.approx(16.09, abs=0.01)
-    assert imperial.projection[0]["planned"] == pytest.approx(10.0, abs=0.01)
-    assert imperial.unit == "miles"
+    assert metric.to_dict() == imperial.to_dict()
+    assert metric.unit == "h"
+    assert metric.projection[0]["planned"] == pytest.approx(1.5)
+
+
+def test_distance_alone_does_not_count_as_load():
+    row = {**plan(TODAY + timedelta(days=1), None), "distance_km": 40.0}
+    s = state(plan_rows=[row])
+    assert s.projection[0]["planned"] == 0
+    assert s.unscored_planned == [(TODAY + timedelta(days=1)).isoformat()]
+
+
+def test_race_counts_by_goal_time_and_unscored_without_one():
+    day = TODAY + timedelta(days=3)
+    race = {**plan(day, None, "Running Race", "hard"), "kind": "race", "goal_time_s": 5400}
+    assert state(plan_rows=[race]).projection[2]["planned"] == pytest.approx(1.5)
+    no_goal = {**race, "goal_time_s": None}
+    s = state(plan_rows=[no_goal])
+    assert s.projection[2]["planned"] == 0 and s.unscored_planned == [day.isoformat()]
 
 
 def test_volume_less_planned_workouts_are_listed_not_guessed():
@@ -97,16 +115,16 @@ def test_volume_less_planned_workouts_are_listed_not_guessed():
 
 def test_rest_and_other_sport_do_not_count_in_running_mode():
     rows = [
-        plan(TODAY + timedelta(days=1), 50.0, "Rest", "rest"),
-        plan(TODAY + timedelta(days=2), 80.0, "Long Ride"),
+        plan(TODAY + timedelta(days=1), 300.0, "Rest", "rest"),
+        plan(TODAY + timedelta(days=2), 480.0, "Long Ride"),
     ]
     s = state(plan_rows=rows)
     assert all(p["planned"] == 0 for p in s.projection[:3])
-    assert state(plan_rows=rows, mode="cycling").projection[1]["planned"] == pytest.approx(80.0)
+    assert state(plan_rows=rows, mode="cycling").projection[1]["planned"] == pytest.approx(8.0)
 
 
 def test_big_planned_week_flags_ramp_and_ratio():
-    rows = [plan(TODAY + timedelta(days=i), 40.0) for i in range(1, 8)]
+    rows = [plan(TODAY + timedelta(days=i), 240.0) for i in range(1, 8)]
     s = state(plan_rows=rows)
     kinds = {c["kind"] for c in s.conflicts}
     assert "ramp_high" in kinds
@@ -121,8 +139,8 @@ def test_conflicts_on_blocked_and_race_days():
         "races": [{"date": race.isoformat(), "name": "10K"}],
     }
     rows = [
-        plan(blocked, 8.0),
-        plan(race, 8.0, "Tempo Run"),
+        plan(blocked, 45.0),
+        plan(race, 90.0, "Tempo Run"),  # longer than a shakeout
         plan(race + timedelta(days=1), 0, "Rest", "rest"),
     ]
     s = state(plan_rows=rows, prefs=prefs)
@@ -134,15 +152,15 @@ def test_conflicts_on_blocked_and_race_days():
 def test_race_workout_on_race_day_is_not_a_conflict():
     race = TODAY + timedelta(days=5)
     prefs = {"races": [{"date": race.isoformat(), "name": "10K"}]}
-    s = state(plan_rows=[plan(race, 10.0, "Running Race", "hard")], prefs=prefs)
+    s = state(plan_rows=[plan(race, 60.0, "Running Race", "hard")], prefs=prefs)
     assert not [c for c in s.conflicts if c["kind"] == "race_day"]
 
 
 def test_recovery_week_flag_after_rising_weeks():
     rows = []
-    for w, km in enumerate([40, 50, 60, 70]):
+    for w, minutes in enumerate([240, 300, 360, 420]):
         monday = TODAY - timedelta(days=TODAY.weekday()) + timedelta(weeks=w + 1)
-        rows.append(plan(monday + timedelta(days=4), float(km)))
+        rows.append(plan(monday + timedelta(days=4), float(minutes)))
     flagged = [wk for wk in state(plan_rows=rows).weeks if "no_recovery_week" in wk["flags"]]
     assert flagged
 
@@ -151,7 +169,7 @@ def test_check_plan_changes_rejects_blocked_and_race_days():
     blocked = TODAY + timedelta(days=2)
     prefs = {"blocked_days": [blocked.isoformat()]}
     changes = {
-        "create": [{"date": blocked.isoformat(), "workout_type": "Easy Run", "distance_km": 5}]
+        "create": [{"date": blocked.isoformat(), "workout_type": "Easy Run", "duration_min": 30}]
     }
     out = check_plan_changes(steady_rows(), [], prefs, "running", UnitSystem.METRIC, TODAY, changes)
     assert [(v.kind, v.hard) for v in out] == [("blocked_day", True)]
@@ -177,7 +195,7 @@ def test_check_plan_changes_warns_on_new_ramp_but_not_existing():
             {
                 "date": (TODAY + timedelta(days=i)).isoformat(),
                 "workout_type": "Easy Run",
-                "distance_km": 40.0,
+                "duration_min": 240.0,
             }
             for i in range(1, 8)
         ]
@@ -224,7 +242,16 @@ def test_tool_rejects_blocked_day_without_saving(mocker):
     day = date.today() + timedelta(days=2)
     (summary, changes), save = _exec_plan(
         mocker,
-        {"set": [{"date": day.isoformat(), "workout_type": "Easy Run", "distance": 5}]},
+        {
+            "set": [
+                {
+                    "date": day.isoformat(),
+                    "workout_type": "Easy Run",
+                    "distance": 5,
+                    "distance_unit": "km",
+                }
+            ]
+        },
         prefs={"blocked_days": [day.isoformat()]},
     )
     assert summary.startswith("Rejected")
@@ -237,7 +264,17 @@ def test_tool_saves_but_warns_on_overload(mocker):
     # the prefs check above; here the history is stale, so no load exists and nothing warns.
     day = date.today() + timedelta(days=2)
     (summary, changes), save = _exec_plan(
-        mocker, {"set": [{"date": day.isoformat(), "workout_type": "Easy Run", "distance": 5}]}
+        mocker,
+        {
+            "set": [
+                {
+                    "date": day.isoformat(),
+                    "workout_type": "Easy Run",
+                    "distance": 5,
+                    "distance_unit": "km",
+                }
+            ]
+        },
     )
     assert summary.startswith("Created 1 entr") and "[id 101]" in summary
     save.assert_called_once()
@@ -273,7 +310,7 @@ def test_tool_update_by_id_sends_only_the_given_fields(mocker):
     existing = [{"id": 5, "kind": "workout", "date": day, "workout_type": "Long Ride"}]
     (summary, _), ops = _ops_sent(mocker, {"set": [{"id": 5, "duration_min": 90}]}, existing)
     assert ops == [{"op": "update", "id": 5, "duration_min": 90}]
-    assert "Updated 1" in summary and "[id 5]" in summary
+    assert "Updated (now) 1 entry" in summary and "[id 5]" in summary
 
 
 def test_tool_rejects_unknown_entry_id(mocker):
@@ -327,11 +364,13 @@ def test_recovery_streak_spanning_history_into_plan_is_flagged():
     # Three rising actual weeks before this one, then a higher planned current week.
     rows, i = [], 1
     monday = TODAY - timedelta(days=TODAY.weekday())
-    for w, km in ((4, 10), (3, 15), (2, 20), (1, 25)):
-        rows.append(run_row(i, monday - timedelta(weeks=w) + timedelta(days=1), km))
-        i += 1
+    for w, hours in ((4, 1), (3, 2), (2, 3), (1, 4)):
+        # run_row is a 1-hour run; the week's rising volume is `hours` runs on separate days
+        for k in range(hours):
+            rows.append(run_row(i, monday - timedelta(weeks=w) + timedelta(days=k), 10))
+            i += 1
     rows += [r for r in steady_rows() if r["date"] < (monday - timedelta(weeks=5)).isoformat()]
-    plan_rows = [plan(monday + timedelta(days=4), 40.0)]
+    plan_rows = [plan(monday + timedelta(days=4), 360.0)]
     current = state(rows=rows, plan_rows=plan_rows).weeks[0]
     assert current["is_current"] and "no_recovery_week" in current["flags"]
 
@@ -344,7 +383,7 @@ def test_tool_validation_is_scoped_to_the_active_mode(mocker):
     ride = {**run_row(1, TODAY - timedelta(days=40), 200.0), "sport_type": "Ride"}
     for name, ret in (
         ("get_all_activities", [ride]),
-        ("get_training_plan", []),
+        ("get_training_plan", [{"id": 12345, "date": "2030-01-01", "kind": "workout"}]),
         ("get_calendar_prefs", {}),
         ("get_unit_system", UnitSystem.METRIC),
     ):
@@ -362,7 +401,7 @@ def test_tool_validation_is_scoped_to_the_active_mode(mocker):
         ),
         {"delete": [12345]},
     )
-    assert seen == {"rows": [], "mode": "running"}  # the ride never reaches running load
+    assert seen["rows"] == [] and seen["mode"] == "running"  # the ride never reaches running load
 
 
 def test_tool_notes_edit_does_not_rename_a_race(mocker):
@@ -374,3 +413,88 @@ def test_tool_notes_edit_does_not_rename_a_race(mocker):
         mocker, {"set": [{"id": 5, "description": "Taper week, bring gels"}]}, existing
     )
     assert ops == [{"op": "update", "id": 5, "notes": "Taper week, bring gels"}]
+
+
+# ── ramp baselines: the smaller of the 4-week mean and the 8-week median ────────────
+
+
+def weekly_hours_rows(hours_by_weeks_ago: dict[int, float]) -> list[dict]:
+    """One activity per listed past week (Monday), `hours` long. Weeks ago 1 = last week."""
+    monday = TODAY - timedelta(days=TODAY.weekday())
+    rows = []
+    for i, (ago, hours) in enumerate(sorted(hours_by_weeks_ago.items()), start=1):
+        d = monday - timedelta(weeks=ago)
+        rows.append({**run_row(i, d), "moving_time_s": int(hours * 3600)})
+    return rows
+
+
+def current_week(rows, hours_planned: float) -> dict:
+    """The current week's state when `hours_planned` is planned on Saturday."""
+    saturday = TODAY + timedelta(days=3)
+    plan_rows = [plan(saturday, hours_planned * 60)]
+    return state(rows=rows, plan_rows=plan_rows).weeks[0]
+
+
+def test_real_sep_nov_weeks_a_travel_dip_does_not_make_a_normal_build_a_danger_ramp():
+    # The athlete's actual weekly moving hours before the week of 2026-11-16, oldest first:
+    # 9.0, 3.8, 8.0, 7.9, 4.5, 9.2, then travel weeks of 0.6 and 3.7, then 6.5.
+    history = [9.0, 3.8, 8.0, 7.9, 4.5, 9.2, 0.6, 3.7, 6.5]
+    ago = {len(history) - i: h for i, h in enumerate(history)}  # weeks ago, 9 .. 1
+    week = current_week(weekly_hours_rows(ago), 6.75)
+    mean4 = (9.2 + 0.6 + 3.7 + 6.5) / 4  # 5.0: the baseline the distance model scolded against
+    assert week["baseline_basis"] == "8-week median"
+    assert week["baseline"] == pytest.approx(5.5)  # median of 3.8 8.0 7.9 4.5 9.2 0.6 3.7 6.5
+    assert week["ramp_pct"] == pytest.approx(22.7, abs=0.1)
+    assert week["ramp_pct"] < 100 * (6.75 - mean4) / mean4  # smaller than the 4-week-mean ramp
+    assert state(rows=weekly_hours_rows(ago)).typical_week == {
+        "median": 5.5,
+        "low": 0.6,
+        "high": 9.2,
+        "weeks": 8,
+    }
+
+
+def test_median_is_not_dragged_down_by_two_deload_weeks():
+    ago = {8: 5, 7: 5, 6: 5, 5: 5, 4: 5, 3: 5, 2: 0.5, 1: 0.5}
+    week = current_week(weekly_hours_rows(ago), 7.0)
+    assert week["baseline_basis"] == "8-week median" and week["baseline"] == pytest.approx(5.0)
+    assert week["ramp_pct"] == pytest.approx(40.0)  # the 4-week mean (2.75 h) would say +155%
+
+
+def test_week_is_flagged_only_when_high_against_both_baselines():
+    # The last 4 weeks are the athlete's biggest (mean 8 h, median of 8 is 6.5 h). 10 h is +25%
+    # on the mean but +54% on the median; the smaller ramp (the mean's) is the one reported.
+    ago = {8: 4, 7: 5, 6: 5, 5: 5, 4: 8, 3: 8, 2: 8, 1: 8}
+    week = current_week(weekly_hours_rows(ago), 10.0)
+    assert week["baseline_basis"] == "4-week average" and week["ramp_pct"] == pytest.approx(25.0)
+    # 9 h: +12.5% on the mean, below the 15% limit, even though it is +38% on the median.
+    low = current_week(weekly_hours_rows(ago), 9.0)
+    assert low["ramp_pct"] == pytest.approx(12.5) and "ramp_high" not in low["flags"]
+
+
+def test_short_history_falls_back_to_the_four_week_mean_and_has_no_typical_week():
+    ago = {5: 5, 4: 5, 3: 5, 2: 5, 1: 5}  # only five weeks of history: median needs six
+    s = state(rows=weekly_hours_rows(ago), plan_rows=[plan(TODAY + timedelta(days=3), 360.0)])
+    week = s.weeks[0]
+    assert week["baseline_basis"] == "4-week average" and week["ramp_pct"] == pytest.approx(20.0)
+    assert s.typical_week is None
+
+
+def test_under_four_weeks_of_history_has_no_ramp_instead_of_a_zero_padded_one():
+    rows = weekly_hours_rows({3: 5, 2: 5, 1: 5})
+    # Weeks before the first activity are "no data", never zero weeks that would pad a baseline.
+    week = state(rows=rows, plan_rows=[plan(TODAY + timedelta(days=3), 360.0)]).weeks[0]
+    assert week["ramp_pct"] is None and week["baseline"] is None
+
+
+def test_prompt_names_the_baseline_and_the_typical_week_and_calls_the_flags_advisory():
+    from strides_ai.training_state import render_for_prompt
+
+    ago = {i: 5.0 for i in range(1, 9)}
+    s = state(rows=weekly_hours_rows(ago), plan_rows=[plan(TODAY + timedelta(days=3), 420.0)])
+    text = render_for_prompt(s, UnitSystem.IMPERIAL)
+    assert "load = moving time" in text and "not an estimate" not in text
+    assert "Typical week (the previous 8 completed weeks): median 5.0 h" in text
+    assert "vs the 8-week median (5.0 h)" in text
+    assert "screening heuristics, not injury predictions" in text
+    assert "mi/day" not in text and "km/day" not in text

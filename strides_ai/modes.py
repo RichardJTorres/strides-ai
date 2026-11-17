@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .db.models import CYCLE_TYPES, LIFT_TYPES, RUN_TYPES
+from .dates import fmt_day
+from .decoupling import gate_decoupling
 from .units import (
     DEFAULT_UNIT_SYSTEM,
     Quantity,
@@ -28,7 +30,18 @@ from .units import (
 
 # ── System prompts ─────────────────────────────────────────────────────────────
 
-RUNNING_SYSTEM_PROMPT = """\
+# The prompt lists only recent activities and summarizes older ones, so a "no" or a superlative
+# from memory is a guess. The lookup tools (lookup_tools.py) exist to replace the guess.
+LOOKUP_RULE = (
+    "The recent activities and weekly summaries in this prompt are not the athlete's whole "
+    "history. Before you say you cannot find, compare or recall an activity, week or calendar "
+    "entry, look it up with search_activities, get_weekly_totals or get_calendar. Never call "
+    "something the longest, biggest, fastest, first, best or never without querying for it "
+    "(search_activities can sort by distance, elevation or duration). If a lookup finds nothing, "
+    "say what you searched."
+)
+
+RUNNING_SYSTEM_PROMPT = f"""\
 You are an experienced, data-driven running coach with access to the athlete's \
 provided recent activity details and historical aggregates. Your role is to:
 
@@ -47,8 +60,7 @@ defaults based on run distance and intensity.
 strength sessions, etc.) so you can assess total training load, cross-training, \
 and recovery. Your coaching focus and advice remains on running.
 
-Only the included recent activities and labeled historical aggregates are available. \
-Do not claim access to individual excluded workouts.
+{LOOKUP_RULE}
 
 **Memory:** Use the save_memory tool proactively whenever the athlete mentions \
 goals, upcoming races, injuries, preferences, or any key context that should \
@@ -57,7 +69,7 @@ page (goals, injuries, availability, max heart rate, personal bests, gear), use 
 update_profile instead: it asks the athlete to confirm the change.\
 """
 
-CYCLING_SYSTEM_PROMPT = """\
+CYCLING_SYSTEM_PROMPT = f"""\
 You are an experienced, data-driven cycling coach with access to the athlete's \
 provided recent activity details and historical aggregates. Your role is to:
 
@@ -76,8 +88,7 @@ defaults based on ride duration and intensity.
 strength sessions, etc.) so you can assess total training load and recovery. \
 Your coaching focus and advice remains on cycling.
 
-Only the included recent activities and labeled historical aggregates are available. \
-Do not claim access to individual excluded workouts.
+{LOOKUP_RULE}
 
 **Memory:** Use the save_memory tool proactively whenever the athlete mentions \
 goals, upcoming events, injuries, preferences, or any key context that should \
@@ -86,7 +97,7 @@ page (goals, injuries, availability, max heart rate, personal bests, gear), use 
 update_profile instead: it asks the athlete to confirm the change.\
 """
 
-HYBRID_SYSTEM_PROMPT = """\
+HYBRID_SYSTEM_PROMPT = f"""\
 You are an experienced, data-driven multisport coach with access to the athlete's \
 provided recent activity details and historical aggregates for running and cycling. Your role is to:
 
@@ -101,8 +112,7 @@ sport type, and key metrics.
 preferred snacks in their profile, choose from those; otherwise use sensible \
 defaults based on activity duration and intensity.
 
-Only the included recent activities and labeled historical aggregates are available. \
-Do not claim access to individual excluded workouts.
+{LOOKUP_RULE}
 
 **Memory:** Use the save_memory tool proactively whenever the athlete mentions \
 goals, upcoming events, injuries, preferences, or any key context that should \
@@ -111,7 +121,7 @@ page (goals, injuries, availability, max heart rate, personal bests, gear), use 
 update_profile instead: it asks the athlete to confirm the change.\
 """
 
-LIFTING_SYSTEM_PROMPT = """\
+LIFTING_SYSTEM_PROMPT = f"""\
 You are an experienced, data-driven strength and conditioning coach with access to the athlete's \
 provided recent strength activity details and historical aggregates. Your role is to:
 
@@ -128,8 +138,7 @@ note it is an estimate.
 runs, walks, rides, etc.) so you can assess total training load and recovery. \
 Your coaching focus and advice remains on strength training.
 
-Only the included recent activities and labeled historical aggregates are available. \
-Do not claim access to individual excluded workouts.
+{LOOKUP_RULE}
 
 **Memory:** Use the save_memory tool proactively whenever the athlete mentions \
 goals, upcoming competitions, injuries, preferences, or any key context that should \
@@ -162,6 +171,42 @@ def _summary(r: dict, units: UnitSystem) -> str:
     return (render_analysis_summary(r, units) or "")[:60]
 
 
+def _signed(value: float | None, qty: Quantity, units: UnitSystem) -> str:
+    shown = convert(value, qty, units)
+    return "—" if shown is None else f"{shown:+.0f}"
+
+
+def _pct(*parts: float | None) -> str:
+    """Sum of HR-zone shares as a whole percent; "—" unless every share is known."""
+    return "—" if any(p is None for p in parts) else f"{sum(parts):.0f}"
+
+
+def _analysis_columns(r: dict, units: UnitSystem) -> str:
+    """The compact analysis columns of a cardio log row (legend: coach._analysis_guide_section).
+
+    Replaces a natural-language summary that was cut to 60 characters, which dropped fade,
+    decoupling and terrain from the table. Decoupling reads "n/a" when the stored value is not a
+    valid drift signal (see decoupling.py) and "—" when there is no value at all.
+    """
+    r = gate_decoupling(r)
+    if r.get("cardiac_decoupling_pct") is not None:
+        decoupling = f"{r['cardiac_decoupling_pct']:.1f}"
+    else:
+        decoupling = "n/a" if r.get("decoupling_na_reason") else "—"
+    efficiency = r.get("effort_efficiency_score")
+    parts = [
+        f"{_num(r.get('climb_m_per_km'), Quantity.CLIMB_RATE, units, 0):>5}",
+        f"{_signed(r.get('pace_fade_s_per_km'), Quantity.PACE_DELTA, units):>5}",
+        f"{decoupling:>6}",
+        f"{_pct(r.get('hr_zone_1_pct'), r.get('hr_zone_2_pct')):>5}",
+        f"{_pct(r.get('hr_zone_4_pct'), r.get('hr_zone_5_pct')):>5}",
+        f"{'—' if efficiency is None else f'{efficiency:.0f}':>3}",
+    ]
+    if r.get("suffer_score_mismatch_flag"):
+        parts.append("HR?")
+    return " | ".join(parts)
+
+
 def _format_duration(seconds: int | None) -> str:
     if seconds is None:
         return "—"
@@ -177,9 +222,9 @@ def _format_duration(seconds: int | None) -> str:
 
 def _running_log_row(r: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
     dist = _num(r["distance_m"] or 0, Quantity.DISTANCE, units, 2)
-    analysis = _summary(r, units)
+    analysis = _analysis_columns(r, units)
     return (
-        f"{r['date'] or '?':10s} | "
+        f"{fmt_day(r['date']):14s} | "
         f"{(r['name'] or '')[:30]:30s} | "
         f"{dist:>8} | "
         f"{_format_duration(r['moving_time_s']):8s} | "
@@ -196,9 +241,9 @@ def _running_log_row(r: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
 
 def _cycling_log_row(r: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
     dist = _num(r["distance_m"] or 0, Quantity.DISTANCE, units, 2)
-    analysis = _summary(r, units)
+    analysis = _analysis_columns(r, units)
     return (
-        f"{r['date'] or '?':10s} | "
+        f"{fmt_day(r['date']):14s} | "
         f"{(r['name'] or '')[:30]:30s} | "
         f"{dist:>8} | "
         f"{_format_duration(r['moving_time_s']):8s} | "
@@ -222,9 +267,9 @@ def _hybrid_log_row(r: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
         if is_run
         else _format_speed(r["avg_pace_s_per_km"], units)
     )
-    analysis = _summary(r, units)
+    analysis = _analysis_columns(r, units)
     return (
-        f"{r['date'] or '?':10s} | "
+        f"{fmt_day(r['date']):14s} | "
         f"{sport[:10]:10s} | "
         f"{(r['name'] or '')[:30]:30s} | "
         f"{dist:>8} | "
@@ -243,7 +288,7 @@ def _hybrid_log_row(r: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
 def _lifting_log_row(r: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
     analysis = _summary(r, units)
     return (
-        f"{r['date'] or '?':10s} | "
+        f"{fmt_day(r['date']):14s} | "
         f"{(r['name'] or '')[:30]:30s} | "
         f"{_format_duration(r['moving_time_s']):8s} | "
         f"{r['total_sets'] or '—':4} | "
@@ -256,7 +301,12 @@ def _lifting_log_row(r: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
 def _make_cardio_total(label: str) -> Callable[[list[dict], UnitSystem], str]:
     def total(rows: list[dict], units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
         total_m = sum((r["distance_m"] or 0) for r in rows)
-        return f"Total: {len(rows)} {label}, {format_value(total_m, Quantity.DISTANCE, units, decimals=1)}"
+        dates = sorted(str(r["date"])[:10] for r in rows if r.get("date"))
+        span = f" between {dates[0]} and {dates[-1]} (the rows above only)" if dates else ""
+        return (
+            f"Total: {len(rows)} {label}, "
+            f"{format_value(total_m, Quantity.DISTANCE, units, decimals=1)}{span}"
+        )
 
     return total
 
@@ -280,7 +330,7 @@ class ModeConfig:
     has_analysis: bool  # whether to inject the cardio metrics guide
     hidden_tabs: frozenset[str]  # frontend tabs to hide for this mode
     activity_label: str  # "runs", "rides", "sessions", "activities"
-    log_header_template: str  # column header row; {dist}/{elev}/{mass} are unit placeholders
+    log_header_template: str  # column header row; {dist}/{elev}/{mass}/{climb}/{fade} are units
     log_sep_len: int  # length of the separator line
     format_log_row: Callable[[dict, UnitSystem], str]
     format_log_total: Callable[[list[dict], UnitSystem], str]
@@ -290,6 +340,8 @@ class ModeConfig:
             dist=f"DIST({unit_label(Quantity.DISTANCE, units)})",
             elev=f"ELEV({unit_label(Quantity.ELEVATION, units)})",
             mass=f"VOLUME({unit_label(Quantity.MASS, units)})",
+            climb=f"CLIMB({unit_label(Quantity.CLIMB_RATE, units)})",
+            fade=f"FADE({unit_label(Quantity.PACE_DELTA, units)})",
         )
 
 
@@ -302,10 +354,11 @@ MODES: dict[str, ModeConfig] = {
         hidden_tabs=frozenset(),
         activity_label="runs",
         log_header_template=(
-            "DATE       | NAME                           | {dist:8} | DURATION | PACE     "
-            "| AVG HR | MAX HR | CADENCE(spm) | {elev:7} | SUFFER | RPE | ANALYSIS"
+            "DATE           | NAME                           | {dist:8} | DURATION | PACE     "
+            "| AVG HR | MAX HR | CADENCE(spm) | {elev:7} | SUFFER | RPE "
+            "| {climb} | {fade} | DECPL% | Z1-2% | Z4-5% | EFF | HR?"
         ),
-        log_sep_len=200,
+        log_sep_len=250,
         format_log_row=_running_log_row,
         format_log_total=_make_cardio_total("runs"),
     ),
@@ -317,10 +370,11 @@ MODES: dict[str, ModeConfig] = {
         hidden_tabs=frozenset(),
         activity_label="rides",
         log_header_template=(
-            "DATE       | NAME                           | {dist:8} | DURATION | SPEED     "
-            "| AVG HR | MAX HR | CADENCE(rpm) | {elev:7} | SUFFER | RPE | ANALYSIS"
+            "DATE           | NAME                           | {dist:8} | DURATION | SPEED     "
+            "| AVG HR | MAX HR | CADENCE(rpm) | {elev:7} | SUFFER | RPE "
+            "| {climb} | {fade} | DECPL% | Z1-2% | Z4-5% | EFF | HR?"
         ),
-        log_sep_len=200,
+        log_sep_len=250,
         format_log_row=_cycling_log_row,
         format_log_total=_make_cardio_total("rides"),
     ),
@@ -332,10 +386,11 @@ MODES: dict[str, ModeConfig] = {
         hidden_tabs=frozenset(),
         activity_label="activities",
         log_header_template=(
-            "DATE       | TYPE       | NAME                           | {dist:8} | DURATION "
-            "| PACE/SPEED  | AVG HR | MAX HR | CADENCE | {elev:7} | SUFFER | RPE | ANALYSIS"
+            "DATE           | TYPE       | NAME                           | {dist:8} | DURATION "
+            "| PACE/SPEED  | AVG HR | MAX HR | CADENCE | {elev:7} | SUFFER | RPE "
+            "| {climb} | {fade} | DECPL% | Z1-2% | Z4-5% | EFF | HR?"
         ),
-        log_sep_len=215,
+        log_sep_len=265,
         format_log_row=_hybrid_log_row,
         format_log_total=_make_cardio_total("activities"),
     ),
@@ -347,9 +402,9 @@ MODES: dict[str, ModeConfig] = {
         hidden_tabs=frozenset({"calendar"}),
         activity_label="sessions",
         log_header_template=(
-            "DATE       | NAME                           | DURATION | SETS | {mass:10} | RPE | ANALYSIS"
+            "DATE           | NAME                           | DURATION | SETS | {mass:10} | RPE | ANALYSIS"
         ),
-        log_sep_len=140,
+        log_sep_len=144,
         format_log_row=_lifting_log_row,
         format_log_total=_lifting_log_total,
     ),

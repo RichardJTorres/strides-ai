@@ -10,7 +10,7 @@ export default function LoadStrip({ state }: { state: TrainingState }) {
     : ratio > t.acwr_high ? { label: "High fatigue", color: "text-red-400" }
     : ratio < t.acwr_low ? { label: "Fresh / detraining", color: "text-gray-400" }
     : { label: "Optimal", color: "text-green-400" };
-  const ul = state.unit === "miles" ? "mi" : "km";
+  const ul = state.unit; // hours of moving time per day
   const hard = state.conflicts.filter(c => c.hard).length;
   const soft = state.conflicts.filter(c => !c.hard);
   return (

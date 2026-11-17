@@ -6,9 +6,9 @@ import statistics
 import httpx
 
 from . import db
+from .decoupling import HIGH_CLIMB_M_PER_KM, decoupling_validity, gate_decoupling, NA_LABELS
 from .units import (
     DEFAULT_UNIT_SYSTEM,
-    FEET_PER_METER,
     KM_PER_MILE,
     Quantity,
     UnitSystem,
@@ -24,8 +24,8 @@ STRAVA_STREAMS_URL = "https://www.strava.com/api/v3/activities/{id}/streams"
 STREAM_KEYS = "time,heartrate,velocity_smooth,cadence,altitude,watts"
 
 # Thresholds are stored in SI. They were originally tuned in imperial, so each is written as
-# the conversion of that original number to keep behavior identical.
-HIGH_CLIMB_M_PER_KM = 100 / (FEET_PER_METER * KM_PER_MILE)  # 100 ft/mi
+# the conversion of that original number to keep behavior identical. (HIGH_CLIMB_M_PER_KM lives
+# in `decoupling`, which needs it without importing this module.)
 PACE_FADE_NOTABLE_S_PER_KM = 15 / KM_PER_MILE  # 15 s/mi
 PACE_FADE_SPLIT_S_PER_KM = 30 / KM_PER_MILE  # 30 s/mi
 
@@ -363,6 +363,7 @@ def build_analysis_summary(metrics: dict, units: UnitSystem = DEFAULT_UNIT_SYSTE
     current unit system (see ``render_analysis_summary``).
     """
     parts = []
+    metrics = gate_decoupling(metrics)
 
     # Lead with HR zone distribution — describes the nature of the effort
     z1 = metrics.get("hr_zone_1_pct")
@@ -499,8 +500,10 @@ def _process_streams(activity: dict, streams: dict, max_hr: int = 190) -> str:
         # Sync hands us the raw Strava payload (distance, total_elevation_gain); metrics read the
         # normalized, SI-based columns (distance_m, elevation_gain_m, avg_hr, ...) from the DB.
         stored = db.get_activity(activity_id) or {}
-        metrics = compute_metrics(streams, {**activity, **stored}, max_hr=max_hr)
-        summary = build_analysis_summary(metrics)
+        activity_row = {**activity, **stored}
+        metrics = compute_metrics(streams, activity_row, max_hr=max_hr)
+        # The summary is re-rendered on read; merging the row lets it gate decoupling the same way.
+        summary = build_analysis_summary({**activity_row, **metrics})
         metrics["analysis_summary"] = summary
         metrics["analysis_status"] = "done"
 
@@ -744,9 +747,19 @@ def build_precomputed_brief(
     else:
         hr_drift_str = "-"
 
-    # Cardiac decoupling
+    # Cardiac decoupling (only where speed tracks effort; see decoupling.py)
+    climb_for_gate, _ = _elevation_metrics(activity.get("elevation_gain_m"), distance_m)
+    valid, na_reason = decoupling_validity(
+        {
+            "sport_type": sport_type,
+            "moving_time_s": activity.get("moving_time_s") or duration_s,
+            "climb_m_per_km": climb_for_gate,
+        }
+    )
     cd = _cardiac_decoupling(hr, velocity)
-    if cd is not None:
+    if cd is not None and not valid:
+        cd_str = f"n/a ({NA_LABELS[na_reason]})"
+    elif cd is not None:
         if cd < 5:
             cd_str = f"{cd:.1f}% (well-coupled — good aerobic efficiency)"
         elif cd < 10:

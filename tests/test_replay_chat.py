@@ -18,7 +18,11 @@ from tests.policy_helpers import make_backend
 
 PLAN_CALL = (
     "update_training_plan",
-    {"set": [{"date": "2026-12-01", "workout_type": "Easy Run", "distance": 5}]},
+    {
+        "set": [
+            {"date": "2026-12-01", "workout_type": "Easy Run", "distance": 5, "distance_unit": "km"}
+        ]
+    },
 )
 
 
