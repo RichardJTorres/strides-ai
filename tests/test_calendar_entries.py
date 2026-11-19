@@ -51,6 +51,18 @@ def test_one_scored_workout_per_sport_per_day(tmp_db):
     _workout("Yoga")  # unscored types are unlimited
 
 
+def test_strength_is_planned_by_time_and_shares_the_ambiguous_slot(tmp_db):
+    _workout("Strength", duration_min=45)
+    row = db.get_training_plan()[0]
+    assert row["workout_type"] == "Strength" and row["duration_min"] == 45
+    # Scored by presence, like Cross-Training and Intervals, so they share one slot per day.
+    for other in ("Cross-Training", "Intervals", "Strength"):
+        with pytest.raises(crud.EntryError, match="already has a scored ambiguous"):
+            _workout(other)
+    _workout("Easy Run", distance_km=5)  # a run is a different slot
+    assert len(db.get_training_plan()) == 2
+
+
 def test_moving_into_an_occupied_sport_slot_is_rejected(tmp_db):
     _workout("Easy Run")
     other = _create(kind="workout", workout_type="Long Run", date="2026-10-11")

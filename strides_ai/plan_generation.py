@@ -33,7 +33,8 @@ The object must have exactly these keys:
       "date"          (string, YYYY-MM-DD, required, must fall within the requested range)
       "workout_type"  (string, required, e.g. "Easy Run", "Long Run", "Tempo Run", "Easy Ride",
                         "Long Ride", "Tempo Ride", "Indoor Ride", "Intervals", "Cross-Training",
-                        "Race", "Rest")
+                        "Strength", "Race", "Rest"; a "Strength" session takes a duration_min \
+and no distance or elevation)
       "description"   (string, optional — the purpose/focus of the session)
       "distance"      (number, optional, in {distance_unit})
       "elevation"     (number, optional, elevation gain in {elevation_unit})

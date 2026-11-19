@@ -107,7 +107,7 @@ The **Calendar** tab lets you plan upcoming workouts and see how your actual tra
 
 Click any date to open the detail panel below the calendar. If no workout exists for that day, you'll see an **Add Planned Workout** form with:
 
-- **Type** — Easy Run, Long Run, Tempo Run, Intervals, Race, Cross-Training, or Rest
+- **Type** — Easy Run, Long Run, Tempo Run, Intervals, Race, Cross-Training, Strength, or Rest
 - **Distance** (km, optional)
 - **Elevation** (m, optional) — used to improve nutrition estimates for hilly workouts
 - **Duration** (minutes, optional)
