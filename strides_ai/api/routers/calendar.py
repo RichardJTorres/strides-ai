@@ -337,6 +337,10 @@ def _ops_from_body(body_ops: list[ChangeOp]) -> list[dict]:
 MAX_WHAT_IF_QUESTION_CHARS = 1000
 
 
+class _UnreadableReply(Exception):
+    """The coach answered, but not with the JSON object that was asked for."""
+
+
 @router.post("/calendar/what-if")
 async def what_if(
     body: WhatIfBody,
@@ -371,9 +375,12 @@ async def what_if(
         out["coach"] = await _coach_verdict(
             session, backend, body.question, digest, plan_rows, rows, prefs, mode, units, today
         )
+    except _UnreadableReply as exc:
+        out["coach_error"] = str(exc)
     except Exception as exc:
-        logger.warning("What-if coach verdict failed: %s", exc)
-        out["coach_error"] = str(exc) or "The coach could not be reached."
+        # The provider's own message (JSON, request ids) stays in the log; the athlete gets the cause.
+        logger.warning("What-if coach verdict failed: %s", exc, exc_info=True)
+        out["coach_error"] = f"The coach could not be reached ({type(exc).__name__})."
     return out
 
 
@@ -396,7 +403,7 @@ async def _coach_verdict(
         parsed = parse_what_if_response(text, digest)
     except (json.JSONDecodeError, TypeError) as exc:
         logger.error("What-if reply unreadable (%s); %d chars: %r", exc, len(text), text[:2000])
-        raise RuntimeError("The coach's reply could not be read. Try again.")
+        raise _UnreadableReply("The coach's reply could not be read. Try again.")
     suggested = parsed.pop("suggested")
     suggestion, rejected = (
         _review_suggestion(session, suggested, plan_rows, rows, prefs, mode, units, today)

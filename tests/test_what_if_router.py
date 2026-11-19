@@ -240,7 +240,9 @@ def test_protected_notes_reach_the_prompt_and_other_notes_do_not(tmp_db):
 def test_a_failing_coach_keeps_the_digest(tmp_db):
     _seed_history()
     out = _call([STRENGTH], llm=True, backend=_StubBackend(error=RuntimeError("provider down")))
-    assert out["coach"] is None and "provider down" in out["coach_error"]
+    assert out["coach"] is None
+    assert out["coach_error"] == "The coach could not be reached (RuntimeError)."
+    assert "provider down" not in out["coach_error"]  # the provider's text stays in the log
     assert out["digest"]["changes"][0]["counted"] is True
 
 
