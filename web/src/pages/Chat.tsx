@@ -968,7 +968,7 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
           {sendError && <p role="alert" className="text-sm text-amber-300 mb-2">{sendError}</p>}
 
           {/* Activity picker */}
-          {supportsAttachments && activityPickerOpen && (
+          {activityPickerOpen && (
             <div className="mb-2 rounded-xl border border-gray-700/60 bg-gray-800 overflow-hidden">
               <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-gray-700/60">
                 <span className="text-xs text-gray-500">{formatSyncFreshness(lastSyncAt)}</span>
@@ -1092,14 +1092,14 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
               onKeyDown={onKeyDown}
               placeholder="Message your coach…"
               disabled={streamingIndex !== null}
-              className={`block w-full resize-none rounded-2xl bg-gray-800 border border-gray-700/60 py-3.5 pr-12 sm:pr-14 text-[15px] text-gray-100 placeholder-gray-500 max-sm:placeholder:text-sm placeholder:whitespace-nowrap focus:outline-none focus:ring-1 ${theme.accentFocus} disabled:opacity-50 transition-colors leading-relaxed ${supportsAttachments ? "pl-20 sm:pl-[5.5rem]" : "px-4"}`}
+              className={`block w-full resize-none rounded-2xl bg-gray-800 border border-gray-700/60 py-3.5 pr-12 sm:pr-14 text-[15px] text-gray-100 placeholder-gray-500 max-sm:placeholder:text-sm placeholder:whitespace-nowrap focus:outline-none focus:ring-1 ${theme.accentFocus} disabled:opacity-50 transition-colors leading-relaxed ${supportsAttachments ? "pl-20 sm:pl-[5.5rem]" : "pl-12"}`}
               style={{ minHeight: MIN_INPUT_HEIGHT }}
             />
 
             {/* Left-side attach buttons — grouped in a flex row so spacing stays
-                consistent regardless of how many buttons are in it. */}
-            {supportsAttachments && (
-              <div className="absolute left-2.5 bottom-2.5 flex items-center gap-1">
+                consistent regardless of how many buttons are in it. An activity is sent as text,
+                so its button shows for every provider; files only where the provider takes them. */}
+            <div className="absolute left-2.5 bottom-2.5 flex items-center gap-1">
                 <button
                   onClick={toggleActivityPicker}
                   disabled={streamingIndex !== null}
@@ -1113,6 +1113,7 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
                   </svg>
                 </button>
 
+                {supportsAttachments && (
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   disabled={streamingIndex !== null}
@@ -1129,8 +1130,8 @@ export default function Chat({ mode, theme, supportsAttachments, lastSyncAt, onS
                     />
                   </svg>
                 </button>
+                )}
               </div>
-            )}
 
             {/* Send button */}
             <button

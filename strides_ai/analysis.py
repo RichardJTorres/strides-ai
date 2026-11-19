@@ -93,6 +93,18 @@ class RateLimitError(Exception):
     """Raised when Strava returns HTTP 429."""
 
 
+class StreamFetchError(Exception):
+    """The streams could not be fetched (network failure or an unexpected HTTP status).
+
+    Distinct from an empty result, which means the activity genuinely has no streams: treating
+    a failure as "no streams" would relabel a real activity as a manual entry.
+    """
+
+
+class StravaAuthError(StreamFetchError):
+    """Strava refused the token (401/403). Every further request would fail the same way."""
+
+
 # ── Stream fetching ───────────────────────────────────────────────────────────
 
 
@@ -102,7 +114,8 @@ def fetch_activity_streams(activity_id: int, access_token: str) -> dict[str, lis
 
     Returns a dict of stream_name -> list of values.
     Returns {} when the activity has no stream data (404).
-    Raises RateLimitError on HTTP 429.
+    Raises RateLimitError on HTTP 429, StravaAuthError on 401/403 and StreamFetchError on a
+    network failure or any other unexpected status.
     """
     url = STRAVA_STREAMS_URL.format(id=activity_id)
     headers = {"Authorization": f"Bearer {access_token}"}
@@ -112,8 +125,7 @@ def fetch_activity_streams(activity_id: int, access_token: str) -> dict[str, lis
         with httpx.Client(timeout=30) as client:
             resp = client.get(url, headers=headers, params=params)
     except Exception as exc:
-        log.warning("stream fetch error for activity %s: %s", activity_id, exc)
-        return {}
+        raise StreamFetchError(f"stream fetch error for activity {activity_id}: {exc}") from exc
 
     if resp.status_code == 429:
         raise RateLimitError(f"Rate limited fetching streams for activity {activity_id}")
@@ -121,9 +133,11 @@ def fetch_activity_streams(activity_id: int, access_token: str) -> dict[str, lis
     if resp.status_code == 404:
         return {}
 
+    if resp.status_code in (401, 403):
+        raise StravaAuthError(f"Strava refused the token (HTTP {resp.status_code})")
+
     if resp.status_code != 200:
-        log.warning("stream fetch HTTP %s for activity %s", resp.status_code, activity_id)
-        return {}
+        raise StreamFetchError(f"stream fetch HTTP {resp.status_code} for activity {activity_id}")
 
     raw = resp.json()
     # Strava returns key_by_type as a dict of stream_name -> {data: [...], ...}
@@ -477,6 +491,8 @@ def _fetch_streams(activity_id: int, access_token: str) -> tuple[dict | None, st
     except RateLimitError:
         log.warning("rate limited — activity %s will be retried", activity_id)
         return None, "pending"
+    except StravaAuthError:
+        raise  # stop the whole batch: no other activity can be fetched with this token
     except Exception as exc:
         log.error("stream fetch failed for activity %s: %s", activity_id, exc)
         return None, "error"

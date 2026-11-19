@@ -7,6 +7,8 @@ import pytest
 from strides_ai.analysis import (
     HIGH_CLIMB_M_PER_KM,
     RateLimitError,
+    StravaAuthError,
+    StreamFetchError,
     _cadence_stats,
     _cardiac_decoupling,
     _effort_efficiency_raw,
@@ -592,12 +594,23 @@ def test_fetch_streams_429_raises_rate_limit_error():
             fetch_activity_streams(12345, "fake_token")
 
 
-def test_fetch_streams_network_error_returns_empty():
+def test_fetch_streams_network_error_raises_not_empty():
+    """A failure must not read as "no streams", which would relabel the activity as manual."""
     with patch("strides_ai.analysis.httpx.Client") as MockClient:
         MockClient.return_value.__enter__.return_value.get.side_effect = Exception("timeout")
-        result = fetch_activity_streams(12345, "fake_token")
+        with pytest.raises(StreamFetchError):
+            fetch_activity_streams(12345, "fake_token")
 
-    assert result == {}
+
+@pytest.mark.parametrize("status, error", [(500, StreamFetchError), (401, StravaAuthError)])
+def test_fetch_streams_unexpected_status_raises(status, error):
+    mock_response = MagicMock()
+    mock_response.status_code = status
+
+    with patch("strides_ai.analysis.httpx.Client") as MockClient:
+        MockClient.return_value.__enter__.return_value.get.return_value = mock_response
+        with pytest.raises(error):
+            fetch_activity_streams(12345, "fake_token")
 
 
 # ── renormalize_effort_efficiency ─────────────────────────────────────────────

@@ -146,17 +146,57 @@ def sync_activities(access_token: str, full: bool = False) -> int:
 
     # Phase 4: backfill pending activities (sequential; rate-limit awareness required)
     if not rate_limited:
-        pending = db.get_activities_pending_analysis(limit=10)
-        for act in pending:
-            status = analyze_activity(act, access_token, max_hr=max_hr, renormalize=False)
-            if status == "pending":
-                log.warning("rate limited during backfill — stopping")
-                break
-            if status == "done":
-                any_analyzed = True
+        analyzed, _ = analyze_pending(access_token, max_hr, limit=10)
+        any_analyzed = any_analyzed or analyzed > 0
 
     # Phase 5: renormalize once after all analyses complete (O(N) instead of O(N²))
     if any_analyzed:
         db.renormalize_effort_efficiency()
 
     return count
+
+
+def analyze_pending(access_token: str, max_hr: int, limit: int | None) -> tuple[int, bool]:
+    """Analyse pending activities, newest first, until *limit* are done or Strava rate-limits.
+
+    ``limit=None`` keeps going until none are pending. Returns (newly analysed, rate_limited).
+    The caller renormalizes the efficiency scores afterwards.
+    """
+    analyzed = 0
+    attempted = 0
+    while limit is None or attempted < limit:
+        batch = db.get_activities_pending_analysis(
+            limit=50 if limit is None else min(50, limit - attempted)
+        )
+        if not batch:
+            return analyzed, False
+        for act in batch:
+            attempted += 1
+            # Every outcome but "pending" (rate limited) moves the row out of the queue, so the
+            # loop always ends.
+            status = analyze_activity(act, access_token, max_hr=max_hr, renormalize=False)
+            if status == "pending":
+                log.warning("rate limited during backfill — stopping")
+                return analyzed, True
+            if status == "done":
+                analyzed += 1
+    return analyzed, False
+
+
+def reanalyze(access_token: str, restart: bool) -> dict:
+    """Recompute Strava activities' metrics (e.g. after max HR changed).
+
+    ``restart`` queues every analysed activity first; without it only what is already pending is
+    worked on. Either way it analyses as many as Strava's rate limit allows now, and whatever is
+    left stays pending for the next call (or, ten at a time, the next syncs).
+    """
+    queued = db.mark_for_reanalysis() if restart else 0
+    analyzed, rate_limited = analyze_pending(access_token, db.get_max_hr(), limit=None)
+    if analyzed:
+        db.renormalize_effort_efficiency()
+    return {
+        "queued": queued,
+        "analyzed": analyzed,
+        "remaining": db.count_pending_analysis(),
+        "rate_limited": rate_limited,
+    }

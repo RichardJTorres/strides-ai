@@ -149,6 +149,7 @@ def test_chat_attaches_activity_card_and_persists_short_display(tmp_db, sample_a
 
         def stream_turn(self, system, message, on_token, attachments=None):
             captured["attachments"] = attachments
+            captured["message"] = message
             entered.set()
             assert finish.wait(5)
             on_token("ok")
@@ -168,10 +169,10 @@ def test_chat_attaches_activity_card_and_persists_short_display(tmp_db, sample_a
     assert entered.wait(2)
     finish.set()
 
-    attachments = captured["attachments"]
-    assert len(attachments) == 1
-    assert attachments[0]["type"] == "text"
-    assert "## Attached Activity: Morning Run" in attachments[0]["text"]
+    # The card travels in the message text, so providers without attachment support read it too.
+    assert captured["attachments"] is None
+    assert captured["message"].startswith("## Attached Activity: Morning Run")
+    assert captured["message"].endswith("how did this one go?")
 
     saved = db.get_recent_messages(mode="running")
     assert saved[0]["content"] == "how did this one go?\n\n📎 Activity: Morning Run (2025-06-15)"

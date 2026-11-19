@@ -1,11 +1,10 @@
 """Unit tests for strides_ai.schedule.analyze_nutrition."""
 
 import json
-from unittest.mock import MagicMock, patch
 
 import pytest
 
-from strides_ai.schedule import analyze_nutrition
+from strides_ai.schedule import NUTRITION_SYSTEM_PROMPT, analyze_nutrition, parse_nutrition_response
 
 SAMPLE_WORKOUT = {
     "workout_type": "Long Run",
@@ -27,192 +26,53 @@ SAMPLE_NUTRITION = {
 }
 
 
-# ── Claude provider ────────────────────────────────────────────────────────────
+class FakeBackend:
+    """Records the one-shot call nutrition makes; whichever provider is selected sits here."""
+
+    def __init__(self, reply: str):
+        self.reply = reply
+        self.calls = []
+
+    def stateless_turn(self, system, user_input, on_token, source="other"):
+        self.calls.append({"system": system, "user_input": user_input, "source": source})
+        return self.reply
 
 
-def test_analyze_nutrition_claude_returns_parsed_dict(monkeypatch):
-    monkeypatch.setenv("PROVIDER", "claude")
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(text=json.dumps(SAMPLE_NUTRITION))]
-
-    with patch("strides_ai.schedule.anthropic.Anthropic") as MockClient:
-        MockClient.return_value.messages.create.return_value = mock_response
-        result = analyze_nutrition(SAMPLE_WORKOUT, "Athlete profile", "fake-key")
-
-    assert result["calories_pre"] == 400
-    assert result["calories_during"] == 200
-    assert result["calories_post"] == 500
-    assert result["hydration_pre_ml"] == 500
-    assert result["hydration_during_ml"] == 750
-    assert result["hydration_post_ml"] == 500
-    assert result["notes"] == "Eat well before this long run."
+def test_returns_parsed_dict():
+    result = analyze_nutrition(
+        SAMPLE_WORKOUT, "Athlete profile", FakeBackend(json.dumps(SAMPLE_NUTRITION))
+    )
+    assert result == SAMPLE_NUTRITION
 
 
-def test_analyze_nutrition_claude_reads_the_first_text_block_after_thinking(monkeypatch):
-    monkeypatch.setenv("PROVIDER", "claude")
-    thinking = MagicMock(spec=["type", "thinking"])
-    mock_response = MagicMock()
-    mock_response.content = [thinking, MagicMock(text=json.dumps(SAMPLE_NUTRITION))]
-
-    with patch("strides_ai.schedule.anthropic.Anthropic") as MockClient:
-        MockClient.return_value.messages.create.return_value = mock_response
-        result = analyze_nutrition(SAMPLE_WORKOUT, "Athlete profile", "fake-key")
-
-    assert result["calories_pre"] == 400
+def test_uses_selected_backend_and_logs_as_nutrition():
+    backend = FakeBackend(json.dumps(SAMPLE_NUTRITION))
+    analyze_nutrition(SAMPLE_WORKOUT, "Runner since 2010", backend)
+    (call,) = backend.calls
+    assert call["system"] == NUTRITION_SYSTEM_PROMPT
+    assert call["source"] == "nutrition"
+    assert "Runner since 2010" in call["user_input"]
+    assert "300" in call["user_input"]  # elevation_m from SAMPLE_WORKOUT
 
 
-def test_analyze_nutrition_claude_strips_markdown_fences(monkeypatch):
-    """Claude may wrap JSON in ```json ... ``` — these must be stripped."""
-    monkeypatch.setenv("PROVIDER", "claude")
-    fenced = f"```json\n{json.dumps(SAMPLE_NUTRITION)}\n```"
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(text=fenced)]
-
-    with patch("strides_ai.schedule.anthropic.Anthropic") as MockClient:
-        MockClient.return_value.messages.create.return_value = mock_response
-        result = analyze_nutrition(SAMPLE_WORKOUT, "", "fake-key")
-
-    assert result["calories_pre"] == 400
-
-
-def test_analyze_nutrition_claude_uses_haiku_model(monkeypatch):
-    monkeypatch.setenv("PROVIDER", "claude")
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(text=json.dumps(SAMPLE_NUTRITION))]
-
-    with patch("strides_ai.schedule.anthropic.Anthropic") as MockClient:
-        mock_create = MockClient.return_value.messages.create
-        mock_create.return_value = mock_response
-        analyze_nutrition(SAMPLE_WORKOUT, "", "fake-key")
-
-    _, kwargs = mock_create.call_args
-    assert "haiku" in kwargs["model"]
-
-
-def test_analyze_nutrition_claude_prompt_includes_elevation(monkeypatch):
-    monkeypatch.setenv("PROVIDER", "claude")
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(text=json.dumps(SAMPLE_NUTRITION))]
-
-    with patch("strides_ai.schedule.anthropic.Anthropic") as MockClient:
-        mock_create = MockClient.return_value.messages.create
-        mock_create.return_value = mock_response
-        analyze_nutrition(SAMPLE_WORKOUT, "", "fake-key")
-
-    _, kwargs = mock_create.call_args
-    user_content = kwargs["messages"][0]["content"]
-    assert "300" in user_content  # elevation_m from SAMPLE_WORKOUT
-
-
-def test_analyze_nutrition_claude_prompt_includes_profile(monkeypatch):
-    monkeypatch.setenv("PROVIDER", "claude")
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(text=json.dumps(SAMPLE_NUTRITION))]
-
-    with patch("strides_ai.schedule.anthropic.Anthropic") as MockClient:
-        mock_create = MockClient.return_value.messages.create
-        mock_create.return_value = mock_response
-        analyze_nutrition(SAMPLE_WORKOUT, "Runner since 2010", "fake-key")
-
-    _, kwargs = mock_create.call_args
-    user_content = kwargs["messages"][0]["content"]
-    assert "Runner since 2010" in user_content
-
-
-# ── Ollama provider ────────────────────────────────────────────────────────────
-
-
-def test_analyze_nutrition_ollama_returns_parsed_dict(monkeypatch):
-    monkeypatch.setenv("PROVIDER", "ollama")
-    monkeypatch.setenv("OLLAMA_MODEL", "llama3.1")
-
-    mock_response = MagicMock()
-    mock_response.json.return_value = {"message": {"content": json.dumps(SAMPLE_NUTRITION)}}
-    mock_response.raise_for_status = MagicMock()
-
-    with patch("strides_ai.schedule.httpx.post", return_value=mock_response):
-        result = analyze_nutrition(SAMPLE_WORKOUT, "Athlete profile", "")
-
-    assert result["calories_pre"] == 400
-    assert result["hydration_during_ml"] == 750
-
-
-def test_analyze_nutrition_ollama_uses_json_format(monkeypatch):
-    monkeypatch.setenv("PROVIDER", "ollama")
-    monkeypatch.setenv("OLLAMA_MODEL", "llama3.1")
-
-    mock_response = MagicMock()
-    mock_response.json.return_value = {"message": {"content": json.dumps(SAMPLE_NUTRITION)}}
-    mock_response.raise_for_status = MagicMock()
-
-    with patch("strides_ai.schedule.httpx.post", return_value=mock_response) as mock_post:
-        analyze_nutrition(SAMPLE_WORKOUT, "", "")
-
-    _, kwargs = mock_post.call_args
-    assert kwargs["json"]["format"] == "json"
-    assert kwargs["json"]["stream"] is False
-
-
-def test_analyze_nutrition_ollama_uses_configured_model(monkeypatch):
-    monkeypatch.setenv("PROVIDER", "ollama")
-    monkeypatch.setenv("OLLAMA_MODEL", "mistral-nemo")
-
-    mock_response = MagicMock()
-    mock_response.json.return_value = {"message": {"content": json.dumps(SAMPLE_NUTRITION)}}
-    mock_response.raise_for_status = MagicMock()
-
-    with patch("strides_ai.schedule.httpx.post", return_value=mock_response) as mock_post:
-        analyze_nutrition(SAMPLE_WORKOUT, "", "")
-
-    _, kwargs = mock_post.call_args
-    assert kwargs["json"]["model"] == "mistral-nemo"
-
-
-def test_analyze_nutrition_ollama_sends_system_prompt(monkeypatch):
-    monkeypatch.setenv("PROVIDER", "ollama")
-
-    mock_response = MagicMock()
-    mock_response.json.return_value = {"message": {"content": json.dumps(SAMPLE_NUTRITION)}}
-    mock_response.raise_for_status = MagicMock()
-
-    with patch("strides_ai.schedule.httpx.post", return_value=mock_response) as mock_post:
-        analyze_nutrition(SAMPLE_WORKOUT, "", "")
-
-    _, kwargs = mock_post.call_args
-    messages = kwargs["json"]["messages"]
-    roles = [m["role"] for m in messages]
-    assert "system" in roles
-
-
-# ── Shared behaviour ───────────────────────────────────────────────────────────
-
-
-def test_analyze_nutrition_missing_optional_fields_does_not_crash(monkeypatch):
-    """Workout with no distance/elevation/duration should not raise."""
-    monkeypatch.setenv("PROVIDER", "claude")
-    minimal_workout = {"workout_type": "Easy Run", "intensity": "easy"}
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(text=json.dumps(SAMPLE_NUTRITION))]
-
-    with patch("strides_ai.schedule.anthropic.Anthropic") as MockClient:
-        MockClient.return_value.messages.create.return_value = mock_response
-        result = analyze_nutrition(minimal_workout, "", "fake-key")
-
+def test_missing_optional_fields_shows_not_specified():
+    backend = FakeBackend(json.dumps(SAMPLE_NUTRITION))
+    result = analyze_nutrition({"workout_type": "Easy Run", "intensity": "easy"}, "", backend)
     assert "calories_pre" in result
+    assert "not specified" in backend.calls[0]["user_input"]
 
 
-def test_analyze_nutrition_missing_optional_fields_shows_not_specified(monkeypatch):
-    """'not specified' should appear in the prompt when fields are absent."""
-    monkeypatch.setenv("PROVIDER", "claude")
-    minimal_workout = {"workout_type": "Easy Run", "intensity": "easy"}
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(text=json.dumps(SAMPLE_NUTRITION))]
+@pytest.mark.parametrize(
+    "reply",
+    [
+        f"```json\n{json.dumps(SAMPLE_NUTRITION)}\n```",
+        f"Here are your targets:\n{json.dumps(SAMPLE_NUTRITION)}\nGood luck!",
+    ],
+)
+def test_parse_tolerates_fences_and_surrounding_prose(reply):
+    assert parse_nutrition_response(reply) == SAMPLE_NUTRITION
 
-    with patch("strides_ai.schedule.anthropic.Anthropic") as MockClient:
-        mock_create = MockClient.return_value.messages.create
-        mock_create.return_value = mock_response
-        analyze_nutrition(minimal_workout, "", "fake-key")
 
-    _, kwargs = mock_create.call_args
-    user_content = kwargs["messages"][0]["content"]
-    assert "not specified" in user_content
+def test_parse_rejects_reply_without_json():
+    with pytest.raises(json.JSONDecodeError):
+        parse_nutrition_response("Sorry, I can't help with that.")
