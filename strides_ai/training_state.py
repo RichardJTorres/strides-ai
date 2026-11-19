@@ -472,13 +472,23 @@ def _normalize_planned_structure(row: dict) -> None:
     row["structure_json"] = structure_to_json(structure)
 
 
+CHANGE_KEYS = frozenset({"create", "update", "delete"})
+
+
 def apply_changes(plan_rows: list[dict], changes: dict) -> list[dict]:
     """Return plan_rows with an entry change set applied. Does not mutate the input.
 
     ``changes``: ``{"create": [{date, workout_type, distance_km, intensity, kind?}],
     "update": [{id, ...fields}], "delete": [id]}`` — the same shape the calendar applies, so the
-    guardrail preview and the commit see the same plan.
+    guardrail preview and the commit see the same plan. Any other key raises: a caller that
+    passes a shape this function does not read would otherwise be checked against an unchanged
+    plan without noticing.
     """
+    unknown = set(changes) - CHANGE_KEYS
+    if unknown:
+        raise ValueError(
+            f"Unknown change keys {sorted(unknown)}; expected create / update / delete"
+        )
     by_id: dict = {p["id"]: dict(p) for p in plan_rows if p.get("id") is not None}
     anonymous = [dict(p) for p in plan_rows if p.get("id") is None]
     for entry_id in changes.get("delete") or []:

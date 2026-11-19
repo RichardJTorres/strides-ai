@@ -324,13 +324,30 @@ def download_zwo(entry_id: int, session: Session = Depends(get_session)):
     )
 
 
-def _apply_guardrails(result, mode_rows, plan_rows, prefs, mode, units, today) -> dict:
+def _apply_guardrails(
+    result, mode_rows, plan_rows, prefs, mode, units, today, start: str, end: str
+) -> dict:
     """Drop generated workouts on blocked-out/race days (a prompt-only rule the model can break)
-    and report load warnings (ramp, projected ratio) without changing the proposal."""
+    and report load warnings (ramp, projected ratio) without changing the proposal.
+
+    Load is checked against the plan as the modal's default (Replace) leaves it: the existing
+    workout entries in the range are removed as the generated ones are added, so they are not
+    counted twice. Append would add on top of them, which this check does not model."""
     if mode == "lifting":
         return result
+    replaced = [
+        p["id"]
+        for p in plan_rows
+        if p.get("kind") == "workout" and p.get("id") is not None and start <= p["date"] <= end
+    ]
     violations = check_plan_changes(
-        mode_rows, plan_rows, prefs, mode, units, today, {"set": result["workouts"]}
+        mode_rows,
+        plan_rows,
+        prefs,
+        mode,
+        units,
+        today,
+        {"create": result["workouts"], "delete": replaced},
     )
     hard_dates = {v.date for v in violations if v.hard}
     result["workouts"] = [w for w in result["workouts"] if w["date"] not in hard_dates]
@@ -408,7 +425,9 @@ async def generate_plan(
     try:
         text = await asyncio.get_event_loop().run_in_executor(None, _run_llm)
         result = parse_plan_generation_response(text, body.start_date, body.end_date, units)
-        result = _apply_guardrails(result, mode_rows, all_plan, prefs, mode, units, today)
+        result = _apply_guardrails(
+            result, mode_rows, all_plan, prefs, mode, units, today, body.start_date, body.end_date
+        )
         for w in result["workouts"]:
             w["structure_text"] = render_text(w["structure"]) if w.get("structure") else None
         return result
