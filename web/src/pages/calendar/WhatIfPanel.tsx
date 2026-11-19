@@ -95,7 +95,7 @@ function Numbers({ digest }: { digest: WhatIfDigest }) {
       )}
       {added.map(v => (
         <Notice key={`${v.kind}:${v.date}`} tone={v.hard ? "error" : "warning"}>
-          {v.hard ? "Not allowed: " : ""}{v.detail}
+          {v.hard ? "Conflict: " : ""}{v.detail}
         </Notice>
       ))}
       {resolved.map(v => (

@@ -524,6 +524,15 @@ def changes_from_ops(ops: list[dict], plan_rows: list[dict]) -> dict:
     return out
 
 
+def normalized_plan_row(p: dict) -> dict:
+    """A copy of a plan row as the calendar would store it: a valid structure decides the duration
+    (see `_normalize_planned_structure`), so a structured ride with no `duration_min` still has one.
+    """
+    row = dict(p)
+    _normalize_planned_structure(row)
+    return row
+
+
 def describe_planned_load(
     p: dict, mode: Optional[str], today: date, horizon_days: int = DEFAULT_HORIZON_DAYS
 ) -> dict:
@@ -536,6 +545,7 @@ def describe_planned_load(
     another sport's workout), or no usable duration. Today counts the larger of what is logged and
     what is planned, so an entry for today can still move nothing once that much is logged.
     """
+    p = normalized_plan_row(p)
     hours = _planned_hours(p)
     try:
         d = date.fromisoformat(p.get("date") or "")

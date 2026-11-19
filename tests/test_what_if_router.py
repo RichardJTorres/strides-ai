@@ -326,3 +326,29 @@ def test_a_suggestion_on_a_blocked_day_is_dropped_whole(tmp_db):
         ]
     )
     assert coach["suggestion"] is None and "blocked" in coach["suggestion_rejected"]
+
+
+@pytest.mark.parametrize(
+    "item,why",
+    [
+        ({"workout_type": "Strength", "duration_min": "abc"}, "invalid duration_min"),
+        ({"workout_type": "Strength", "duration_min": 45.5}, "invalid duration_min"),
+        ({"workout_type": "Indoor Ride", "structure": "steady 60 min"}, "invalid structure"),
+    ],
+)
+def test_a_suggestion_with_a_field_of_the_wrong_type_is_refused_by_name(tmp_db, item, why):
+    """The coach's JSON is untrusted: a field the bulk endpoint would reject (a 422 at Apply with
+    no reason shown) is refused here, naming the field."""
+    _seed_history()
+    later = (FUTURE + timedelta(days=2)).isoformat()
+    coach = _suggest(set=[{"date": later, **item}])
+    assert coach["suggestion"] is None and why in coach["suggestion_rejected"]
+
+
+def test_a_numeric_string_duration_is_coerced_like_any_request_body(tmp_db):
+    _seed_history()
+    later = (FUTURE + timedelta(days=2)).isoformat()
+    coach = _suggest(set=[{"date": later, "workout_type": "Strength", "duration_min": "45"}])
+    assert coach["suggestion_rejected"] is None
+    assert coach["suggestion"]["ops"][0]["duration_min"] == 45  # an int, as bulk would store it
+    assert coach["suggestion"]["changes"][0]["hours"] == 0.75

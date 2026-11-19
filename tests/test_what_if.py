@@ -19,6 +19,7 @@ from strides_ai.what_if import (
     parse_what_if_response,
     verdict_floor,
 )
+from tests.test_coach_accuracy_review import STRUCTURE
 from tests.test_training_state import TODAY, run_row, steady_rows
 
 FRIDAY = TODAY + timedelta(days=2)
@@ -372,3 +373,25 @@ def test_the_prompt_carries_the_numbers_the_neighbours_and_the_question():
     ):
         assert expected in prompt, expected
     assert "Is this a good idea?" in build_what_if_prompt(d, "   ")
+
+
+# ── a structure decides the duration, as it does in storage ───────────────────────────
+
+
+def test_a_structured_ride_without_a_duration_still_counts_by_its_structure():
+    """STRUCTURE is one 4 h steady block. The change record must agree with the metrics: a ride
+    the load model counts is never reported as having no duration."""
+    op = create(wtype="Indoor Ride", minutes=None, structure=STRUCTURE)
+    d = digest([op], mode="cycling")
+    change = d["changes"][0]
+    assert (change["hours"], change["counted"], change["reason"]) == (4.0, True, None)
+    assert change["label"] == "Indoor Ride, 240 min"
+    assert metric(d, f"week.{WEEK}.volume")["delta"] == 4.0
+
+
+def test_a_structure_overrides_a_stated_duration_and_an_update_keeps_the_stored_one():
+    stated = create(wtype="Indoor Ride", minutes=30, structure=STRUCTURE)
+    assert digest([stated], mode="cycling")["changes"][0]["hours"] == 4.0
+    stored = entry(9, FRIDAY, "Indoor Ride", 240, structure_json=json.dumps(STRUCTURE))
+    d = digest([{"op": "update", "id": 9, "intensity": "hard"}], [stored], mode="cycling")
+    assert d["changes"][0]["hours"] == 4.0 and d["changes"][0]["counted"] is True

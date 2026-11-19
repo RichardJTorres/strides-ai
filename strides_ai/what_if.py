@@ -200,6 +200,7 @@ def _describe_changes(
             # Not something the calendar would do: a delete of an entry that is not there is a
             # no-op there, and anything malformed is refused by the dry run before this runs.
             continue
+        row = ts.normalized_plan_row(row)  # a structure decides the duration the label shows
         load = ts.describe_planned_load(row, mode, today)
         out.append(
             {

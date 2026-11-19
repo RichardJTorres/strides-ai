@@ -6,7 +6,8 @@ import logging
 from datetime import date as date_cls, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel
+from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel, ValidationError
 from sqlmodel import Session
 
 from ... import compliance
@@ -341,6 +342,23 @@ class _UnreadableReply(Exception):
     """The coach answered, but not with the JSON object that was asked for."""
 
 
+def _evaluate_what_if(body: WhatIfBody, request: Request, session: Session, units: UnitSystem):
+    """The synchronous half of what-if: the dry run, the reads and the digest. Everything here
+    blocks (SQLite, CPU), so the endpoint runs it in the threadpool like every other calendar
+    route, not on the event loop that also serves chat streams."""
+    ops = _ops_from_body(body.ops)
+    if not ops:
+        raise HTTPException(status_code=400, detail="No changes to evaluate")
+    mode = _load_mode(request)
+    plan_rows = crud.get_plan_rows(session)
+    _write(crud.apply_changes, session, ops, None, None, True)
+    today = date_cls.today()
+    rows = [r.model_dump() for r in act_crud.get_for_mode(session, mode)]
+    prefs = crud.get_prefs(session)
+    digest = build_what_if_digest(rows, plan_rows, prefs, mode, units, today, ops)
+    return digest, plan_rows, rows, prefs, mode, today
+
+
 @router.post("/calendar/what-if")
 async def what_if(
     body: WhatIfBody,
@@ -358,16 +376,9 @@ async def what_if(
     diff of `what_if.py`; with ``llm`` (the default) ``coach`` adds a verdict and, when something
     else has to move, a complete alternative change set already checked against the same rules.
     A coach failure never loses the digest: it comes back as ``coach_error``."""
-    ops = _ops_from_body(body.ops)
-    if not ops:
-        raise HTTPException(status_code=400, detail="No changes to evaluate")
-    mode = _load_mode(request)
-    plan_rows = crud.get_plan_rows(session)
-    _write(crud.apply_changes, session, ops, None, None, True)
-    today = date_cls.today()
-    rows = [r.model_dump() for r in act_crud.get_for_mode(session, mode)]
-    prefs = crud.get_prefs(session)
-    digest = build_what_if_digest(rows, plan_rows, prefs, mode, units, today, ops)
+    digest, plan_rows, rows, prefs, mode, today = await run_in_threadpool(
+        _evaluate_what_if, body, request, session, units
+    )
     out = {"digest": digest, "coach": None, "coach_error": None}
     if not llm:
         return out
@@ -384,14 +395,18 @@ async def what_if(
     return out
 
 
+def _coach_prompt(session, question, digest, mode, units, today) -> str:
+    profile_text = profile_to_text(prof_crud.get_fields(session, mode), mode, units)
+    protected, _ = split_memories([m.model_dump() for m in mem_crud.get_all(session)], today)
+    return build_what_if_prompt(
+        digest, question[:MAX_WHAT_IF_QUESTION_CHARS], profile_text, protected, units
+    )
+
+
 async def _coach_verdict(
     session, backend, question, digest, plan_rows, rows, prefs, mode, units, today
 ) -> dict:
-    profile_text = profile_to_text(prof_crud.get_fields(session, mode), mode, units)
-    protected, _ = split_memories([m.model_dump() for m in mem_crud.get_all(session)], today)
-    prompt = build_what_if_prompt(
-        digest, question[:MAX_WHAT_IF_QUESTION_CHARS], profile_text, protected, units
-    )
+    prompt = await run_in_threadpool(_coach_prompt, session, question, digest, mode, units, today)
 
     def _run_llm() -> str:
         return backend.stateless_turn(
@@ -406,7 +421,9 @@ async def _coach_verdict(
         raise _UnreadableReply("The coach's reply could not be read. Try again.")
     suggested = parsed.pop("suggested")
     suggestion, rejected = (
-        _review_suggestion(session, suggested, plan_rows, rows, prefs, mode, units, today)
+        await run_in_threadpool(
+            _review_suggestion, session, suggested, plan_rows, rows, prefs, mode, units, today
+        )
         if suggested
         else (None, None)
     )
@@ -424,14 +441,23 @@ def _review_suggestion(
     """The coach's alternative change set if the calendar would accept it, else (None, why).
 
     It goes through everything the coach's own `update_training_plan` does: argument checks and
-    units, the per-call cap, the calendar's rules (as a dry run) and the guardrails. Any refusal
-    or hard violation drops the whole set: half of a move is worse than none. Soft violations
-    stay, as warnings."""
+    units, the per-call cap, the calendar's rules (as a dry run) and the guardrails, and first
+    the bulk endpoint's own request model, so a field of the wrong type (a duration that is not a
+    number, a structure that is not an object) is refused here with its name instead of failing
+    later at Apply. Any refusal or hard violation drops the whole set: half of a move is worse
+    than none. Soft violations stay, as warnings."""
     ops, _, errors = _plan_ops(suggested, plan_rows)
     if errors:
         return None, "; ".join(errors[:3])
     if len(ops) > MAX_PLAN_OPERATIONS:
         return None, f"The suggestion changes {len(ops)} entries; at most {MAX_PLAN_OPERATIONS}."
+    try:
+        change_ops = [ChangeOp(**op) for op in ops]
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        field = ".".join(str(part) for part in first["loc"])
+        return None, f"The suggestion has an invalid {field}: {first['msg']}."
+    ops = _ops_from_body(change_ops)  # exactly what the bulk endpoint would run
     try:
         crud.apply_changes(session, ops, None, None, True)
     except crud.EntryError as exc:  # EntryNotFound is one
@@ -442,7 +468,8 @@ def _review_suggestion(
     if hard:
         return None, hard[0]["detail"]
     return {
-        "ops": ops,
+        # What Apply posts back to the bulk endpoint, type-coerced like any request body.
+        "ops": [o.model_dump(exclude_unset=True) for o in change_ops],
         "changes": checked["changes"],
         "metrics": checked["metrics"],
         "warnings": [v["detail"] for v in new],
