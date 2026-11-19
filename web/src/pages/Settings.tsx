@@ -251,6 +251,23 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
     }
   }
 
+  type ReanalyzeResult = { analyzed: number; remaining: number; rate_limited: boolean };
+  const [reanalyzeState, setReanalyzeState] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [reanalyzeResult, setReanalyzeResult] = useState<ReanalyzeResult | null>(null);
+
+  // restart=true requeues every analysed activity; "Continue" only works through what is left.
+  async function handleReanalyze(restart: boolean) {
+    setReanalyzeState("running");
+    try {
+      const res = await fetch(`/api/strava/reanalyze${restart ? "?restart=true" : ""}`, { method: "POST" });
+      if (!res.ok) throw new Error();
+      setReanalyzeResult(await res.json());
+      setReanalyzeState("done");
+    } catch {
+      setReanalyzeState("error");
+    }
+  }
+
   async function handleFullSync() {
     setSyncState("syncing");
     setSyncCount(null);
@@ -535,6 +552,33 @@ export default function Settings({ mode, setMode, theme, onProviderChanged }: Pr
               )}
               {syncState === "error" && (
                 <span className="text-xs text-red-400">Sync failed. Check your Strava credentials.</span>
+              )}
+            </div>
+            <p className="text-xs text-gray-600 mt-5 mb-3">
+              Recomputes the metrics of every activity, for example after you change your max heart
+              rate (it sets the HR zones). Strava limits how many activities can be fetched every 15
+              minutes, so a long history may take several runs.
+            </p>
+            <div className="flex flex-wrap items-center gap-4">
+              <Button variant="secondary" onClick={() => handleReanalyze(true)} loading={reanalyzeState === "running"}>
+                {reanalyzeState === "running" ? "Reanalysing…" : "Reanalyse all"}
+              </Button>
+              {reanalyzeState === "done" && reanalyzeResult && reanalyzeResult.remaining > 0 && (
+                <Button variant="ghost" onClick={() => handleReanalyze(false)}>
+                  Continue
+                </Button>
+              )}
+              {reanalyzeState === "done" && reanalyzeResult && (
+                <span className="text-xs text-gray-400">
+                  {reanalyzeResult.analyzed} reanalysed.
+                  {reanalyzeResult.remaining > 0 &&
+                    ` ${reanalyzeResult.remaining} still waiting${
+                      reanalyzeResult.rate_limited ? " (Strava rate limit; continue in 15 minutes)" : ""
+                    }.`}
+                </span>
+              )}
+              {reanalyzeState === "error" && (
+                <span className="text-xs text-red-400">Reanalysis failed. Check your Strava credentials.</span>
               )}
             </div>
           </section>

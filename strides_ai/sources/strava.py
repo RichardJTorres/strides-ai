@@ -2,6 +2,7 @@
 
 from ..analysis import (
     RateLimitError,
+    StravaAuthError,
     build_precomputed_brief,
     condense_streams_for_deep_dive,
     deep_dive_system_prompt,
@@ -10,7 +11,7 @@ from ..analysis import (
 )
 from ..auth import get_access_token
 from ..config import get_settings
-from ..sync import sync_activities
+from ..sync import reanalyze as reanalyze_activities, sync_activities
 from ..units import DEFAULT_UNIT_SYSTEM, UnitSystem
 from .base import AuthError, ConfigurationError, NoDataError
 
@@ -67,3 +68,19 @@ class StravaSource:
 
         access_token = get_access_token(settings.strava_client_id, settings.strava_client_secret)
         return sync_activities(access_token, full=full)
+
+    def reanalyze(self, restart: bool) -> dict:
+        settings = get_settings()
+        if not settings.strava_client_id or not settings.strava_client_secret:
+            raise ConfigurationError("Strava credentials not configured")
+
+        try:
+            access_token = get_access_token(
+                settings.strava_client_id, settings.strava_client_secret
+            )
+        except Exception as exc:
+            raise AuthError(f"Could not get Strava token: {exc}") from exc
+        try:
+            return reanalyze_activities(access_token, restart=restart)
+        except StravaAuthError as exc:
+            raise AuthError(str(exc)) from exc
