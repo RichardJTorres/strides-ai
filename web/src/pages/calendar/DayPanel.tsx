@@ -11,11 +11,12 @@ import {
   RACE_PRIORITIES, RACE_SPORTS, ROUTE_CAPABLE_WORKOUT_TYPES, VERDICT_STYLES, WORKOUT_COLORS,
   WORKOUT_TYPE_GROUPS, keepsStructure,
 } from "./constants";
-import { buildEntryBody, failureMessage, formatGoalTime, type EntryForm } from "./entryOps";
+import { buildEntryBody, failureMessage, formatGoalTime, whatIfOps, type EntryForm } from "./entryOps";
 import type {
   Activity, ComplianceById, Entry, EntryKind, NutritionData, Prefs, RouteAnalysis, RoutePreview,
 } from "./types";
 import { useDistance } from "./useDistance";
+import WhatIfPanel from "./WhatIfPanel";
 
 const isRouteUrl = (url: string) => /(?:ridewithgps|strava)\.com\/routes\/\d+/i.test(url);
 
@@ -295,14 +296,26 @@ function EntryEditor({
     return res.json().catch(() => null) as Promise<Entry | null>;
   };
 
+  // What Save would send for the form as it stands; "What if" evaluates exactly this.
+  const currentBody = () => buildEntryBody(kind, selectedDate, form, {
+    existing: selectedWorkout,
+    kmFromInput, mFromInput,
+    routeCapable: t => ROUTE_CAPABLE_WORKOUT_TYPES.has(t),
+    noDistance: t => NO_DISTANCE_WORKOUT_TYPES.has(t),
+    keepsStructure,
+  });
+
+  // After a What-if change was applied: a new entry that was saved as is becomes the open one;
+  // a coach alternative may have moved other days, so the blank form is closed instead.
+  const afterWhatIf = (who: "mine" | "coach", created: number[]) => {
+    setEditMode(false);
+    if (who === "mine" && !selectedWorkout && created[0] != null) onCreated(created[0]);
+    else if (!selectedWorkout) onCancelNew();
+    else onDone();
+  };
+
   const saveWorkout = async () => {
-    const body = buildEntryBody(kind, selectedDate, form, {
-      existing: selectedWorkout,
-      kmFromInput, mFromInput,
-      routeCapable: t => ROUTE_CAPABLE_WORKOUT_TYPES.has(t),
-      noDistance: t => NO_DISTANCE_WORKOUT_TYPES.has(t),
-      keepsStructure,
-    });
+    const body = currentBody();
     setSaveError(null);
     try {
       const saved = selectedWorkout
@@ -791,6 +804,13 @@ function EntryEditor({
                 onClick={() => { setEditMode(false); if (!selectedWorkout) onCancelNew(); }}
               >Cancel</Button>
             </div>
+            {kind === "workout" && (
+              <WhatIfPanel
+                ops={whatIfOps(selectedWorkout, currentBody())}
+                reloadPlan={reloadPlan}
+                onApplied={afterWhatIf}
+              />
+            )}
           </div>
         )}
 
