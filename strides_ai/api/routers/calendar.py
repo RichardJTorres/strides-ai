@@ -36,6 +36,7 @@ from ...sources.ridewithgps import condense_elevation_profile
 from ...sources.routes import fetch_route_detail, fetch_route_summary
 from ...training_state import build_training_state, check_plan_changes, render_for_prompt
 from ...units import UnitSystem
+from ...what_if import build_what_if_digest
 from ...workout_structure import render_text, structure_from_json, to_zwo, zwo_filename
 from ..deps import get_backend, get_units
 
@@ -87,6 +88,12 @@ class BulkBody(BaseModel):
     request_id: str | None = None
 
 
+class WhatIfBody(BaseModel):
+    """Calendar operations to evaluate without saving them (the shape the bulk endpoint takes)."""
+
+    ops: list[ChangeOp]
+
+
 class GeneratePlanBody(BaseModel):
     start_date: str
     end_date: str
@@ -122,6 +129,13 @@ def put_calendar_prefs(body: CalendarPrefsBody, session: Session = Depends(get_s
     return {"status": "ok"}
 
 
+def _load_mode(request: Request, mode: str | None = None) -> str:
+    """The coaching mode load is computed for: the request's, else the app's. Lifting has no load
+    model of its own, so it reads as running (what the Calendar's load strip shows)."""
+    mode = mode or getattr(request.app.state, "mode", "running")
+    return "running" if mode not in VALID_MODES or mode == "lifting" else mode
+
+
 @router.get("/calendar/training-state")
 def get_training_state(
     request: Request,
@@ -130,9 +144,7 @@ def get_training_state(
     units: UnitSystem = Depends(get_units),
 ):
     """Current load, planned-load projection, weekly ramp and plan conflicts (training_state.py)."""
-    mode = mode or getattr(request.app.state, "mode", "running")
-    if mode not in VALID_MODES or mode == "lifting":
-        mode = "running"
+    mode = _load_mode(request, mode)
     rows = [r.model_dump() for r in act_crud.get_for_mode(session, mode)]
     plan_rows = crud.get_plan_rows(session)
     return build_training_state(
@@ -296,15 +308,47 @@ def delete_calendar_entry(entry_id: int, session: Session = Depends(get_session)
 def bulk_calendar_entries(body: BulkBody, session: Session = Depends(get_session)):
     """Atomic, idempotent change set (accepting a generated block, bulk edits). All operations
     apply or none do; resending the same ``request_id`` returns the first result."""
+    ops = _ops_from_body(body.ops)
+    result = _write(crud.apply_changes, session, ops, body.request_id)
+    return {"status": "ok", **result}
+
+
+def _ops_from_body(body_ops: list[ChangeOp]) -> list[dict]:
+    """Request operations -> the dicts ``crud.apply_changes`` takes. The bulk write and the
+    what-if preview both go through this, so the preview evaluates exactly what Apply would run."""
     ops = []
-    for o in body.ops:
+    for o in body_ops:
         data = o.model_dump(exclude_unset=True)
         if data.get("id") is None:
             data.pop("id", None)
         op = data.pop("op")
         ops.append({"op": op, **_normalize_entry_data(data, op == "create")})
-    result = _write(crud.apply_changes, session, ops, body.request_id)
-    return {"status": "ok", **result}
+    return ops
+
+
+@router.post("/calendar/what-if")
+def what_if(
+    body: WhatIfBody,
+    request: Request,
+    session: Session = Depends(get_session),
+    units: UnitSystem = Depends(get_units),
+):
+    """What a calendar change would do to load, ramp and the guardrails, without saving it.
+
+    The operations are run against the calendar's own rules and rolled back, so a change that
+    would be refused is refused here (400) with the same message. The numbers are the
+    deterministic diff of `what_if.py`; nothing is written."""
+    ops = _ops_from_body(body.ops)
+    if not ops:
+        raise HTTPException(status_code=400, detail="No changes to evaluate")
+    mode = _load_mode(request)
+    plan_rows = crud.get_plan_rows(session)
+    _write(crud.apply_changes, session, ops, None, None, True)
+    rows = [r.model_dump() for r in act_crud.get_for_mode(session, mode)]
+    digest = build_what_if_digest(
+        rows, plan_rows, crud.get_prefs(session), mode, units, date_cls.today(), ops
+    )
+    return {"digest": digest}
 
 
 @router.get("/calendar/entries/{entry_id}/zwo")

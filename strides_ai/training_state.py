@@ -21,6 +21,7 @@ from .analytics import cardio
 from .analytics.adapters import to_cardio_analytics
 from .analytics.aggregation import monday_of
 from .compliance import SportGroup, classify_workout_type
+from .kinds import display_type
 from .units import DEFAULT_UNIT_SYSTEM, UnitSystem
 from .workout_structure import structure_for_type, structure_to_json, total_seconds
 
@@ -474,6 +475,86 @@ def _normalize_planned_structure(row: dict) -> None:
 
 CHANGE_KEYS = frozenset({"create", "update", "delete"})
 
+# The fields of an update that move load or trigger a guardrail (a title or note cannot).
+_UPDATE_FIELDS = (
+    "date",
+    "workout_type",
+    "distance_km",
+    "duration_min",
+    "structure",
+    "goal_time_s",
+    "intensity",
+)
+
+
+def changes_from_ops(ops: list[dict], plan_rows: list[dict]) -> dict:
+    """Calendar ops (``{"op": "create" | "update" | "delete", ...}``, the shape
+    ``db.calendar.apply_changes`` takes) -> the change set ``apply_changes`` above reads.
+
+    Mirrors ``backends.base._plan_ops``, which builds the same thing from the coach's tool args;
+    a test pins the two together so a preview and the commit see the same plan. An update of an
+    id that is not in ``plan_rows`` is kept: ``apply_changes`` ignores it, as the calendar would
+    refuse it.
+    """
+    out: dict = {"create": [], "update": [], "delete": []}
+    for op in ops:
+        kind = op.get("op")
+        if kind == "delete" and op.get("id") is not None:
+            out["delete"].append(int(op["id"]))
+        elif kind == "update" and op.get("id") is not None:
+            out["update"].append(
+                {"id": int(op["id"]), **{k: op[k] for k in _UPDATE_FIELDS if k in op}}
+            )
+        elif kind == "create":
+            entry_kind = op.get("kind") or "workout"
+            out["create"].append(
+                {
+                    "date": op.get("date"),
+                    "kind": entry_kind,
+                    "workout_type": display_type(
+                        entry_kind, op.get("workout_type"), op.get("sport")
+                    ),
+                    "distance_km": op.get("distance_km"),
+                    "duration_min": op.get("duration_min"),
+                    "structure": op.get("structure"),
+                    "goal_time_s": op.get("goal_time_s"),
+                    "intensity": op.get("intensity"),
+                }
+            )
+    return out
+
+
+def describe_planned_load(
+    p: dict, mode: Optional[str], today: date, horizon_days: int = DEFAULT_HORIZON_DAYS
+) -> dict:
+    """What one planned entry contributes to load, and why not when it contributes nothing.
+
+    ``{"hours": float | None, "reason": None | "past" | "beyond_horizon" | "not_in_load" |
+    "no_duration"}``. ``hours`` is the entry's own planned time (None when unknown); ``reason`` is
+    set when the load model ignores it: a date before today (past days use what was logged), a
+    date past the projection horizon, a type that is not load in this mode (Yoga, rest, travel,
+    another sport's workout), or no usable duration. Today counts the larger of what is logged and
+    what is planned, so an entry for today can still move nothing once that much is logged.
+    """
+    hours = _planned_hours(p)
+    try:
+        d = date.fromisoformat(p.get("date") or "")
+    except ValueError:
+        return {"hours": hours, "reason": "past"}
+    if d < today:
+        reason = "past"
+    elif d > today + timedelta(days=horizon_days):
+        reason = "beyond_horizon"
+    elif p.get("kind") in ("rest", "travel", "other") or not _counts_for_mode(
+        p.get("workout_type"), mode
+    ):
+        reason = "not_in_load"
+    elif hours is None:
+        reason = "no_duration"
+    else:
+        reason = None
+    return {"hours": hours, "reason": reason}
+
 
 def apply_changes(plan_rows: list[dict], changes: dict) -> list[dict]:
     """Return plan_rows with an entry change set applied. Does not mutate the input.
@@ -536,7 +617,14 @@ def check_plan_changes(
     before = build_training_state(rows, plan_rows, prefs, mode, units, today)
     after_rows = apply_changes(plan_rows, changes)
     after = build_training_state(rows, after_rows, prefs, mode, units, today)
+    return violations_introduced(before, after, plan_rows, changes)
 
+
+def violations_introduced(
+    before: TrainingState, after: TrainingState, plan_rows: list[dict], changes: dict
+) -> list[Violation]:
+    """What `check_plan_changes` reports, from states already built (the what-if digest reuses
+    them instead of building each twice)."""
     existing = {(v["kind"], v["date"]) for v in before.conflicts}
     by_id = {p.get("id"): p for p in plan_rows}
     touched = {w["date"] for w in changes.get("create") or [] if w.get("date")}
