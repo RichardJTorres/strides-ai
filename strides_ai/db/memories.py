@@ -9,7 +9,6 @@ from . import mutations
 from .models import Memory
 from ..memory_context import MemoryTiming
 
-
 DUPLICATE_RESULT = "Already saved: an identical note exists, so nothing was changed."
 
 

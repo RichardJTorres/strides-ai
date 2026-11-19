@@ -12,7 +12,13 @@ import pytest
 from strides_ai.backends.base import _plan_ops
 from strides_ai.training_state import changes_from_ops
 from strides_ai.units import UnitSystem
-from strides_ai.what_if import build_what_if_digest
+from strides_ai.what_if import (
+    MAX_REASONS,
+    build_what_if_digest,
+    build_what_if_prompt,
+    parse_what_if_response,
+    verdict_floor,
+)
 from tests.test_training_state import TODAY, run_row, steady_rows
 
 FRIDAY = TODAY + timedelta(days=2)
@@ -273,3 +279,96 @@ def test_changes_from_ops_matches_the_coach_tool_for_the_same_edit():
     ops, expected, errors = _plan_ops(args, plan)
     assert not errors
     assert changes_from_ops(ops, plan) == expected
+
+
+# ── the coach's reply ───────────────────────────────────────────────────────────────
+
+
+def reply(**over):
+    return json.dumps(
+        {
+            "verdict": "fine",
+            "headline": "Go ahead.",
+            "reasons": [{"text": "Small.", "metric_ids": [f"week.{WEEK}.volume", "made.up"]}],
+            "suggested": None,
+            **over,
+        }
+    )
+
+
+def test_a_good_reply_is_normalized_and_unknown_metric_ids_are_dropped():
+    out = parse_what_if_response(reply(), digest([create()]))
+    assert out["verdict"] == "fine" and out["headline"] == "Go ahead."
+    assert out["reasons"] == [{"text": "Small.", "metric_ids": [f"week.{WEEK}.volume"]}]
+    assert out["suggested"] is None
+
+
+def test_the_reply_may_come_with_fences_or_prose_around_the_json():
+    d = digest([create()])
+    assert parse_what_if_response(f"```json\n{reply()}\n```", d)["verdict"] == "fine"
+    assert (
+        parse_what_if_response(f"Here you go: {reply()} Hope that helps.", d)["verdict"] == "fine"
+    )
+
+
+@pytest.mark.parametrize("text", ["fine!", "", "[1, 2]"])
+def test_a_reply_with_no_json_object_raises(text):
+    with pytest.raises((json.JSONDecodeError, TypeError)):
+        parse_what_if_response(text, digest([create()]))
+
+
+def test_an_unknown_verdict_becomes_a_caution_and_reasons_are_capped():
+    many = [{"text": f"r{i}", "metric_ids": []} for i in range(9)] + ["junk", {"text": ""}]
+    out = parse_what_if_response(reply(verdict="great", reasons=many), digest([create()]))
+    assert out["verdict"] == "caution" and len(out["reasons"]) == MAX_REASONS
+
+
+def test_the_verdict_is_never_milder_than_the_guardrails():
+    blocked = digest([create()], prefs={"blocked_days": [FRIDAY.isoformat()]})
+    assert verdict_floor(blocked) == "bad"
+    assert parse_what_if_response(reply(verdict="fine"), blocked)["verdict"] == "bad"
+    heavy = digest([create(TODAY + timedelta(days=i), "Easy Run", 240) for i in range(1, 8)])
+    assert verdict_floor(heavy) == "caution"
+    assert parse_what_if_response(reply(verdict="fine"), heavy)["verdict"] == "caution"
+    assert parse_what_if_response(reply(verdict="bad"), heavy)["verdict"] == "bad"  # never lowered
+    assert verdict_floor(digest([create()])) == "fine"
+
+
+@pytest.mark.parametrize(
+    "suggested,expected",
+    [
+        (None, None),
+        ("do something", None),
+        ({}, None),
+        ({"set": [], "delete": []}, None),
+        ({"set": "x"}, None),
+        ({"delete": [3]}, {"set": [], "delete": [3]}),
+        (
+            {"set": [{"date": "2026-06-06"}], "delete": [3]},
+            {"set": [{"date": "2026-06-06"}], "delete": [3]},
+        ),
+    ],
+)
+def test_the_suggestion_is_kept_only_when_it_is_a_change_set(suggested, expected):
+    assert (
+        parse_what_if_response(reply(suggested=suggested), digest([create()]))["suggested"]
+        == expected
+    )
+
+
+def test_the_prompt_carries_the_numbers_the_neighbours_and_the_question():
+    plan = [entry(7, FRIDAY - timedelta(days=1), "Tempo Run", 50, intensity="hard")]
+    d = digest([create()], plan, prefs={"blocked_days": [(FRIDAY + timedelta(days=1)).isoformat()]})
+    prompt = build_what_if_prompt(d, "Kettlebell after tempo?", "Name: Sam", ["- injury: knee"])
+    for expected in (
+        f"[week.{WEEK}.volume]",
+        "2.83 h -> 3.58 h (+0.75 h)",  # the planned 50 min tempo is in both
+        "[7] Thu 2026-06-04: Tempo Run",
+        "[new] Fri 2026-06-05: Strength",
+        "Blocked-out days: Sat 2026-06-06",
+        "Name: Sam",
+        "- injury: knee",
+        "Kettlebell after tempo?",
+    ):
+        assert expected in prompt, expected
+    assert "Is this a good idea?" in build_what_if_prompt(d, "   ")

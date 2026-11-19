@@ -30,6 +30,7 @@ const SOURCE_LABELS: Record<string, string> = {
   memory_review: "Memory review",
   plan_generation: "Plan generation",
   route_analysis: "Route analysis",
+  what_if: "What if",
 };
 
 /** An estimate: a dash when nothing could be priced, and a trailing "+" when only some could. */

@@ -37,10 +37,12 @@ Digest contract (everything is JSON-able; hours are the load unit, `ts.LOAD_UNIT
 from datetime import date, timedelta
 from typing import Optional
 
+from . import kinds
 from . import training_state as ts
 from .compliance import SportGroup, classify_workout_type
 from .dates import fmt_day
-from .units import Quantity, UnitSystem, format_value
+from .plan_generation import _extract_json_object
+from .units import Quantity, UnitSystem, format_value, unit_label
 
 NEIGHBOR_DAYS = 3
 # ramp_comparisons() names its baselines; the digest ids use these short keys.
@@ -315,4 +317,196 @@ def build_what_if_digest(
                 after_rows, touched, {u["id"] for u in changes["update"]}, units
             ),
         },
+    }
+
+
+# ── the coach's reading of the digest ────────────────────────────────────────────
+
+VERDICTS = ("fine", "caution", "bad")  # least to most severe
+MAX_REASONS = 4
+
+WHAT_IF_SYSTEM_PROMPT = f"""\
+You are the athlete's coach answering a hypothetical. They have NOT saved the change below; they
+want to know whether it is a good idea and whether anything else on their calendar should move.
+This is an assessment, not a conversation: no greetings, no questions back.
+
+You are given a digest: computed numbers for the saved plan against the plan with the change (each
+metric has an id in square brackets), the guardrails the change trips, the entries around it (with
+ids), and the athlete's profile and notes. Interpret the digest. Do NOT recompute numbers and never
+invent data. A metric that is absent is unavailable: say nothing about it.
+
+Respond with ONLY a valid JSON object, no prose and no markdown fences. Exactly these keys:
+  "verdict"   - "fine" | "caution" | "bad"
+  "headline"  - one sentence (max 140 chars) that answers the athlete's question
+  "reasons"   - up to {MAX_REASONS} objects {{"text": 1-2 sentences quoting the numbers or entries
+                behind it, "metric_ids": [ids from the digest it rests on]}}
+  "suggested" - null when the change is fine as it is. Otherwise the COMPLETE alternative change
+                set, which REPLACES the athlete's: it must contain their change (adjusted if
+                needed) plus anything else that has to move. Shape {{"set": [...], "delete": [ids]}}.
+                A "set" item without "id" creates an entry ("date" and "workout_type" required); with
+                an "id" from the digest's calendar list it changes only the fields you send.
+                Fields: date (YYYY-MM-DD), workout_type (one of: {", ".join(kinds.WORKOUT_TYPES)}),
+                description, duration_min (integer), distance + distance_unit ("km" or "mi"),
+                elevation + elevation_unit ("m" or "ft"), intensity ("easy", "moderate", "hard").
+                Change as little as possible: move or shorten the one session that has to give.
+
+How to judge:
+- Both ramp comparisons matter: a historical median must not hide a recent increase. Moving time
+  measures volume, not intensity or mechanical stress.
+- Planned Strength counts as load by its duration; logged strength sessions never enter a running or
+  cycling baseline, so a planned one can read as a jump against it. Weigh the number against how
+  hard the session really is instead of treating it as running volume.
+- Judge how the change sits against the neighbouring days: a hard or long session the next day, a
+  rest day it removes, a race. A change marked "not counted" did not move the load numbers: judge it
+  on the neighbours alone and say it is outside the load model.
+- A guardrail violation marked HARD is a rule, not an opinion. Never suggest training on a
+  blocked-out day, or on a race day beyond a short easy shakeout.
+- Respect the athlete's notes, injuries first.
+- The server raises your verdict to match any guardrail violation; do not understate one.\
+"""
+
+
+def _entry_line(n: dict) -> str:
+    bits = [n["type"] or n["kind"] or "entry"]
+    if n.get("name"):
+        bits.append(f"\"{n['name']}\"")
+    if n.get("distance"):
+        bits.append(n["distance"])
+    if n.get("duration_min"):
+        bits.append(f"{round(n['duration_min'])} min")
+    if n.get("intensity"):
+        bits.append(n["intensity"])
+    tag = " (proposed)" if n["hypothetical"] else " (changed)" if n["modified"] else ""
+    ident = "new" if n["id"] is None else str(n["id"])
+    return f"[{ident}] {n['day']}: {', '.join(bits)}{tag}"
+
+
+def build_what_if_prompt(
+    digest: dict,
+    question: str,
+    profile_text: str = "",
+    protected_notes: Optional[list[str]] = None,
+    units: UnitSystem = ts.DEFAULT_UNIT_SYSTEM,
+) -> str:
+    """The user message: the digest as text, the athlete's profile and notes, their question."""
+    c = digest["context"]
+    sections = [
+        f"## Today\n{fmt_day(digest['as_of'])}. Coaching mode: {digest['mode']}. Load is moving "
+        f"time in hours. Give any distance in {unit_label(Quantity.DISTANCE, units)} and say so "
+        'with "distance_unit".'
+    ]
+    if profile_text:
+        sections.append(f"## Athlete\n{profile_text}")
+    if protected_notes:
+        sections.append("## Notes to respect\n" + "\n".join(protected_notes))
+
+    changes = []
+    for ch in digest["changes"]:
+        effect = (
+            f"{ch['hours']:g} h of planned load"
+            if ch["counted"]
+            else f"not counted in load ({ch['reason'].replace('_', ' ')})"
+        )
+        scored = "" if ch["scored"] else "; never scored against the athlete's activities"
+        changes.append(f"[{ch['ref']}] {ch['op']} {ch['day']}: {ch['label']}; {effect}{scored}")
+    sections.append("## Proposed change (not saved)\n" + "\n".join(changes))
+
+    metrics = [
+        f"[{m['id']}] {m['label']}: {m['formatted_before'] or 'n/a'} -> "
+        f"{m['formatted_after'] or 'n/a'}"
+        + (f" ({m['formatted_delta']})" if m["formatted_delta"] else "")
+        for m in digest["metrics"]
+    ] or ["No load metric moves."]
+    if "load" in digest["missing"]:
+        metrics.append(
+            f"Fatigue/fitness load is unavailable (under {ts.MIN_HISTORY_DAYS} days of history)."
+        )
+    sections.append("## Metrics, saved plan -> with the change\n" + "\n".join(metrics))
+
+    th = digest["thresholds"]
+    v = digest["violations"]
+    guardrails = [f"- NEW{' HARD' if x['hard'] else ''}: {x['detail']}" for x in v["new"]] + [
+        f"- RESOLVED: {x['detail']}" for x in v["resolved"]
+    ]
+    sections.append(
+        f"## Guardrails (a ramp above {th['ramp_high']:.0f}% or a ratio above {th['acwr_high']} "
+        "is high)\n" + ("\n".join(guardrails) or "The change introduces and resolves no violation.")
+    )
+
+    around = [_entry_line(n) for n in c["neighbors"]] or ["Nothing else within three days."]
+    sections.append("## Calendar around the change (ids in brackets)\n" + "\n".join(around))
+
+    context = []
+    if c["next_race"]:
+        r = c["next_race"]
+        context.append(f"Next race: {r['name']} on {fmt_day(r['date'])} ({r['days_out']} days).")
+    if c["blocked_days"]:
+        context.append("Blocked-out days: " + ", ".join(fmt_day(d) for d in c["blocked_days"]))
+    if c["typical_week"]:
+        t = c["typical_week"]
+        context.append(
+            f"A typical week is {t['median']:g} h (range {t['low']:g}-{t['high']:g} h over "
+            f"{t['weeks']} weeks)."
+        )
+    if context:
+        sections.append("## Context\n" + "\n".join(context))
+
+    sections.append("## The athlete's question\n" + (question.strip() or "Is this a good idea?"))
+    return "\n\n".join(sections)
+
+
+def verdict_floor(digest: dict) -> str:
+    """The least severe verdict the computed guardrails allow: a new hard violation is bad, any
+    other new violation at least a caution. A lenient model cannot understate what the rules
+    already say."""
+    new = digest["violations"]["new"]
+    if any(v["hard"] for v in new):
+        return "bad"
+    return "caution" if new else "fine"
+
+
+def _clean_ids(raw, valid: set[str]) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    return [i for i in raw if isinstance(i, str) and i in valid]
+
+
+def _clean_suggested(raw) -> Optional[dict]:
+    """The model's alternative change set in the `update_training_plan` shape, or None. Items are
+    left as sent: validating them (and refusing the whole set on one bad item) is the caller's."""
+    if not isinstance(raw, dict):
+        return None
+    sets = raw.get("set") if isinstance(raw.get("set"), list) else []
+    deletes = raw.get("delete") if isinstance(raw.get("delete"), list) else []
+    return {"set": sets, "delete": deletes} if sets or deletes else None
+
+
+def parse_what_if_response(text: str, digest: dict) -> dict:
+    """The model's JSON as `{verdict, headline, reasons, suggested}`.
+
+    Raises ``json.JSONDecodeError`` / ``TypeError`` when there is no JSON object. An unknown verdict
+    becomes "caution"; the verdict is never milder than `verdict_floor`; metric ids the digest does
+    not have are dropped from the reasons.
+    """
+    parsed = _extract_json_object(text)
+    if not isinstance(parsed, dict):
+        raise TypeError("expected a JSON object")
+    verdict = parsed.get("verdict")
+    if verdict not in VERDICTS:
+        verdict = "caution"
+    floor = verdict_floor(digest)
+    if VERDICTS.index(floor) > VERDICTS.index(verdict):
+        verdict = floor
+    valid = {m["id"] for m in digest["metrics"]} | {c["ref"] for c in digest["changes"]}
+    reasons = []
+    for r in (parsed.get("reasons") or [])[:MAX_REASONS]:
+        if isinstance(r, dict) and r.get("text"):
+            reasons.append(
+                {"text": str(r["text"]), "metric_ids": _clean_ids(r.get("metric_ids"), valid)}
+            )
+    return {
+        "verdict": verdict,
+        "headline": str(parsed.get("headline") or "")[:200],
+        "reasons": reasons,
+        "suggested": _clean_suggested(parsed.get("suggested")),
     }

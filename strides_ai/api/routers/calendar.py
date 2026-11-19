@@ -11,6 +11,7 @@ from sqlmodel import Session
 
 from ... import compliance
 from ... import kinds
+from ...backends.base import MAX_PLAN_OPERATIONS, _plan_ops
 from ...config import VALID_MODES, get_settings
 from ...coach import RECENT_ACTIVITIES_IN_SYSTEM
 from ...db import activities as act_crud
@@ -18,6 +19,7 @@ from ...db import calendar as crud
 from ...db import memories as mem_crud
 from ...db import profiles as prof_crud
 from ...db.engine import get_session
+from ...memory_context import split_memories
 from ...plan_generation import (
     SURROUNDING_WINDOW_DAYS,
     build_plan_generation_prompt,
@@ -36,7 +38,12 @@ from ...sources.ridewithgps import condense_elevation_profile
 from ...sources.routes import fetch_route_detail, fetch_route_summary
 from ...training_state import build_training_state, check_plan_changes, render_for_prompt
 from ...units import UnitSystem
-from ...what_if import build_what_if_digest
+from ...what_if import (
+    WHAT_IF_SYSTEM_PROMPT,
+    build_what_if_digest,
+    build_what_if_prompt,
+    parse_what_if_response,
+)
 from ...workout_structure import render_text, structure_from_json, to_zwo, zwo_filename
 from ..deps import get_backend, get_units
 
@@ -92,6 +99,7 @@ class WhatIfBody(BaseModel):
     """Calendar operations to evaluate without saving them (the shape the bulk endpoint takes)."""
 
     ops: list[ChangeOp]
+    question: str = ""
 
 
 class GeneratePlanBody(BaseModel):
@@ -326,29 +334,112 @@ def _ops_from_body(body_ops: list[ChangeOp]) -> list[dict]:
     return ops
 
 
+MAX_WHAT_IF_QUESTION_CHARS = 1000
+
+
 @router.post("/calendar/what-if")
-def what_if(
+async def what_if(
     body: WhatIfBody,
     request: Request,
+    llm: bool = True,
     session: Session = Depends(get_session),
+    backend=Depends(get_backend),
     units: UnitSystem = Depends(get_units),
 ):
-    """What a calendar change would do to load, ramp and the guardrails, without saving it.
+    """What a calendar change would do to load, ramp and the guardrails, and what the coach makes
+    of it, without saving anything.
 
     The operations are run against the calendar's own rules and rolled back, so a change that
-    would be refused is refused here (400) with the same message. The numbers are the
-    deterministic diff of `what_if.py`; nothing is written."""
+    would be refused is refused here (400) with the same message. ``digest`` is the deterministic
+    diff of `what_if.py`; with ``llm`` (the default) ``coach`` adds a verdict and, when something
+    else has to move, a complete alternative change set already checked against the same rules.
+    A coach failure never loses the digest: it comes back as ``coach_error``."""
     ops = _ops_from_body(body.ops)
     if not ops:
         raise HTTPException(status_code=400, detail="No changes to evaluate")
     mode = _load_mode(request)
     plan_rows = crud.get_plan_rows(session)
     _write(crud.apply_changes, session, ops, None, None, True)
+    today = date_cls.today()
     rows = [r.model_dump() for r in act_crud.get_for_mode(session, mode)]
-    digest = build_what_if_digest(
-        rows, plan_rows, crud.get_prefs(session), mode, units, date_cls.today(), ops
+    prefs = crud.get_prefs(session)
+    digest = build_what_if_digest(rows, plan_rows, prefs, mode, units, today, ops)
+    out = {"digest": digest, "coach": None, "coach_error": None}
+    if not llm:
+        return out
+    try:
+        out["coach"] = await _coach_verdict(
+            session, backend, body.question, digest, plan_rows, rows, prefs, mode, units, today
+        )
+    except Exception as exc:
+        logger.warning("What-if coach verdict failed: %s", exc)
+        out["coach_error"] = str(exc) or "The coach could not be reached."
+    return out
+
+
+async def _coach_verdict(
+    session, backend, question, digest, plan_rows, rows, prefs, mode, units, today
+) -> dict:
+    profile_text = profile_to_text(prof_crud.get_fields(session, mode), mode, units)
+    protected, _ = split_memories([m.model_dump() for m in mem_crud.get_all(session)], today)
+    prompt = build_what_if_prompt(
+        digest, question[:MAX_WHAT_IF_QUESTION_CHARS], profile_text, protected, units
     )
-    return {"digest": digest}
+
+    def _run_llm() -> str:
+        return backend.stateless_turn(
+            WHAT_IF_SYSTEM_PROMPT, prompt, lambda _: None, source="what_if"
+        )
+
+    text = await asyncio.get_event_loop().run_in_executor(None, _run_llm)
+    try:
+        parsed = parse_what_if_response(text, digest)
+    except (json.JSONDecodeError, TypeError) as exc:
+        logger.error("What-if reply unreadable (%s); %d chars: %r", exc, len(text), text[:2000])
+        raise RuntimeError("The coach's reply could not be read. Try again.")
+    suggested = parsed.pop("suggested")
+    suggestion, rejected = (
+        _review_suggestion(session, suggested, plan_rows, rows, prefs, mode, units, today)
+        if suggested
+        else (None, None)
+    )
+    return {
+        **parsed,
+        "suggestion": suggestion,
+        "suggestion_rejected": rejected,
+        "model": backend.label,
+    }
+
+
+def _review_suggestion(
+    session, suggested, plan_rows, rows, prefs, mode, units, today
+) -> tuple[dict | None, str | None]:
+    """The coach's alternative change set if the calendar would accept it, else (None, why).
+
+    It goes through everything the coach's own `update_training_plan` does: argument checks and
+    units, the per-call cap, the calendar's rules (as a dry run) and the guardrails. Any refusal
+    or hard violation drops the whole set: half of a move is worse than none. Soft violations
+    stay, as warnings."""
+    ops, _, errors = _plan_ops(suggested, plan_rows)
+    if errors:
+        return None, "; ".join(errors[:3])
+    if len(ops) > MAX_PLAN_OPERATIONS:
+        return None, f"The suggestion changes {len(ops)} entries; at most {MAX_PLAN_OPERATIONS}."
+    try:
+        crud.apply_changes(session, ops, None, None, True)
+    except crud.EntryError as exc:  # EntryNotFound is one
+        return None, str(exc)
+    checked = build_what_if_digest(rows, plan_rows, prefs, mode, units, today, ops)
+    new = checked["violations"]["new"]
+    hard = [v for v in new if v["hard"]]
+    if hard:
+        return None, hard[0]["detail"]
+    return {
+        "ops": ops,
+        "changes": checked["changes"],
+        "metrics": checked["metrics"],
+        "warnings": [v["detail"] for v in new],
+    }, None
 
 
 @router.get("/calendar/entries/{entry_id}/zwo")

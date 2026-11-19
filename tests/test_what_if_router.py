@@ -2,6 +2,8 @@
 the saved plan, and never writes. Calls the handler directly (no TestClient), as the other router
 tests do; the clock is the real one, so activities are seeded relative to today."""
 
+import asyncio
+import json
 from datetime import date, timedelta
 from types import SimpleNamespace
 
@@ -11,7 +13,13 @@ from sqlalchemy import text
 from sqlmodel import Session
 
 from strides_ai import db
-from strides_ai.api.routers.calendar import ChangeOp, WhatIfBody, what_if
+from strides_ai.api.routers.calendar import (
+    BulkBody,
+    ChangeOp,
+    WhatIfBody,
+    bulk_calendar_entries,
+    what_if,
+)
 from strides_ai.db import calendar as crud
 from strides_ai.db.engine import get_engine
 from strides_ai.units import UnitSystem
@@ -50,10 +58,44 @@ def _counts():
         return {t: s.exec(text(f"select count(*) from {t}")).one()[0] for t in TABLES}
 
 
-def _call(ops, mode="running"):
-    body = WhatIfBody(ops=[ChangeOp(**o) for o in ops])
+class _StubBackend:
+    label = "stub-model"
+
+    def __init__(self, reply=None, error=None):
+        self.reply, self.error, self.calls = reply, error, []
+
+    def stateless_turn(self, system, user_input, on_token, source="other"):
+        self.calls.append({"system": system, "user": user_input, "source": source})
+        if self.error:
+            raise self.error
+        return self.reply
+
+
+def _call(ops, mode="running", llm=False, backend=None, question=""):
+    body = WhatIfBody(ops=[ChangeOp(**o) for o in ops], question=question)
     with Session(get_engine()) as session:
-        return what_if(body=body, request=_request(mode), session=session, units=UnitSystem.METRIC)
+        return asyncio.run(
+            what_if(
+                body=body,
+                request=_request(mode),
+                llm=llm,
+                session=session,
+                backend=backend,
+                units=UnitSystem.METRIC,
+            )
+        )
+
+
+def _reply(**over):
+    return json.dumps(
+        {
+            "verdict": "fine",
+            "headline": "Fine.",
+            "reasons": [{"text": "It adds 0.75 h.", "metric_ids": ["change.1"]}],
+            "suggested": None,
+            **over,
+        }
+    )
 
 
 STRENGTH = {
@@ -152,3 +194,133 @@ def test_dry_run_enforces_the_same_rules_as_a_write(tmp_db):
         with pytest.raises(crud.EntryError, match="already has a scored run"):
             crud.apply_changes(s, clash, dry_run=True)
     assert len(db.get_training_plan()) == 1
+
+
+# ── the coach's verdict ─────────────────────────────────────────────────────────────
+
+
+def test_without_llm_the_coach_is_never_called(tmp_db):
+    _seed_history()
+    backend = _StubBackend(_reply())
+    out = _call([STRENGTH], llm=False, backend=backend)
+    assert backend.calls == [] and out["coach"] is None and out["coach_error"] is None
+
+
+def test_the_verdict_comes_back_with_the_digest_and_nothing_is_written(tmp_db):
+    _seed_history()
+    backend = _StubBackend(_reply())
+    before = _counts()
+    out = _call([STRENGTH], llm=True, backend=backend, question="Kettlebell on Friday?")
+    assert _counts() == before
+    coach = out["coach"]
+    assert (coach["verdict"], coach["headline"], coach["model"]) == ("fine", "Fine.", "stub-model")
+    assert coach["suggestion"] is None and coach["suggestion_rejected"] is None
+    call = backend.calls[0]
+    assert call["source"] == "what_if"  # usage is logged under it
+    assert "Kettlebell on Friday?" in call["user"] and "[change.1]" in call["user"]
+
+
+def test_a_blocked_day_cannot_be_called_fine(tmp_db):
+    _seed_history()
+    with Session(get_engine()) as s:
+        crud.save_prefs(s, [FUTURE.isoformat()])
+    out = _call([STRENGTH], llm=True, backend=_StubBackend(_reply(verdict="fine")))
+    assert out["coach"]["verdict"] == "bad"
+
+
+def test_protected_notes_reach_the_prompt_and_other_notes_do_not(tmp_db):
+    _seed_history()
+    db.save_memory("injury", "Left knee: no impact work")
+    db.save_memory("preference", "Likes hummus")
+    backend = _StubBackend(_reply())
+    _call([STRENGTH], llm=True, backend=backend)
+    assert "Left knee" in backend.calls[0]["user"] and "hummus" not in backend.calls[0]["user"]
+
+
+def test_a_failing_coach_keeps_the_digest(tmp_db):
+    _seed_history()
+    out = _call([STRENGTH], llm=True, backend=_StubBackend(error=RuntimeError("provider down")))
+    assert out["coach"] is None and "provider down" in out["coach_error"]
+    assert out["digest"]["changes"][0]["counted"] is True
+
+
+def test_an_unreadable_reply_keeps_the_digest(tmp_db):
+    _seed_history()
+    out = _call([STRENGTH], llm=True, backend=_StubBackend("I think it is fine!"))
+    assert out["coach"] is None and "could not be read" in out["coach_error"]
+    assert out["digest"]["metrics"]
+
+
+# ── the coach's suggestion is checked before it is offered ───────────────────────────
+
+
+def _suggest(**suggested):
+    return _call(
+        [STRENGTH], llm=True, backend=_StubBackend(_reply(verdict="caution", suggested=suggested))
+    )["coach"]
+
+
+def test_a_valid_suggestion_is_offered_with_its_own_numbers_and_applies_atomically(tmp_db):
+    _seed_history()
+    later = (FUTURE + timedelta(days=2)).isoformat()
+    coach = _suggest(set=[{"date": later, "workout_type": "Strength", "duration_min": 30}])
+    suggestion = coach["suggestion"]
+    assert coach["suggestion_rejected"] is None and suggestion["warnings"] == []
+    assert [c["date"] for c in suggestion["changes"]] == [later]
+    assert suggestion["metrics"], "the suggestion carries its own before/after numbers"
+    assert db.get_training_plan(later, later) == []  # offered, not applied
+    with Session(get_engine()) as s:  # the ops are exactly what the bulk endpoint takes
+        bulk_calendar_entries(
+            body=BulkBody(ops=[ChangeOp(**o) for o in suggestion["ops"]], request_id="r1"),
+            session=s,
+        )
+    assert [r["workout_type"] for r in db.get_training_plan(later, later)] == ["Strength"]
+
+
+@pytest.mark.parametrize(
+    "suggested,why",
+    [
+        ({"set": [{"id": 999, "duration_min": 20}]}, "No calendar entry with id 999"),
+        ({"set": [{"date": "2026-13-45", "workout_type": "Strength"}]}, ""),
+        ({"set": [{"date": FUTURE.isoformat(), "workout_type": "Nonsense"}]}, ""),
+        (
+            {"set": [{"date": FUTURE.isoformat(), "workout_type": "Easy Run", "distance": 5}]},
+            "distance_unit",
+        ),
+        ({"set": ["not an object"]}, "not an object"),
+        ({"delete": [999]}, "No calendar entry with id 999 to delete"),
+    ],
+)
+def test_a_suggestion_the_calendar_would_refuse_is_dropped_with_the_reason(tmp_db, suggested, why):
+    _seed_history()
+    before = _counts()
+    coach = _suggest(**suggested)
+    assert coach["suggestion"] is None and why in coach["suggestion_rejected"]
+    assert coach["suggestion_rejected"]
+    assert _counts() == before
+
+
+def test_a_suggestion_that_collides_with_an_existing_entry_is_dropped(tmp_db):
+    _seed_history()
+    day = (FUTURE + timedelta(days=1)).isoformat()
+    save_planned_workout(day, "Cross-Training", None, None, None, 30, "easy")
+    coach = _suggest(set=[{"date": day, "workout_type": "Strength", "duration_min": 30}])
+    assert coach["suggestion"] is None and "already has a scored" in coach["suggestion_rejected"]
+
+
+def test_a_suggestion_on_a_blocked_day_is_dropped_whole(tmp_db):
+    _seed_history()
+    blocked = (FUTURE + timedelta(days=1)).isoformat()
+    with Session(get_engine()) as s:
+        crud.save_prefs(s, [blocked])
+    coach = _suggest(
+        set=[
+            {
+                "date": (FUTURE + timedelta(days=2)).isoformat(),
+                "workout_type": "Strength",
+                "duration_min": 30,
+            },
+            {"date": blocked, "workout_type": "Strength", "duration_min": 30},
+        ]
+    )
+    assert coach["suggestion"] is None and "blocked" in coach["suggestion_rejected"]
