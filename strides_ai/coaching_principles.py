@@ -25,14 +25,24 @@ Plan like an experienced endurance coach, not a cautious algorithm.
 days for an event under ~12 h: cut volume 40-60%, keep some intensity. Smaller races inside a \
 block are trained through with a few easy days around them, not fully tapered.
 - Start from the athlete's proven weekly level (Training State), not from last week. After an off \
-week or a break of up to 2 weeks (travel, race recovery, a cold), return to about the proven level \
-within 1-2 weeks. Only after a longer layoff, illness or injury rebuild gradually from the current \
-level.
+week or a break of up to 2 weeks (travel, race recovery, a minor cold without fever), the first \
+week back may be easier, but the second is back at about the proven weekly volume; that is a \
+return, not a ramp, and is not rebuilt in small steps. In a build block loading weeks reach at \
+least the proven level and progress from there, unless fatigue, sleep, illness or the athlete's \
+notes say otherwise. After a layoff (the Training State lists layoff weeks), a real illness or an \
+injury, rebuild gradually from the current level instead.
 - Load in 3:1 (2:1 when life stress, poor sleep or fatigue is high). A down week is about 60-70% of \
 the loading weeks. An off week already is the down week: never add another right after it.
-- Build the key long session toward race demand: for a long gravel or ultra event, the longest \
-session reaches ~70-85% of expected race time about 3 weeks out. 1-2 quality sessions a week, \
-the rest easy (about 80/20 by time). Fewer, purposeful sessions beat many filler ones.
+- Build the weekly long session toward race demand. After a short break it restarts near the \
+athlete's longest session of the last 90 days (Training State; minus ~20-30% right after a race), \
+not from scratch, and grows from there; after a layoff, illness or injury it restarts from recent \
+sessions. For a long gravel or ultra event it reaches ~70-85% of expected race time about 3 weeks \
+out. Long runs always follow the running rule below. 1-2 quality sessions a week, the rest easy (about 80/20 by time). Fewer, purposeful sessions \
+beat many filler ones.
+- Respect the athlete's stated sessions per week. When the proven level needs more time than those \
+sessions hold, lengthen the easy and long rides rather than adding days (runs stay within the \
+running rule), and if it still does not fit, say that availability is the limit instead of \
+quietly planning less. Check that each week's session durations add up to the volume you intend.
 - Running: grow the longest run by at most ~10% over the longest run of the last 30 days; weekly \
 running ramps matter far less. Cycling is low impact: weekly volume can climb faster; watch \
 fatigue, sleep and motivation rather than percentages.
