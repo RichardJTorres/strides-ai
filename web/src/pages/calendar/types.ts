@@ -118,6 +118,7 @@ export interface GeneratePlanResult {
 // moving time (`unit` = "h"); ramp_pct is vs `baseline`, the mean of the last 4 normal weeks with
 // off weeks (travel, race taper, a dip) set aside and listed in `set_aside`. Flags are advisory.
 export interface TrainingState {
+  mode: "running" | "cycling" | "hybrid" | null;  // whose sessions the load counts
   load: { ctl: number | null; atl: number | null; ratio: number | null };
   thresholds: {
     acwr_low: number; acwr_high: number; ramp_elevated: number; ramp_high: number; ramp_min_delta_h: number;

@@ -67,6 +67,7 @@ MAX_SET_ASIDE_WEEKS = 2
 # reference; a down week is an off week or one at most DOWN_RAMP_PCT. The 4th loading week in a
 # row with no down week between is flagged. A travel week counts as the down week.
 LOADING_RAMP_PCT = 5.0
+LOADING_MIN_DELTA_H = 0.25  # ... and at least 15 min more: a 3-minute rise on a tiny week is noise
 DOWN_RAMP_PCT = -20.0
 LOADING_WEEKS_BEFORE_DOWN = 3
 # Capacity: what the athlete has proven they can do, not what they did last week.
@@ -121,10 +122,12 @@ class TrainingState:
     constraints: dict = field(default_factory=dict)  # {races, blocked_days, next_race}
     conflicts: list = field(default_factory=list)  # [Violation.to_dict()]
     unscored_planned: list = field(default_factory=list)  # planned dates with no usable duration
+    mode: Optional[str] = None  # whose sessions count: see _load_scope
 
     def to_dict(self) -> dict:
         return {
             "as_of": self.as_of,
+            "mode": self.mode,
             "unit": self.unit,
             "thresholds": self.thresholds,
             "load": self.load,
@@ -293,7 +296,9 @@ def week_series(
             pass
         elif off or (ramp is not None and ramp <= DOWN_RAMP_PCT):
             loading_run = 0
-        elif ramp is not None and ramp >= LOADING_RAMP_PCT:
+        elif (
+            ramp is not None and ramp >= LOADING_RAMP_PCT and vol - baseline >= LOADING_MIN_DELTA_H
+        ):
             loading_run += 1
             if loading_run > LOADING_WEEKS_BEFORE_DOWN:
                 flags.append("no_recovery_week")
@@ -571,6 +576,7 @@ def build_training_state(
         run_spikes=run_spikes,
         constraints=constraints,
         unscored_planned=[d for d in unscored if d >= today.isoformat()],
+        mode=mode,
     )
     state.conflicts = [v.to_dict() for v in _find_conflicts(state, plan_rows)]
     return state
@@ -904,10 +910,22 @@ def render_for_prompt(state: TrainingState, units: UnitSystem = DEFAULT_UNIT_SYS
         f"fatigue/fitness ratio is context only (above {ACWR_DANGER} after a big week is normal). "
         "Never schedule on blocked-out days or race days."
     )
-    return "## Training State (load = moving time, logged and planned)\n" + "\n".join(lines)
+    return (
+        f"## Training State (load = logged and planned moving time of {_load_scope(state.mode)})\n"
+        + "\n".join(lines)
+    )
 
 
 UPCOMING_DAYS_FOR_PROMPT = 14
+
+
+def _load_scope(mode: Optional[str]) -> str:
+    """Which sessions this mode's load counts, so a running-only ramp is never read as all sports."""
+    if mode == "running":
+        return "runs only, plus planned cross-training and strength; rides are not counted"
+    if mode == "cycling":
+        return "rides only, plus planned cross-training and strength; runs are not counted"
+    return "all sports"
 
 
 def _fmt_hours(hours: float) -> str:

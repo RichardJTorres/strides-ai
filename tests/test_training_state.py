@@ -648,7 +648,8 @@ def test_prompt_shows_capacity_one_ramp_and_calls_the_notes_advisory():
     from strides_ai.training_state import render_for_prompt
 
     text = render_for_prompt(athlete_state(6.2), UnitSystem.IMPERIAL)
-    assert "load = moving time" in text
+    assert "load = logged and planned moving time of all sports" not in text  # running mode
+    assert "load = logged and planned moving time of runs only" in text
     assert "Proven weekly level: 9.0 h" in text
     assert "Longest run: last 30 days" in text
     assert "Off weeks set aside from the ramp:" in text and "0.6 h, travel" in text
@@ -657,3 +658,18 @@ def test_prompt_shows_capacity_one_ramp_and_calls_the_notes_advisory():
     assert "Planning Principles" in text
     assert "BOTH comparisons" not in text and "8-week median" not in text
     assert "mi/day" not in text and "km/day" not in text
+
+
+def test_a_tiny_rise_is_not_a_loading_week():
+    # Running-only volume for a mostly-cycling athlete: +27% and +5% on under an hour are minutes.
+    out = series([0.25, 0.5, 0.5, 0.5, 0.75, 1.34, 0.43, 1.92, 0.75, 1.17])
+    assert not any("no_recovery_week" in w["flags"] for w in out)
+
+
+def test_prompt_says_which_sessions_count_in_the_mode():
+    from strides_ai.training_state import render_for_prompt
+
+    running = render_for_prompt(state(mode="running"))
+    assert "moving time of runs only" in running and "rides are not counted" in running
+    assert "moving time of all sports" in render_for_prompt(state(mode="hybrid"))
+    assert "rides only" in render_for_prompt(state(mode="cycling"))
