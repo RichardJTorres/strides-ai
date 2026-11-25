@@ -1,5 +1,5 @@
 // Pure helpers for changing entries; the components own the fetching.
-import type { Entry, Plan } from "./types";
+import type { CalendarOp, Entry, Plan, WhatIfCoach } from "./types";
 
 export const findEntry = (plan: Plan, id: number): Entry | undefined => {
   for (const entries of Object.values(plan)) {
@@ -138,3 +138,21 @@ export function buildEntryBody(
   }
   return body;
 }
+
+/** What a "What if" evaluates for the form: a create for a new entry, an update for an edit.
+ *  `body` is `buildEntryBody`'s, so a create already carries `kind` and `date` and an update is a
+ *  patch; they are the same operations Save would send, so the preview and the write agree. */
+export function whatIfOps(existing: Entry | null, body: Record<string, unknown>): CalendarOp[] {
+  return existing ? [{ op: "update", id: existing.id, ...body }] : [{ op: "create", ...body }];
+}
+
+/** The operations Apply sends: the athlete's own, or the coach's complete alternative, which
+ *  replaces them (it already contains their change, adjusted). */
+export function chosenOps(
+  mine: CalendarOp[], coach: WhatIfCoach | null | undefined, who: "mine" | "coach",
+): CalendarOp[] {
+  return who === "coach" ? coach?.suggestion?.ops ?? [] : mine;
+}
+
+/** A result is only valid for the operations it was computed from: compare them by this key. */
+export const opsKey = (ops: CalendarOp[]): string => JSON.stringify(ops);

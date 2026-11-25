@@ -188,3 +188,75 @@ export interface GridProps {
   /** Opens the week breakdown for the week whose first grid cell is `weekStart`. */
   openWeek: (weekStart: string) => void;
 }
+
+/** One operation of POST /api/calendar/entries/bulk, which /api/calendar/what-if also takes. */
+export type CalendarOp = { op: "create" | "update" | "delete"; id?: number } & Record<string, unknown>;
+
+/** Why the load model ignores a changed entry (`WhatIfChange.reason`). */
+export type WhatIfReason = "past" | "beyond_horizon" | "not_in_load" | "no_duration";
+
+export interface WhatIfChange {
+  ref: string;
+  op: CalendarOp["op"];
+  entry_id: number | null;
+  date: string;
+  day: string;
+  label: string;
+  hours: number | null;
+  scored: boolean;
+  counted: boolean;
+  reason: WhatIfReason | null;
+}
+
+/** A value that differs between the saved plan and the plan with the change; null = unavailable. */
+export interface WhatIfMetric {
+  id: string;
+  label: string;
+  before: number | null;
+  after: number | null;
+  delta: number | null;
+  formatted_before: string | null;
+  formatted_after: string | null;
+  formatted_delta: string | null;
+}
+
+export interface WhatIfViolation {
+  kind: string;
+  date: string;
+  detail: string;
+  hard: boolean;
+}
+
+export interface WhatIfDigest {
+  /** False under 28 days of history: the load metrics are then left out, not zero. */
+  sufficient: boolean;
+  missing: string[];
+  changes: WhatIfChange[];
+  metrics: WhatIfMetric[];
+  violations: { new: WhatIfViolation[]; resolved: WhatIfViolation[] };
+}
+
+/** The coach's complete alternative, already accepted by the calendar's rules as a dry run. */
+export interface WhatIfSuggestion {
+  ops: CalendarOp[];
+  changes: WhatIfChange[];
+  metrics: WhatIfMetric[];
+  warnings: string[];
+}
+
+export interface WhatIfCoach {
+  verdict: "fine" | "caution" | "bad";
+  headline: string;
+  reasons: { text: string; metric_ids: string[] }[];
+  suggestion: WhatIfSuggestion | null;
+  /** Why the coach's alternative was dropped, when it was. */
+  suggestion_rejected: string | null;
+  model: string;
+}
+
+/** POST /api/calendar/what-if. */
+export interface WhatIfResult {
+  digest: WhatIfDigest;
+  coach: WhatIfCoach | null;
+  coach_error: string | null;
+}

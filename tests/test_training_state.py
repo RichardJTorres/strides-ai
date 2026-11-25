@@ -98,6 +98,18 @@ def test_distance_alone_does_not_count_as_load():
     assert s.unscored_planned == [(TODAY + timedelta(days=1)).isoformat()]
 
 
+def test_planned_strength_counts_as_load_in_every_mode_but_yoga_does_not():
+    """Strength is scored by presence (sport-ambiguous), so its planned hours are load in running
+    and cycling mode too; Yoga is unscored and contributes nothing."""
+    day = TODAY + timedelta(days=2)
+    for mode in ("running", "cycling", "hybrid"):
+        strength = state(plan_rows=[plan(day, 45.0, "Strength", "moderate")], mode=mode)
+        assert strength.projection[1]["planned"] == pytest.approx(0.75), mode
+        assert strength.unscored_planned == []
+    yoga = state(plan_rows=[plan(day, 45.0, "Yoga", "easy")])
+    assert yoga.projection[1]["planned"] == 0
+
+
 def test_race_counts_by_goal_time_and_unscored_without_one():
     day = TODAY + timedelta(days=3)
     race = {**plan(day, None, "Running Race", "hard"), "kind": "race", "goal_time_s": 5400}

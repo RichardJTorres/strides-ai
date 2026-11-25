@@ -125,3 +125,40 @@ test('accepting a block replaces only the workouts in range, in one change set',
 test('each accept attempt gets its own idempotency key', () => {
   assert.notEqual(ops.newRequestId(), ops.newRequestId());
 });
+
+// ── "What if" ───────────────────────────────────────────────────────────────────
+
+test('what if evaluates the same body Save would send: a create for a new entry', () => {
+  const body = ops.buildEntryBody('workout', '2026-10-30', form({ workout_type: 'Strength', duration_min: '45' }), ctx());
+  const [op, ...rest] = ops.whatIfOps(null, body);
+  assert.equal(rest.length, 0);
+  assert.deepEqual([op.op, op.kind, op.date, op.workout_type, op.duration_min], ['create', 'workout', '2026-10-30', 'Strength', 45]);
+  assert.equal('id' in op, false);
+});
+
+test('what if on an edit is an update patch with the entry id, and no kind or date', () => {
+  const body = ops.buildEntryBody('workout', 'D', form({ workout_type: 'Easy Run', duration_min: '30' }), ctx({ existing: run }));
+  const [op] = ops.whatIfOps(run, body);
+  assert.deepEqual([op.op, op.id, op.workout_type, op.duration_min], ['update', 2, 'Easy Run', 30]);
+  assert.equal('kind' in op, false);
+  assert.equal('date' in op, false);
+});
+
+test('apply sends the evaluated ops, or the coach alternative that replaces them', () => {
+  const mine = [{ op: 'create', kind: 'workout', date: 'D', workout_type: 'Strength' }];
+  const alternative = [{ op: 'create', kind: 'workout', date: 'E', workout_type: 'Strength' }, { op: 'update', id: 2, date: 'F' }];
+  const coach = { verdict: 'caution', suggestion: { ops: alternative } };
+  assert.equal(ops.chosenOps(mine, coach, 'mine'), mine);
+  assert.equal(ops.chosenOps(mine, coach, 'coach'), alternative);
+  // No suggestion (or no coach at all) offers nothing to send for "coach".
+  assert.deepEqual(ops.chosenOps(mine, { verdict: 'fine', suggestion: null }, 'coach'), []);
+  assert.deepEqual(ops.chosenOps(mine, null, 'coach'), []);
+});
+
+test('a what-if result is only valid for the ops it was computed from', () => {
+  const a = [{ op: 'create', date: 'D', workout_type: 'Strength', duration_min: 45 }];
+  const same = [{ op: 'create', date: 'D', workout_type: 'Strength', duration_min: 45 }];
+  const longer = [{ op: 'create', date: 'D', workout_type: 'Strength', duration_min: 60 }];
+  assert.equal(ops.opsKey(a), ops.opsKey(same));
+  assert.notEqual(ops.opsKey(a), ops.opsKey(longer));
+});

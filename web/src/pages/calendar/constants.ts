@@ -13,15 +13,15 @@ export const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday"
 export const WORKOUT_TYPE_GROUPS: { label: string; types: string[] }[] = [
   { label: "Running", types: ["Easy Run", "Long Run", "Tempo Run"] },
   { label: "Cycling", types: ["Easy Ride", "Long Ride", "Tempo Ride", "Indoor Ride"] },
-  { label: "Other", types: ["Intervals", "Cross-Training", "Yoga"] },
+  { label: "Other", types: ["Intervals", "Cross-Training", "Strength", "Yoga"] },
 ];
 // Route (Strava or RideWithGPS) only makes sense for running/cycling workouts and races.
 export const ROUTE_CAPABLE_WORKOUT_TYPES = new Set([
   ...WORKOUT_TYPE_GROUPS[0].types,
   ...WORKOUT_TYPE_GROUPS[1].types,
 ]);
-// Distance/elevation don't apply to these (never scored either).
-export const NO_DISTANCE_WORKOUT_TYPES = new Set(["Yoga"]);
+// Distance/elevation don't apply to these. Yoga is never scored; Strength is scored by presence.
+export const NO_DISTANCE_WORKOUT_TYPES = new Set(["Strength", "Yoga"]);
 // Structured workouts are cycling-only; the server enforces it.
 export const keepsStructure = (workoutType: string) => WORKOUT_TYPE_GROUPS[1].types.includes(workoutType);
 
@@ -66,7 +66,8 @@ export const WORKOUT_COLORS: Record<string, string> = {
   "Intervals":      "bg-red-500/20 text-red-300 border-red-500/30",
   "Race":           "bg-amber-500/20 text-amber-300 border-amber-500/30",
   "Cross-Training": "bg-blue-500/20 text-blue-300 border-blue-500/30",
-  "Yoga":           "bg-pink-500/20 text-pink-300 border-pink-500/30",
+  "Strength":       "bg-rose-500/20 text-rose-300 border-rose-500/30",
+  "Yoga":          "bg-pink-500/20 text-pink-300 border-pink-500/30",
   "Rest":           "bg-gray-700/50 text-gray-400 border-gray-600/30",
   "Travel":         "bg-sky-500/20 text-sky-300 border-sky-500/30",
   "Other":          "bg-gray-700/50 text-gray-400 border-gray-600/30",

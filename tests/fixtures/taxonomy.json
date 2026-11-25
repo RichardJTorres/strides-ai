@@ -17,10 +17,15 @@
   "unscored_workout_types": [
     "Yoga"
   ],
+  "no_distance_workout_types": [
+    "Strength",
+    "Yoga"
+  ],
   "workout_types": {
     "other": [
       "Intervals",
       "Cross-Training",
+      "Strength",
       "Yoga"
     ],
     "ride": [

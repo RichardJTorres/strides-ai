@@ -452,6 +452,7 @@ def apply_changes(
     ops: list[dict],
     request_id: str | None = None,
     turn_id: int | None = None,
+    dry_run: bool = False,
 ) -> dict:
     """Apply create / update / delete operations atomically and idempotently.
 
@@ -460,9 +461,14 @@ def apply_changes(
     ``request_id`` returns the first result without applying anything again. With a ``turn_id``
     the change is logged in the same transaction (see ``mutations``).
     Returns ``{"created": [ids], "updated": [ids], "deleted": [ids]}``.
+
+    ``dry_run`` answers "would this be accepted?" with every rule this module enforces (unknown
+    type, bad date, one scored workout per sport per day, structure normalization): the set is run
+    and then rolled back, so nothing is stored, logged or remembered under ``request_id``. The
+    created ids it returns are provisional and never become real.
     """
     ops_hash = hashlib.sha1(json.dumps(ops, sort_keys=True, default=str).encode()).hexdigest()
-    if request_id:
+    if request_id and not dry_run:
         prior = session.get(ChangeRequest, request_id)
         if prior is not None:
             stored = json.loads(prior.result_json)
@@ -492,6 +498,9 @@ def apply_changes(
                 result["updated"].append(entry_id)
             else:
                 raise EntryError(f"Unknown operation: {kind!r}")
+        if dry_run:
+            session.rollback()
+            return result
         _log_turn_changes(session, turn_id, ops, result)
         if request_id:
             session.add(

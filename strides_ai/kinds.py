@@ -18,9 +18,13 @@ KINDS_WITH_DETAIL = (KIND_WORKOUT, KIND_RACE)
 
 RUN_WORKOUT_TYPES = frozenset({"Easy Run", "Long Run", "Tempo Run"})
 RIDE_WORKOUT_TYPES = frozenset({"Easy Ride", "Long Ride", "Tempo Ride", "Indoor Ride"})
-OTHER_WORKOUT_TYPES = ("Intervals", "Cross-Training", "Yoga")
+OTHER_WORKOUT_TYPES = ("Intervals", "Cross-Training", "Strength", "Yoga")
 # Workouts that cannot be checked against activity data.
 UNSCORED_WORKOUT_TYPES = frozenset({"Yoga"})
+# Workouts planned by time alone: the planner hides distance and elevation. Strength is scored
+# like Cross-Training (sport-ambiguous, presence-only: any activity logged that day credits it),
+# so it is here but not in UNSCORED_WORKOUT_TYPES.
+NO_DISTANCE_WORKOUT_TYPES = UNSCORED_WORKOUT_TYPES | {"Strength"}
 
 RACE_SPORTS = ("run", "ride", "other")
 RACE_PRIORITIES = ("A", "B", "C")
@@ -86,6 +90,7 @@ def taxonomy() -> dict:
         "route_capable": sorted(ROUTE_CAPABLE_WORKOUT_TYPES),
         "structure_capable": sorted(STRUCTURE_CAPABLE_WORKOUT_TYPES),
         "unscored_workout_types": sorted(UNSCORED_WORKOUT_TYPES),
+        "no_distance_workout_types": sorted(NO_DISTANCE_WORKOUT_TYPES),
         "race_sports": list(RACE_SPORTS),
         "race_priorities": list(RACE_PRIORITIES),
     }

@@ -52,7 +52,7 @@ def test_classify_workout_type_unscored():
 
 
 def test_classify_workout_type_ambiguous_known():
-    for t in ("Intervals", "Race", "Cross-Training"):
+    for t in ("Intervals", "Race", "Cross-Training", "Strength"):
         assert classify_workout_type(t) is SportGroup.AMBIGUOUS
 
 
@@ -131,6 +131,23 @@ def test_ambiguous_type_matched_by_any_sport_present():
     lift = activity(sport_type="WeightTraining", distance_m=None)
     result = compute_day_compliance(p, [lift], TODAY)
     assert result.status is ComplianceStatus.COMPLETED
+
+
+def test_strength_is_credited_by_any_activity_logged_that_day():
+    """Kettlebell may be logged as WeightTraining, Workout, Crossfit or a type Strava reports as
+    Unknown; matching only WeightTraining would call real sessions missed."""
+    p = plan("Strength", distance_km=None)
+    for sport in ("WeightTraining", "Workout", "Crossfit", "Unknown", None):
+        out = compute_day_compliance(p, [activity(sport_type=sport, distance_m=None)], TODAY)
+        assert out.status is ComplianceStatus.COMPLETED, sport
+
+
+def test_strength_is_missed_when_nothing_is_logged_and_the_run_belongs_to_the_run():
+    run_plan = PlannedWorkout(date=PAST, workout_type="Easy Run", distance_km=5.0)
+    strength = plan("Strength", distance_km=None)
+    run = activity(sport_type="Run", distance_m=5_000.0)
+    out = compute_range_compliance([strength, run_plan], [run], TODAY)
+    assert [d.status for d in out] == [ComplianceStatus.MISSED, ComplianceStatus.COMPLETED]
 
 
 def test_ambiguous_type_never_modified_even_with_tiny_distance():

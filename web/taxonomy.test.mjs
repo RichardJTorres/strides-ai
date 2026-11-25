@@ -19,8 +19,12 @@ test('workout types match the backend taxonomy', () => {
   assert.deepEqual(other, [...fixture.workout_types.other].sort());
 });
 
-test('route, structure and unscored sets match', () => {
+test('route, structure and no-distance sets match', () => {
   assert.deepEqual([...c.ROUTE_CAPABLE_WORKOUT_TYPES].sort(), fixture.route_capable);
   assert.deepEqual(c.WORKOUT_TYPE_GROUPS[1].types.filter(c.keepsStructure).sort(), fixture.structure_capable);
-  assert.deepEqual([...c.NO_DISTANCE_WORKOUT_TYPES].sort(), fixture.unscored_workout_types);
+  assert.deepEqual([...c.NO_DISTANCE_WORKOUT_TYPES].sort(), fixture.no_distance_workout_types);
+});
+
+test('every unscored type is also a no-distance type', () => {
+  for (const t of fixture.unscored_workout_types) assert.ok(c.NO_DISTANCE_WORKOUT_TYPES.has(t), t);
 });
