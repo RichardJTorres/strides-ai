@@ -497,7 +497,7 @@ def _apply_guardrails(
     result, mode_rows, plan_rows, prefs, mode, units, today, start: str, end: str
 ) -> dict:
     """Drop generated workouts on blocked-out/race days (a prompt-only rule the model can break)
-    and report load warnings (ramp, projected ratio) without changing the proposal.
+    and report advisory load notes (ramp, loading weeks, run spikes) without changing the proposal.
 
     Load is checked against the plan as the modal's default (Replace) leaves it: the existing
     workout entries in the range are removed as the generated ones are added, so they are not
@@ -584,7 +584,7 @@ async def generate_plan(
 
     def _run_llm():
         return backend.stateless_turn(
-            plan_generation_system_prompt(units),
+            plan_generation_system_prompt(units, mode),
             prompt,
             on_token=lambda _: None,
             source="plan_generation",

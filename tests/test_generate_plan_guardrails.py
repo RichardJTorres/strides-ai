@@ -62,7 +62,7 @@ def test_a_heavy_generated_block_is_flagged_without_dropping_it():
     block = [_workout(TODAY + timedelta(days=i), 240.0) for i in range(1, 8)]
     out = _guard(block)
     assert len(out["workouts"]) == 7
-    assert any("fatigue/fitness ratio" in w or "limit +" in w for w in out["warnings"])
+    assert any("screening line" in w for w in out["warnings"])  # advisory ramp note
 
 
 def test_replace_removes_only_the_workouts_in_the_range_from_the_checked_plan(mocker):
