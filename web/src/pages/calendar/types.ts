@@ -115,22 +115,30 @@ export interface GeneratePlanResult {
 }
 
 // strides_ai/training_state.py (GET /api/calendar/training-state). Load and volumes are hours of
-// moving time (`unit` = "h"); ramp_pct is vs `baseline` (the smaller of the 4-week average and
-// the 8-week median, named in `baseline_basis`).
+// moving time (`unit` = "h"); ramp_pct is vs `baseline`, the mean of the last 4 normal weeks with
+// off weeks (travel, race taper, a dip) set aside and listed in `set_aside`. Flags are advisory.
 export interface TrainingState {
   load: { ctl: number | null; atl: number | null; ratio: number | null };
-  thresholds: { acwr_low: number; acwr_high: number; ramp_elevated: number; ramp_high: number };
+  thresholds: {
+    acwr_low: number; acwr_high: number; ramp_elevated: number; ramp_high: number; ramp_min_delta_h: number;
+  };
   unit: string;
   weeks: {
     week_start: string;
     volume: number;
     ramp_pct: number | null;
     baseline: number | null;
-    baseline_basis: string | null;
-    ramp_comparisons: { ramp_pct: number; baseline: number; basis: string }[];
+    set_aside: string[];
+    off: boolean;
+    off_reason: "race" | "travel" | "low" | "unplanned" | "layoff" | null;  // "layoff": off false, counted
     flags: string[];
   }[];
   typical_week: { median: number; low: number; high: number; weeks: number } | null;
+  capacity: {
+    proven_week: { volume: number; weeks: { week_start: string; volume: number }[] } | null;
+    longest: Record<string, Record<string, { hours: number; date: string } | null>>;
+    recent_off_weeks: { week_start: string; volume: number; reason: string }[];
+  };
   conflicts: { kind: string; date: string; detail: string; hard: boolean }[];
 }
 

@@ -16,30 +16,32 @@ export default function WeekRow({ weekCells, grid }: { weekCells: GridCell[]; gr
   const lives = weekLives(weekCompliance.missed, grid.maxMisses ?? 0);
   const showLives = grid.maxMisses !== null && weekPlannedWorkouts > 0 && (weekCompliance.missed > 0 || weekCells.some(c => c.dateStr === grid.todayStr));
 
-  // Ramp in moving time vs the athlete's typical week (the smaller of the 4-week average and the
-  // 8-week median). Past weeks have no entry (the backend only returns the current and upcoming weeks).
+  // Ramp in moving time vs the mean of the athlete's recent normal weeks (off weeks set aside).
+  // Colour follows the backend's flags, which also need the week to be an hour or more above that
+  // reference. Past weeks have no entry (the backend only returns the current and upcoming weeks).
   const rampChip = (weekCells: GridCell[]) => {
     // The ramp belongs to the Monday-Sunday week, so use the row's Monday (a Sunday-first row
     // has it in its second column).
     const monday = weekCells.find(c => c.date.getDay() === 1);
     const w = monday && trainingState?.weeks.find(x => x.week_start === monday.dateStr);
-    if (!w || w.ramp_pct === null || !trainingState) return null;
-    const t = trainingState.thresholds;
-    const color =
-      w.ramp_pct > t.ramp_high ? "text-red-400" : w.ramp_pct > t.ramp_elevated ? "text-amber-400" : "text-gray-500";
-    const basis = w.baseline !== null && w.baseline_basis
-      ? `Moving time vs the ${w.baseline_basis} (${w.baseline.toFixed(1)} h)`
-      : "Moving time vs recent weeks";
-    const comparisons = w.ramp_comparisons ?? [];
-    const details = comparisons.map(c => `${c.ramp_pct > 0 ? "+" : ""}${Math.round(c.ramp_pct)}% vs ${c.basis} (${c.baseline.toFixed(1)} h)`).join("; ");
-    const title = `${details || basis}${w.flags.length ? `: ${w.flags.join(", ").replace(/_/g, " ")}` : ""}`;
+    if (!w || w.off_reason === "unplanned") return null;
+    if (w.off) {
+      return (
+        <div className="text-[10px] text-sky-400" title={`${w.volume.toFixed(1)} h: an off week (${w.off_reason}), set aside from the ramp; it counts as a down week`}>
+          off · {w.off_reason}
+        </div>
+      );
+    }
+    if (w.ramp_pct === null || w.baseline === null) return null;
+    const color = w.flags.includes("ramp_high") ? "text-red-400"
+      : w.flags.includes("ramp_elevated") ? "text-amber-400" : "text-gray-500";
+    const setAside = w.set_aside ?? [];  // absent from an API older than this page
+    const aside = setAside.length ? `; set aside: ${setAside.join(", ")}` : "";
+    const flags = w.flags.length ? `. Advisory: ${w.flags.join(", ").replace(/_/g, " ")}` : "";
+    const title = `Moving time ${w.volume.toFixed(1)} h vs recent normal weeks (${w.baseline.toFixed(1)} h)${aside}${flags}`;
     return (
       <div className={`text-[10px] ${color}`} title={title}>
-        {comparisons.length > 1 ? comparisons.map(c => (
-          <div key={c.basis} className={c.ramp_pct > t.ramp_high ? "text-red-400" : c.ramp_pct > t.ramp_elevated ? "text-amber-400" : "text-gray-500"}>
-            {c.ramp_pct > 0 ? "+" : ""}{Math.round(c.ramp_pct)}% vs {c.basis === "4-week average" ? "4wk avg" : "8wk median"}
-          </div>
-        )) : <>{w.ramp_pct > 0 ? "+" : ""}{Math.round(w.ramp_pct)}% ramp</>}
+        {w.ramp_pct > 0 ? "+" : ""}{Math.round(w.ramp_pct)}% vs recent
         {w.flags.includes("no_recovery_week") ? " ⚠" : ""}
       </div>
     );
