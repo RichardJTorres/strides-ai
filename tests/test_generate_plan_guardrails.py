@@ -62,7 +62,7 @@ def test_a_heavy_generated_block_is_flagged_without_dropping_it():
     block = [_workout(TODAY + timedelta(days=i), 240.0) for i in range(1, 8)]
     out = _guard(block)
     assert len(out["workouts"]) == 7
-    assert any("fatigue/fitness ratio" in w or "limit +" in w for w in out["warnings"])
+    assert any("screening line" in w for w in out["warnings"])  # advisory ramp note
 
 
 def test_replace_removes_only_the_workouts_in_the_range_from_the_checked_plan(mocker):
@@ -85,3 +85,51 @@ def test_replace_removes_only_the_workouts_in_the_range_from_the_checked_plan(mo
     assert set(changes) == {"create", "delete"}
     assert changes["create"] == generated
     assert sorted(changes["delete"]) == [1, 2]
+
+
+def test_generate_plan_reports_a_block_below_the_proven_level(tmp_db):
+    """End to end through the endpoint: the note comes from the block's own durations."""
+    import asyncio
+    import json as json_
+    from datetime import date as date_
+    from types import SimpleNamespace
+
+    from sqlmodel import Session
+
+    from strides_ai.api.routers.calendar import GeneratePlanBody, generate_plan
+    from strides_ai.db.engine import get_engine
+    from tests.test_what_if_router import _seed_history, _StubBackend
+
+    _seed_history(weeks=12)  # one-hour runs every second day: a proven level of ~4 h
+    monday = date_.today() + timedelta(days=7 - date_.today().weekday() + 7)
+    reply = json_.dumps(
+        {
+            "workouts": [
+                {
+                    "date": (monday + timedelta(weeks=w, days=2)).isoformat(),
+                    "workout_type": "Easy Run",
+                    "duration_min": 30,
+                    "intensity": "easy",
+                }
+                for w in range(3)
+            ],
+            "summary": "Builds back to and above the proven level.",
+        }
+    )
+    body = GeneratePlanBody(
+        start_date=monday.isoformat(),
+        end_date=(monday + timedelta(days=20)).isoformat(),
+        freeform_text="",
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(mode="running")))
+    with Session(get_engine()) as session:
+        out = asyncio.run(
+            generate_plan(
+                body=body,
+                request=request,
+                session=session,
+                backend=_StubBackend(reply),
+                units=UnitSystem.METRIC,
+            )
+        )
+    assert any(w.startswith("Planned weekly hours: 0.5, 0.5, 0.5.") for w in out["warnings"])

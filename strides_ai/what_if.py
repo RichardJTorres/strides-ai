@@ -20,10 +20,11 @@ Digest contract (everything is JSON-able; hours are the load unit, `ts.LOAD_UNIT
 * ``metrics[]`` — only values that differ. ``{id, label, before, after, delta, formatted_before,
   formatted_after, formatted_delta}``; None means "not available" (no baseline yet), never zero.
   Ids are stable and unique: ``week.<monday>.volume`` (sum of hours; zero is a real value),
-  ``week.<monday>.ramp.mean4`` / ``.median8`` (the ramp against each baseline, percent; None when
-  that baseline does not exist) and ``load.peak_ratio`` (the highest projected fatigue/fitness
-  ratio, with ``dates`` for where it falls). A later week's ramp can change although its own
-  volume did not, because its baselines include the changed week.
+  ``week.<monday>.ramp`` (the ramp against the mean of recent normal weeks, percent; None when there
+  is no reference or nothing is planned that week) and ``load.peak_ratio`` (the highest projected
+  fatigue/fitness ratio, with ``dates`` for where it falls; context, not a guardrail). A later
+  week's ramp can change although its own volume did not, because its reference includes the
+  changed week.
 * ``violations`` — ``new``: what the change introduces (`training_state.violations_introduced`, the
   guardrails the coach is held to); ``resolved``: conflicts in the saved plan the change removes.
 * ``context`` — ``next_race``, ``blocked_days`` inside the horizon, ``typical_week`` (the athlete's
@@ -45,9 +46,6 @@ from .plan_generation import _extract_json_object
 from .units import Quantity, UnitSystem, format_value, unit_label
 
 NEIGHBOR_DAYS = 3
-# ramp_comparisons() names its baselines; the digest ids use these short keys.
-_RAMP_KEYS = {"4-week average": "mean4", "8-week median": "median8"}
-_RAMP_LABELS = {"mean4": "4-week average", "median8": "8-week median"}
 
 
 def _trim(value: float, decimals: int) -> str:
@@ -89,15 +87,6 @@ def _metric(mid: str, label: str, before, after, fmt, fmt_delta, decimals: int, 
     }
 
 
-def _ramps(week: Optional[dict]) -> dict[str, Optional[float]]:
-    found = {
-        _RAMP_KEYS[c["basis"]]: c["ramp_pct"]
-        for c in (week or {}).get("ramp_comparisons", [])
-        if c["basis"] in _RAMP_KEYS
-    }
-    return {key: found.get(key) for key in _RAMP_LABELS}
-
-
 def _week_metrics(before: ts.TrainingState, after: ts.TrainingState) -> list[dict]:
     old = {w["week_start"]: w for w in before.weeks}
     new = {w["week_start"]: w for w in after.weeks}
@@ -119,20 +108,20 @@ def _week_metrics(before: ts.TrainingState, after: ts.TrainingState) -> list[dic
                     2,
                 )
             )
-        b_ramp, a_ramp = _ramps(b), _ramps(a)
-        for key, basis in _RAMP_LABELS.items():
-            if b_ramp[key] != a_ramp[key]:
-                out.append(
-                    _metric(
-                        f"week.{week}.ramp.{key}",
-                        f"{name}: ramp vs {basis}",
-                        b_ramp[key],
-                        a_ramp[key],
-                        _pct,
-                        _pct,
-                        1,
-                    )
+        b_ramp = None if b is None else b["ramp_pct"]
+        a_ramp = None if a is None else a["ramp_pct"]
+        if b_ramp != a_ramp:
+            out.append(
+                _metric(
+                    f"week.{week}.ramp",
+                    f"{name}: ramp vs {ts.REFERENCE_BASIS}",
+                    b_ramp,
+                    a_ramp,
+                    _pct,
+                    _pct,
+                    1,
                 )
+            )
     return out
 
 
@@ -259,8 +248,7 @@ def _neighbors(
 
 
 def _conflict_key(v: dict) -> tuple:
-    # The projected breach moves as the plan changes: it is one problem, wherever it falls.
-    return ("ratio_breach", None) if v["kind"] == "ratio_breach" else (v["kind"], v["date"])
+    return (v["kind"], v["date"])
 
 
 def build_what_if_digest(
@@ -352,8 +340,10 @@ Respond with ONLY a valid JSON object, no prose and no markdown fences. Exactly 
                 Change as little as possible: move or shorten the one session that has to give.
 
 How to judge:
-- Both ramp comparisons matter: a historical median must not hide a recent increase. Moving time
-  measures volume, not intensity or mechanical stress.
+- Ramp, loading-week and run-spike notes are advisory screening, not limits. Off weeks (travel,
+  race recovery) are already set aside from the ramp. Moving time measures volume, not intensity or
+  mechanical stress; a cycling hour carries far less impact than a running hour, and a single run
+  much longer than the athlete's recent longest is the best-evidenced running injury risk.
 - Planned Strength counts as load by its duration; logged strength sessions never enter a running or
   cycling baseline, so a planned one can read as a jump against it. Weigh the number against how
   hard the session really is instead of treating it as running volume.
@@ -430,8 +420,9 @@ def build_what_if_prompt(
         f"- RESOLVED: {x['detail']}" for x in v["resolved"]
     ]
     sections.append(
-        f"## Guardrails (a ramp above {th['ramp_high']:.0f}% or a ratio above {th['acwr_high']} "
-        "is high)\n" + ("\n".join(guardrails) or "The change introduces and resolves no violation.")
+        f"## Guardrails (screening notes; a ramp above {th['ramp_high']:.0f}% vs recent normal "
+        "weeks is high)\n"
+        + ("\n".join(guardrails) or "The change introduces and resolves no violation.")
     )
 
     around = [_entry_line(n) for n in c["neighbors"]] or ["Nothing else within three days."]

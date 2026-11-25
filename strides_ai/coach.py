@@ -8,6 +8,7 @@ from .db.calendar import format_goal
 from .db.models import PlanRow
 from .memory_context import NOTES_HEADER, split_memories
 from .modes import MODES
+from .coaching_principles import planning_principles
 from .training_state import build_training_state, render_for_prompt
 from .workout_structure import render_text, structure_from_json
 from .dates import days_away, fmt_day, local_stamp, week_bounds
@@ -399,6 +400,17 @@ def _progress_section(
     return "## Streak and Records\n" + "\n".join(lines)
 
 
+def race_line(r: dict) -> str:
+    """A race from calendar prefs as "Name (sport, goal 4:30:00, priority A)"."""
+    extras = [r["sport"]] if r.get("sport") and r["sport"] != "other" else []
+    if r.get("target_time"):
+        extras.append(f"goal {r['target_time']}")
+    if r.get("priority"):
+        extras.append(f"priority {r['priority']}")
+    suffix = f" ({', '.join(extras)})" if extras else ""
+    return f"{r.get('name', 'Race')}{suffix}"
+
+
 def _calendar_prefs_section() -> str:
     prefs = db.get_calendar_prefs()
     today_date = datetime.now().date()
@@ -413,14 +425,8 @@ def _calendar_prefs_section() -> str:
     if races:
         lines.append("Upcoming races:")
         for r in races:
-            extras = [r["sport"]] if r.get("sport") and r["sport"] != "other" else []
-            if r.get("target_time"):
-                extras.append(f"goal {r['target_time']}")
-            if r.get("priority"):
-                extras.append(f"priority {r['priority']}")
-            suffix = f" ({', '.join(extras)})" if extras else ""
             when = f"{fmt_day(r['date'])}, {days_away(r['date'], today_date)}"
-            lines.append(f"  - {when}: {r.get('name', 'Race')}{suffix}")
+            lines.append(f"  - {when}: {race_line(r)}")
     if blocked:
         lines.append("Blocked-out days (do not schedule workouts on these dates):")
         lines.extend(f"  - {fmt_day(d)}" for d in blocked)
@@ -575,6 +581,7 @@ def build_system(
         Required(
             "training_state", "training state", _training_state_section(activities, mode, units)
         ),
+        Required("planning_principles", "planning principles", planning_principles(mode)),
         Required("upcoming_workouts", "workouts in the next 14 days", near_workouts),
         Reducible(
             "upcoming_later",

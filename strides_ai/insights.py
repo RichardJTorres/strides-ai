@@ -23,16 +23,13 @@ from .analytics.models import CardioAnalyticsActivity
 from .compliance import compliance_for_range, summarize_compliance
 from .route_analysis import _strip_json_fences
 from .training_state import (
-    ACWR_DANGER,
     ACWR_HIGH,
     ACWR_LOW,
-    RAMP_ELEVATED,
     RAMP_HIGH,
     RAMP_MEDIAN_WEEKS,
+    REFERENCE_BASIS,
     TrainingState,
-    ramp_vs_baselines,
-    ramp_comparisons,
-    render_ramp_comparisons,
+    week_series,
 )
 from .units import (
     DEFAULT_UNIT_SYSTEM,
@@ -315,25 +312,41 @@ def build_digest(
             _weekly_avg(acts, hrs, base[0], BASELINE_WEEKS),
         )
     )
-    # Same ramp rule as the coach's Training State (moving time; the smaller of the 4-week mean
-    # and the 8-week median), so the dashboard and the coach cannot disagree about a ramp.
+    # Same ramp rule as the coach's Training State (training_state.week_series: moving time vs the
+    # mean of recent normal weeks, off weeks set aside), so the dashboard and the coach cannot
+    # disagree about a ramp. Two median windows back, so each prior week has its own off verdict.
     last_week = cm - timedelta(weeks=1)
-    first_week = monday_of(min(a.date for a in acts))
-    prior_weeks = [last_week - timedelta(weeks=k) for k in range(RAMP_MEDIAN_WEEKS, 0, -1)]
-    prior_volumes = [_weekly_avg(acts, hrs, w, 1) for w in prior_weeks if w >= first_week]
-    last_volume = _weekly_avg(acts, hrs, last_week, 1)
-    _, ramp_base, ramp_basis = ramp_vs_baselines(last_volume, prior_volumes)
+    first_week = max(
+        monday_of(min(a.date for a in acts)), last_week - timedelta(weeks=2 * RAMP_MEDIAN_WEEKS)
+    )
+    span = [first_week + timedelta(weeks=k) for k in range((last_week - first_week).days // 7 + 1)]
+    travel, race_weeks = set(), set()
+    for p in plan_rows or []:
+        try:
+            wk = monday_of(date.fromisoformat(p.get("date") or ""))
+        except ValueError:
+            continue
+        if p.get("kind") == "travel":
+            travel.add(wk)
+        elif p.get("kind") == "race" or "race" in (p.get("workout_type") or "").lower():
+            race_weeks.add(wk)
+    last = week_series(
+        [(w, _weekly_avg(acts, hrs, w, 1)) for w in span],
+        travel_weeks=frozenset(travel),
+        race_weeks=frozenset(race_weeks),
+    )[-1]
     ramp = _metric(
         "volume.ramp",
-        "Last full week vs typical week",
+        f"Last full week vs {REFERENCE_BASIS}",
         "volume",
-        _weekly_avg(acts, hrs, last_week, 1),
+        last["volume"],
         hours,
-        ramp_base,
+        last["baseline"],
     )
     if ramp:
-        ramp["basis"] = ramp_basis
-        ramp["ramp_comparisons"] = ramp_comparisons(last_volume, prior_volumes)
+        ramp["basis"] = REFERENCE_BASIS
+        ramp["flags"] = last["flags"]
+        ramp["off_reason"] = last["off_reason"]
     metrics.append(ramp)
     metrics.append(
         _metric(
@@ -553,18 +566,20 @@ def _flags(digest: dict) -> list[dict]:
 
     ramp = _get(digest, "volume.ramp")
     if ramp and ramp["delta_pct"] is not None:
-        if ramp["delta_pct"] > RAMP_HIGH:
+        flags_ = ramp.get("flags") or []
+        if "ramp_high" in flags_:
             add(
                 "ramp_high",
                 "warning",
-                f"Last full week was {ramp['delta_pct']:+.0f}% vs the {ramp['basis']}.",
+                f"Last full week was {ramp['delta_pct']:+.0f}% vs {ramp['basis']} "
+                f"(screening line +{RAMP_HIGH:.0f}%).",
                 ["volume.ramp"],
             )
-        elif ramp["delta_pct"] > RAMP_ELEVATED:
+        elif "ramp_elevated" in flags_:
             add(
                 "ramp_elevated",
                 "info",
-                f"Last full week was {ramp['delta_pct']:+.0f}% vs the {ramp['basis']}.",
+                f"Last full week was {ramp['delta_pct']:+.0f}% vs {ramp['basis']}.",
                 ["volume.ramp"],
             )
 
@@ -580,10 +595,10 @@ def _flags(digest: dict) -> list[dict]:
     acwr = _get(digest, "load.acwr")
     if acwr:
         if acwr["value"] > ACWR_HIGH:
-            add(
+            add(  # context only: the ratio is not an injury predictor (training_state)
                 "acwr_high",
-                "warning" if acwr["value"] > ACWR_DANGER else "info",
-                f"Fatigue/fitness ratio is {acwr['value']:.2f} (>{ACWR_HIGH}).",
+                "info",
+                f"Fatigue/fitness ratio is {acwr['value']:.2f} (>{ACWR_HIGH}): a recent big block.",
                 ["load.acwr"],
             )
         elif acwr["value"] < ACWR_LOW:
@@ -635,9 +650,9 @@ def _flags(digest: dict) -> list[dict]:
                 f"(first: {hard[0]['date']}).",
                 [],
             )
-        soft = [c for c in up["conflicts"] if c["kind"] in ("ramp_high", "ratio_breach")]
+        soft = [c for c in up["conflicts"] if c["kind"] in ("ramp_high", "run_spike")]
         if soft:
-            add("projected_overload", "warning", soft[0]["detail"], ["plan.peak_ratio"])
+            add("projected_overload", "info", soft[0]["detail"], [])
 
     comp = digest["context"]["compliance"]
     if comp and comp["consistency_pct"] is not None and comp["consistency_pct"] < 60:
@@ -652,7 +667,7 @@ def _flags(digest: dict) -> list[dict]:
 
 # Bump when the digest's rules or units change (v2: moving-time load and ramp, decoupling gate),
 # so a cached readout written under the old rules is neither shown nor handed to the coach.
-DIGEST_VERSION = 3  # both ramp comparisons and qualified decoupling interpretation
+DIGEST_VERSION = 4  # ramp vs recent normal weeks (off weeks set aside); ratio as context
 
 
 def digest_fingerprint(
@@ -742,8 +757,9 @@ Respond with ONLY a valid JSON object — no prose, no markdown fences. Exactly 
                       Add "date" (YYYY-MM-DD) when the action targets a specific day.
                       Tie advice to the next race or planned-workout adherence when present.
 
-Both ramp comparisons matter: a historical median must not hide a recent increase after illness
-or injury. Moving time measures volume, not intensity or mechanical stress. Numeric decoupling
+Ramp flags are advisory screening against recent normal weeks (off weeks such as travel are set
+aside); the fatigue/fitness ratio is context, not a risk score. Moving time measures volume, not
+intensity or mechanical stress. Numeric decoupling
 only passes exclusion filters; confirm a steady aerobic effort before inferring aerobic fitness.
 
 The digest's "Already on the calendar" section lists sessions, blocked-out days and race dates.
@@ -771,8 +787,8 @@ def build_insights_prompt(digest: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM)
             elif m["delta"] is not None:
                 extra += f", {m['delta']:+.1f} pts"
             extra += ")"
-        if m.get("ramp_comparisons"):
-            extra = " (" + render_ramp_comparisons(m["ramp_comparisons"]) + ")"
+        if m.get("off_reason"):
+            extra += f" [off week: {m['off_reason']}]"
         lines.append(f"[{m['id']}] {m['label']}: {m['formatted']}{extra}")
     if digest["flags"]:
         lines += ["", "## Flags"]
@@ -807,13 +823,9 @@ def build_insights_prompt(digest: dict, units: UnitSystem = DEFAULT_UNIT_SYSTEM)
         if up["race_dates"]:
             lines.append("Race dates: " + ", ".join(up["race_dates"]))
         for w in up["weeks"]:
-            ramp = (
-                ""
-                if w["ramp_pct"] is None
-                else f" ({w['ramp_pct']:+.0f}% vs the {w['baseline_basis']})"
-            )
-            if w.get("ramp_comparisons"):
-                ramp = " (" + render_ramp_comparisons(w["ramp_comparisons"]) + ")"
+            if w["off_reason"] == "unplanned":
+                continue
+            ramp = "" if w["ramp_pct"] is None else f" ({w['ramp_pct']:+.0f}% vs {REFERENCE_BASIS})"
             lines.append(f"Week of {w['week_start']}: {w['volume']:.1f} h planned{ramp}")
         lines += [f"- Plan issue: {c['detail']}" for c in up["conflicts"]]
     if digest["missing"]:

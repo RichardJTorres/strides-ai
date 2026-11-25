@@ -77,9 +77,8 @@ def test_a_friday_strength_session_adds_its_hours_to_the_week():
     assert (volume["before"], volume["after"], volume["delta"]) == (2.0, 2.75, 0.75)
     assert volume["formatted_delta"] == "+0.75 h"
     # Against a 3.5 h baseline: (2 - 3.5) / 3.5 = -42.9 %, (2.75 - 3.5) / 3.5 = -21.4 %.
-    for key in ("mean4", "median8"):
-        ramp = metric(d, f"week.{WEEK}.ramp.{key}")
-        assert (ramp["before"], ramp["after"]) == (-42.9, -21.4)
+    ramp = metric(d, f"week.{WEEK}.ramp")
+    assert (ramp["before"], ramp["after"]) == (-42.9, -21.4)
     assert d["context"]["typical_week"]["median"] == 3.5
     assert d["sufficient"] and d["missing"] == [] and d["unit"] == "h"
 
@@ -102,19 +101,18 @@ def test_the_digest_agrees_with_the_training_state_it_is_built_from():
     assert (ratio["after"], ratio["dates"]["after"]) == (peak["ratio"], peak["date"])
 
 
-def test_a_later_week_ramp_moves_when_its_baseline_does():
-    """Adding 10 h in the week of Jun 8 changes the baselines of the week of Jun 15, which holds a
+def test_a_later_week_ramp_moves_when_its_reference_does():
+    """Adding 10 h in the week of Jun 8 changes the reference of the week of Jun 15, which holds a
     1 h run of its own, so its ramp moves although its own volume did not."""
     plan = [entry(1, TODAY + timedelta(days=13))]  # Tue 2026-06-16, 1 h
     d = digest([create(TODAY + timedelta(days=9), "Easy Run", 600)], plan)
     assert metric(d, "week.2026-06-08.volume")["delta"] == 10.0
     assert metric(d, "week.2026-06-15.volume") is None  # its own volume did not change
-    # mean4 of [May 18 = 4, May 25 = 3, Jun 1 = 2, Jun 8 = 0 -> 10]: 2.25 -> 4.75 h.
-    mean4 = metric(d, "week.2026-06-15.ramp.mean4")
-    assert (mean4["before"], mean4["after"]) == (-55.6, -78.9)  # (1-2.25)/2.25, (1-4.75)/4.75
-    # median8 of [4, 3, 4, 3, 4, 3, 2, 0 -> 10]: 3.0 -> 3.5 h.
-    median8 = metric(d, "week.2026-06-15.ramp.median8")
-    assert (median8["before"], median8["after"]) == (-66.7, -71.4)  # (1-3)/3, (1-3.5)/3.5
+    # Jun 1 (2 h, under 60% of the 3.5 h median) is an off week and Jun 8 has nothing planned, so
+    # both are set aside: the reference is May 25 3, May 18 4, May 11 3, May 4 4 = 3.5 h. With
+    # Jun 8 at 10 h it is Jun 8 10, May 25 3, May 18 4, May 11 3 = 5 h.
+    ramp = metric(d, "week.2026-06-15.ramp")
+    assert (ramp["before"], ramp["after"]) == (-71.4, -80.0)  # (1-3.5)/3.5, (1-5)/5
 
 
 def test_a_change_that_moves_nothing_reports_no_metrics():
@@ -232,12 +230,13 @@ def test_removing_the_workout_on_a_blocked_day_resolves_the_conflict():
     assert d["violations"]["new"] == []
 
 
-def test_a_heavy_block_raises_the_peak_ratio_and_breaches_the_limit():
+def test_a_heavy_block_raises_the_peak_ratio_and_flags_the_ramp_not_the_ratio():
     block = [create(TODAY + timedelta(days=i), "Easy Run", 240) for i in range(1, 8)]
     d = digest(block)
     ratio = metric(d, "load.peak_ratio")
-    assert ratio["after"] > d["thresholds"]["acwr_high"] > ratio["before"]
-    assert "ratio_breach" in {v["kind"] for v in d["violations"]["new"]}
+    assert ratio["after"] > d["thresholds"]["acwr_high"] > ratio["before"]  # shown, as context
+    kinds = {v["kind"] for v in d["violations"]["new"]}
+    assert "ramp_high" in kinds and "ratio_breach" not in kinds
     assert d["violations"]["resolved"] == []
 
 
@@ -252,8 +251,7 @@ def test_under_28_days_of_history_omits_load_instead_of_reporting_zero():
     assert metric(d, f"week.{WEEK}.volume")["delta"] == 0.75  # a plain sum is still real
     # The current week has only two weeks of history behind it: no baseline, so no ramp (None is
     # "not available", never a made-up zero).
-    assert metric(d, f"week.{WEEK}.ramp.mean4") is None
-    assert metric(d, f"week.{WEEK}.ramp.median8") is None
+    assert metric(d, f"week.{WEEK}.ramp") is None
 
 
 def test_no_history_at_all_does_not_crash():

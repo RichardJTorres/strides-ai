@@ -78,7 +78,8 @@ def test_structure_only_create_warns_before_write_and_matches_storage(tmp_db):
     )
     assert not errors
     warnings = check_plan_changes(history(), [], {}, "cycling", UNITS, TODAY, proposed)
-    assert "ratio_breach" in {w.kind for w in warnings}
+    assert warnings == []  # a 4 h structured ride on a 3.5 h week is inside screening
+    assert state(apply_changes([], proposed)).weeks[0]["ramp_pct"] == pytest.approx(14.3)
     preview = apply_changes([], proposed)
     db.apply_calendar_changes(ops)
     assert state(preview).projection == state(db.get_training_plan()).projection
@@ -118,28 +119,34 @@ def ramp_history(end):
     ]
 
 
-def test_coach_sees_recent_increase_even_when_selected_ramp_is_zero():
+def test_a_two_week_dip_is_set_aside_and_named_so_the_coach_can_judge_it():
+    # Two low weeks are a short break (travel, a cold): the return to 10 h is measured against the
+    # normal weeks, and the prompt names the set-aside weeks so the coach can ask why they were low.
     rows = ramp_history(TODAY)
     planned = [{"date": "2026-11-17", "workout_type": "Long Run", "duration_min": 600}]
     result = build_training_state(rows, planned, {}, "running", UNITS, TODAY)
     week = result.weeks[0]
-    assert week["ramp_pct"] == 0
-    assert [c["ramp_pct"] for c in week["ramp_comparisons"]] == [66.7, 0.0]
+    assert week["ramp_pct"] == 0 and week["baseline"] == 10.0
+    assert week["set_aside"] == ["2026-11-02", "2026-11-09"]
     prompt = render_for_prompt(result)
-    assert "+67% vs the 4-week average (6.0 h)" in prompt
-    assert "+0% vs the 8-week median (10.0 h)" in prompt
+    assert (
+        "Off weeks set aside from the ramp: 2026-11-02 (2.0 h, low), 2026-11-09 (2.0 h, low)"
+        in (prompt)
+    )
+    assert "rebuild gradually" not in prompt  # that judgement belongs to the principles
 
 
-def test_insights_exposes_both_ramp_comparisons():
+def test_insights_uses_the_same_ramp_rule_as_the_coach():
     last_week = TODAY - timedelta(weeks=1)
     rows = ramp_history(last_week) + [
         {"date": last_week.isoformat(), "moving_time_s": 36000, "sport_type": "Run"}
     ]
     rows = [{"id": i, **row} for i, row in enumerate(rows)]
     digest = build_digest(rows, "running", UNITS, TODAY)
+    ramp = next(m for m in digest["metrics"] if m["id"] == "volume.ramp")
+    assert (ramp["baseline"], ramp["delta_pct"], ramp["flags"]) == (10.0, 0.0, [])
     prompt = build_insights_prompt(digest)
-    assert "+67% vs the 4-week average (6.0 h)" in prompt
-    assert "+0% vs the 8-week median (10.0 h)" in prompt
+    assert "8-week median" not in prompt and "4-week average" not in prompt
 
 
 def test_decoupling_readouts_do_not_infer_fitness_from_passing_filters():

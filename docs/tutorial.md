@@ -50,8 +50,11 @@ The current mode is shown under the "Strides AI" title and sets the accent colou
 Open **Coach**. Every turn, the coach is given:
 
 - your **profile** and your current **memories**
-- your **training state**: fitness (CTL), fatigue (ATL), this week against your typical week,
-  and week-on-week ramp
+- your **training state**: fitness (CTL), fatigue (ATL), your **proven weekly level** and
+  longest recent sessions, and each week's ramp against your recent normal weeks (travel and
+  other off weeks are set aside)
+- the **planning principles** it builds blocks with: start from your proven level, load 3:1,
+  grow the long session toward race demand, taper before the goal race
 - your **calendar**: races, blocked days and the coming workouts
 - your **30 most recent activities** with their metrics, plus weekly and monthly summaries of
   older ones
@@ -191,7 +194,8 @@ Use this for a fresh block of a few weeks.
    - **Add alongside existing workouts**
 5. Click **Generate**. It usually takes 15–45 seconds, and longer blocks can take a minute or
    two. Keep the dialog open.
-6. Review the proposal: a summary, any warnings (for example a week ramping too fast), and
+6. Review the proposal: a summary, any notes (for example a week ramping well above your
+   recent normal weeks, or a block whose biggest week stays below your proven level), and
    every workout with its distance, duration, intensity and description. Workouts that would
    replace an existing one are flagged **⚠ replaces …**.
 7. Click **Accept & Add to Calendar** to save it all at once, **Regenerate** to try again, or
@@ -211,10 +215,11 @@ Use this to adjust a plan or to plan with some back and forth.
 The coach writes directly to the calendar. Each change it makes is applied as one atomic set,
 and the reply ends with **Calendar updated** and a link. Each change is checked. A
 change is refused outright, with nothing saved, if it puts a workout on a blocked day or a race
-day, or two scored workouts of the same sport on one day. A sharp jump in weekly load, a high
-fatigue/fitness ratio or a missing recovery week is saved, but comes back to the coach as a
-warning. The coach then adjusts the plan or explains the trade-off. These checks are
-screening heuristics, not injury predictions.
+day, or two scored workouts of the same sport on one day. A sharp jump against your recent
+normal weeks, a fourth loading week without a down week, or a run much longer than your
+longest of the last 30 days is saved, but comes back to the coach as an advisory note. The
+coach keeps the plan when your proven level supports it and says why, or adjusts it. These
+checks are screening heuristics, not injury predictions.
 
 **Which to use?** *Generate block* when you want to see the whole block before anything
 changes. *Chat* for edits and when you want to discuss the plan.
@@ -232,7 +237,11 @@ changes. *Chat* for edits and when you want to discuss the plan.
   (yoga, rest, races).
 - A ⚠ badge marks a conflict: a workout planned on a blocked day or on a race day.
 - The **load strip** above the grid shows **CTL** (fitness, 42-day), **ATL** (fatigue, 7-day)
-  and their **Ratio**. Load is measured in **hours of moving time**, all sports added together.
+  and their **Ratio** (context, not a limit). Load is measured in **hours of moving time**: all
+  sports in Hybrid mode; in Running or Cycling mode, that sport plus cross-training and strength.
+- Each week's box shows its **ramp** against your recent normal weeks, for example *−12% vs
+  recent*. A travel week, race-taper week or unusually low week shows **off** instead and is
+  left out of the comparison; it counts as a down week.
 - The **streak strip** shows your current plan streak.
 
 ### Editing
