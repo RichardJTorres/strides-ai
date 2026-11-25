@@ -115,27 +115,29 @@ async def chat(
     coordinator: ConversationCoordinator = request.app.state.conversations
     turn = coordinator.acquire(mode)
     try:
-        llm_blocks, db_parts = [], []
+        llm_blocks, file_displays = [], []
         for file in files:
             if not file.filename:
                 continue
             block, display = await _process_attachment(file)
             llm_blocks.append(block)
-            db_parts.append(display)
+            file_displays.append(display)
+        # An activity card is plain text, so it goes into the message itself rather than as an
+        # attachment block: every provider can read it, not only those that accept attachments.
+        activity_cards, activity_displays = [], []
         for activity_id in activity_ids:
             activity = act_crud.get(session, activity_id)
             if activity is None:
                 raise HTTPException(status_code=404, detail=f"Activity {activity_id} not found")
-            llm_blocks.append(
-                {
-                    "type": "text",
-                    "text": build_activity_card(
-                        activity.model_dump(), settings_crud.get_unit_system(session)
-                    ),
-                }
+            activity_cards.append(
+                build_activity_card(activity.model_dump(), settings_crud.get_unit_system(session))
             )
-            db_parts.append(f"📎 Activity: {activity.name or 'Untitled'} ({activity.date or '?'})")
+            activity_displays.append(
+                f"📎 Activity: {activity.name or 'Untitled'} ({activity.date or '?'})"
+            )
 
+        llm_message = "\n\n".join([*activity_cards, message]) if activity_cards else message
+        db_parts = file_displays + activity_displays
         saved_message = message
         if db_parts:
             saved_message += "\n\n" + "\n".join(db_parts)
@@ -143,7 +145,7 @@ async def chat(
 
         def persist_attachments():
             # Called only after context admission, before the turn is saved or started.
-            for block, display in zip(llm_blocks, db_parts):
+            for block, display in zip(llm_blocks, file_displays):
                 if block.get("type") == "image":
                     filename = display.rsplit("/uploads/", 1)[1][:-1]
                     (UPLOADS_DIR / filename).write_bytes(
@@ -153,7 +155,7 @@ async def chat(
         coordinator.start(
             turn,
             system,
-            message,
+            llm_message,
             saved_message,
             llm_blocks or None,
             on_admitted=persist_attachments,

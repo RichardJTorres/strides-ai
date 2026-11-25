@@ -184,6 +184,16 @@ def get_activities_pending_analysis(limit: int = 10) -> list[dict]:
         return [r.model_dump() for r in _act.get_pending_analysis(s, limit)]
 
 
+def mark_for_reanalysis() -> int:
+    with _session() as s:
+        return _act.mark_for_reanalysis(s)
+
+
+def count_pending_analysis() -> int:
+    with _session() as s:
+        return _act.count_pending_analysis(s)
+
+
 def renormalize_effort_efficiency() -> None:
     with _session() as s:
         _act.renormalize_effort_efficiency(s)

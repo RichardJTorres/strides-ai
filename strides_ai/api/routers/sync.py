@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from ... import db
 from ...sources import configured_sources, hevy_source, strava_source
-from ...sources.base import ConfigurationError
+from ...sources.base import AuthError, ConfigurationError
 from ..deps import init_backend
 
 router = APIRouter()
@@ -37,6 +37,23 @@ def strava_sync(request: Request, full: bool = False):
         init_backend(request.app)
     _mark_synced()
     return {"new_activities": new_count}
+
+
+@router.post("/strava/reanalyze")
+def strava_reanalyze(request: Request, restart: bool = False):
+    """Recompute activity metrics; ``restart`` requeues every analysed activity first."""
+    if not strava_source.is_configured():
+        raise HTTPException(status_code=503, detail="Strava is not configured")
+    try:
+        result = strava_source.reanalyze(restart=restart)
+    except AuthError as exc:
+        # Activities already queued stay pending; "Continue" picks them up once auth works.
+        raise HTTPException(
+            status_code=503, detail=f"{exc}. Check your Strava connection and try again."
+        )
+    if result["analyzed"] > 0:
+        init_backend(request.app)
+    return result
 
 
 @router.post("/hevy/sync")

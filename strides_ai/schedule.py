@@ -1,13 +1,8 @@
 """Nutrition analysis for planned workouts."""
 
 import json
-import os
 import re
 
-import anthropic
-import httpx
-
-from .backends.ollama import DEFAULT_HOST
 from .db.models import PlanRow
 from .units import DEFAULT_UNIT_SYSTEM, UnitSystem, describe_for_prompt
 
@@ -48,47 +43,27 @@ Keep the JSON keys exactly as specified (hydration values stay in ml); write any
 "notes" using {describe_for_prompt(units)}."""
 
 
+def parse_nutrition_response(text: str) -> dict:
+    """The JSON object in a model reply, tolerating code fences or prose around it."""
+    text = text.strip()
+    text = re.sub(r"^```[a-z]*\n?", "", text)
+    text = re.sub(r"\n?```$", "", text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Smaller models sometimes wrap the object in a sentence; take the outermost braces.
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end <= start:
+            raise
+        return json.loads(text[start : end + 1])
+
+
 def analyze_nutrition(
-    workout: dict, profile_text: str, api_key: str, units: UnitSystem = DEFAULT_UNIT_SYSTEM
+    workout: dict, profile_text: str, backend, units: UnitSystem = DEFAULT_UNIT_SYSTEM
 ) -> dict:
-    """Generate nutrition recommendations for a planned workout.
-
-    Routes to Ollama when PROVIDER=ollama, otherwise uses Claude Haiku.
-    """
-    provider = os.environ.get("PROVIDER", "claude").lower()
+    """Generate nutrition recommendations for a planned workout with the selected backend."""
     prompt = _build_prompt(workout, profile_text, units)
-
-    if provider == "ollama":
-        model = os.environ.get("OLLAMA_MODEL", "llama3.1")
-        host = os.environ.get("OLLAMA_HOST", DEFAULT_HOST)
-        response = httpx.post(
-            f"{host}/api/chat",
-            json={
-                "model": model,
-                "stream": False,
-                "format": "json",
-                "messages": [
-                    {"role": "system", "content": NUTRITION_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-            },
-            timeout=60,
-        )
-        response.raise_for_status()
-        text = response.json()["message"]["content"].strip()
-    else:
-        client = anthropic.Anthropic(api_key=api_key)
-        resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=512,
-            system=NUTRITION_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        # Thinking blocks can precede the text, so take the first block that has text.
-        text = next(
-            (b.text for b in resp.content if isinstance(getattr(b, "text", None), str)), ""
-        ).strip()
-        text = re.sub(r"^```[a-z]*\n?", "", text)
-        text = re.sub(r"\n?```$", "", text)
-
-    return json.loads(text)
+    text = backend.stateless_turn(
+        NUTRITION_SYSTEM_PROMPT, prompt, on_token=lambda _: None, source="nutrition"
+    )
+    return parse_nutrition_response(text)

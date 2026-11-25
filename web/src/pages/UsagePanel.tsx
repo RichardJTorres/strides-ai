@@ -28,6 +28,7 @@ const SOURCE_LABELS: Record<string, string> = {
   deep_dive: "Activity deep dive",
   insights: "Training insights",
   memory_review: "Memory review",
+  nutrition: "Nutrition advice",
   plan_generation: "Plan generation",
   route_analysis: "Route analysis",
   what_if: "What if",
