@@ -9,7 +9,9 @@ of FTP (0.75 = 75%), the same convention as Zwift's .zwo files, so no FTP value 
     {"kind": "freeride", "duration_s"}
 
 ``normalize_structure`` is the only way a structure should enter storage: LLM output is
-untrusted, so bad blocks are dropped (never raised on) and values are clamped.
+untrusted, so bad blocks are dropped (never raised on) and values are clamped. An intensity of
+``PERCENT_SCALE_MIN`` or more can only be a percentage (no one rides at 10x FTP), so it is read as
+one (88 -> 0.88) instead of being clamped to ``MAX_PCT``, which once stored a whole workout at 200%.
 """
 
 import json
@@ -19,6 +21,7 @@ import xml.etree.ElementTree as ET
 from .kinds import STRUCTURE_CAPABLE_WORKOUT_TYPES
 
 MIN_PCT, MAX_PCT = 0.30, 2.00
+PERCENT_SCALE_MIN = 10
 MIN_SECONDS, MAX_SECONDS = 10, 4 * 3600
 MAX_REPEAT = 50
 MAX_BLOCKS = 40
@@ -97,7 +100,11 @@ def _num(value) -> float | None:
 
 def _pct(value) -> float | None:
     n = _num(value)
-    return None if n is None else round(min(MAX_PCT, max(MIN_PCT, n)), 2)
+    if n is None:
+        return None
+    if n >= PERCENT_SCALE_MIN:
+        n /= 100
+    return round(min(MAX_PCT, max(MIN_PCT, n)), 2)
 
 
 def _secs(value) -> int | None:

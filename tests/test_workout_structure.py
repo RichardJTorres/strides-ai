@@ -77,6 +77,36 @@ def test_values_are_clamped_and_extra_keys_stripped():
     assert out["blocks"][2]["duration_s"] == 14400
 
 
+def test_percent_scale_intensities_are_read_as_percentages_not_clamped_to_200():
+    # Entry 79 was stored with every block at 2.0: percentages sent by the model, clamped.
+    out = normalize_structure(
+        {
+            "blocks": [
+                {"kind": "warmup", "duration_s": 300, "from_pct": 50, "to_pct": 65},
+                {
+                    "kind": "intervals",
+                    "repeat": 3,
+                    "on_s": 360,
+                    "on_pct": 88,
+                    "off_s": 180,
+                    "off_pct": 55,
+                },
+                {"kind": "steady", "duration_s": 60, "pct": 250},
+                {"kind": "cooldown", "duration_s": 300, "from_pct": 0.6, "to_pct": 10},
+            ]
+        }
+    )
+    assert out["blocks"][0] == {
+        "kind": "warmup",
+        "duration_s": 300,
+        "from_pct": 0.5,
+        "to_pct": 0.65,
+    }
+    assert (out["blocks"][1]["on_pct"], out["blocks"][1]["off_pct"]) == (0.88, 0.55)
+    assert out["blocks"][2]["pct"] == 2.0  # 250% is still capped at 200%
+    assert out["blocks"][3]["to_pct"] == 0.3  # 10 -> 10% -> raised to the 30% floor
+
+
 def test_total_duration_and_block_caps():
     assert total_seconds(GOOD) == 600 + 300 + 5 * 420 + 120 + 300
     many = {"blocks": [{"kind": "steady", "duration_s": 600, "pct": 0.6}] * 60}
