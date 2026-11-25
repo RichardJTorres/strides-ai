@@ -673,3 +673,71 @@ def test_prompt_says_which_sessions_count_in_the_mode():
     assert "moving time of runs only" in running and "rides are not counted" in running
     assert "moving time of all sports" in render_for_prompt(state(mode="hybrid"))
     assert "rides only" in render_for_prompt(state(mode="cycling"))
+
+
+# ── a generated block's weekly hours against the proven level ────────────────────────
+
+BLOCK_START, BLOCK_END = date(2026, 12, 14), date(2027, 1, 3)  # three full Monday-Sunday weeks
+
+
+def block(*weekly_minutes, wtype="Long Ride"):
+    return [
+        {
+            "date": (BLOCK_START + timedelta(weeks=i, days=6)).isoformat(),
+            "workout_type": wtype,
+            "duration_min": m,
+        }
+        for i, m in enumerate(weekly_minutes)
+    ]
+
+
+def test_a_block_that_never_reaches_the_proven_level_gets_a_note():
+    from strides_ai.training_state import block_volume_note
+
+    note = block_volume_note(
+        block(240, 300, 360), {"volume": 9.0}, "hybrid", BLOCK_START, BLOCK_END
+    )
+    assert note == (
+        "Planned weekly hours: 4.0, 5.0, 6.0. The biggest week (6.0 h) is 33% below the athlete's "
+        "proven level (9.0 h). Ask for longer sessions if this block should build volume; keep it "
+        "if availability or recovery is the limit."
+    )
+
+
+def test_no_block_note_at_the_proven_level_without_one_or_for_a_short_block():
+    from strides_ai.training_state import block_volume_note
+
+    reached = block(240, 300, 490)  # 8.2 h is over 90% of 9 h
+    assert block_volume_note(reached, {"volume": 9.0}, "hybrid", BLOCK_START, BLOCK_END) is None
+    assert block_volume_note(block(60, 60, 60), None, "hybrid", BLOCK_START, BLOCK_END) is None
+    two_weeks = BLOCK_END - timedelta(weeks=1)
+    assert (
+        block_volume_note(block(60, 60), {"volume": 9.0}, "hybrid", BLOCK_START, two_weeks) is None
+    )
+
+
+def test_block_note_counts_only_full_weeks_and_this_modes_sessions():
+    from strides_ai.training_state import block_volume_note
+
+    # A Wednesday start leaves its partial week out: three full weeks follow it.
+    start = BLOCK_START - timedelta(days=5)
+    rows = block(240, 300, 360) + [
+        {"date": start.isoformat(), "workout_type": "Long Ride", "duration_min": 600}
+    ]
+    assert "Planned weekly hours: 4.0, 5.0, 6.0." in block_volume_note(
+        rows, {"volume": 9.0}, "hybrid", start, BLOCK_END
+    )
+    # Rest days and races are skipped; a session with no duration makes the total unknown.
+    rest = [{"date": BLOCK_START.isoformat(), "workout_type": "Rest", "intensity": "rest"}]
+    assert block_volume_note(
+        block(240, 300, 360) + rest, {"volume": 9.0}, "hybrid", BLOCK_START, BLOCK_END
+    ).startswith("Planned weekly hours: 4.0, 5.0, 6.0.")
+    unknown = block(240, 300, 360) + [
+        {"date": BLOCK_START.isoformat(), "workout_type": "Easy Ride"}
+    ]
+    assert block_volume_note(unknown, {"volume": 9.0}, "hybrid", BLOCK_START, BLOCK_END) is None
+    # In running mode rides are not running load, so the weeks read 0 h.
+    runs_only = block_volume_note(
+        block(600, 600, 600), {"volume": 2.0}, "running", BLOCK_START, BLOCK_END
+    )
+    assert runs_only.startswith("Planned weekly hours: 0.0, 0.0, 0.0.")

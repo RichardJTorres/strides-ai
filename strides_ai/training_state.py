@@ -79,6 +79,10 @@ PROVEN_TOP_WEEKS = 3  # proven week = median of the 3 biggest normal weeks in th
 RUN_SPIKE_WINDOW_DAYS = 30
 RUN_SPIKE_PCT = 10.0
 RUN_SPIKE_MIN_MIN = 10.0
+# A generated block of at least BLOCK_MIN_WEEKS full weeks whose biggest week is under this share of
+# the proven level gets a note: the model asserts weekly totals it does not add up.
+BLOCK_PEAK_FRACTION = 0.9
+BLOCK_MIN_WEEKS = 3
 
 THRESHOLDS = {
     "acwr_low": ACWR_LOW,
@@ -726,6 +730,66 @@ def normalized_plan_row(p: dict) -> dict:
     row = dict(p)
     _normalize_planned_structure(row)
     return row
+
+
+def block_volume_note(
+    workouts: list[dict],
+    proven_week: Optional[dict],
+    mode: Optional[str],
+    start: date,
+    end: date,
+) -> Optional[str]:
+    """A note when a generated block's biggest full week falls short of the proven level.
+
+    Deterministic: sums each full Monday-Sunday week inside [start, end] from the workouts' own
+    durations (a structure decides a ride's duration, as in storage; types outside this mode's load
+    count nothing), so the athlete sees the real totals rather than the model's description of
+    them. None when there is no proven level, fewer than BLOCK_MIN_WEEKS full weeks, any counted
+    session's duration is unknown (a total would be a guess), or the biggest week reaches
+    BLOCK_PEAK_FRACTION of the proven level. Rest days and races are not sessions here.
+    """
+    if not proven_week or not proven_week.get("volume"):
+        return None
+    first = monday_of(start)
+    if first < start:
+        first += timedelta(weeks=1)
+    full = []
+    while first + timedelta(days=6) <= end:
+        full.append(first)
+        first += timedelta(weeks=1)
+    if len(full) < BLOCK_MIN_WEEKS:
+        return None
+    totals: dict[date, float] = defaultdict(float)
+    for w in workouts:
+        row = normalized_plan_row({"kind": "workout", **w})
+        wtype = row.get("workout_type")
+        if (
+            (row.get("intensity") or "").lower() == "rest"
+            or wtype == "Rest"
+            or _is_race_type(wtype)
+            or not _counts_for_mode(wtype, mode)
+        ):
+            continue
+        try:
+            d = date.fromisoformat(row.get("date"))
+        except (TypeError, ValueError):
+            continue
+        minutes = row.get("duration_min")
+        if isinstance(minutes, bool) or not isinstance(minutes, (int, float)) or minutes <= 0:
+            return None
+        totals[monday_of(d)] += minutes / 60.0
+    weekly = [totals.get(m, 0.0) for m in full]
+    proven = proven_week["volume"]
+    peak = max(weekly)
+    if peak >= BLOCK_PEAK_FRACTION * proven:
+        return None
+    return (
+        "Planned weekly hours: "
+        + ", ".join(f"{h:.1f}" for h in weekly)
+        + f". The biggest week ({peak:.1f} h) is {100 * (1 - peak / proven):.0f}% below the "
+        f"athlete's proven level ({proven:.1f} h). Ask for longer sessions if this block should "
+        "build volume; keep it if availability or recovery is the limit."
+    )
 
 
 def describe_planned_load(
