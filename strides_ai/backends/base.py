@@ -133,8 +133,8 @@ UPDATE_TRAINING_PLAN_DESCRIPTION = (
     "'Calendar Constraints' sections of this prompt first so you work around races, blocked-out "
     "days, and entries already scheduled — never schedule over them without the athlete's go-ahead "
     "(scheduling on a blocked-out day, or anything but a short easy shakeout on race day, is "
-    "rejected). Also use the 'Training State' section: keep weekly ramp and the projected "
-    "fatigue/fitness ratio inside its guardrails and add a down week after a few rising weeks. "
+    "rejected). Plan with the 'Planning Principles' and the 'Training State' section (proven "
+    "level, longest sessions, off weeks); its ramp and run-spike notes are advisory. "
     "When the athlete says they can't complete a workout, or a conflict shows up on a date you'd "
     "otherwise use, delete or move that entry (send its `id` with a new `date`) rather than "
     "double-booking it. When regenerating a block, `delete` the ids that need to change and `set` "
@@ -1037,7 +1037,10 @@ class BaseBackend(ABC):
             summary += "\nNot checked: " + bounded_reasons(v.detail for v in unchecked)
         if real:
             summary += "\nWarnings: " + bounded_reasons(v.detail for v in real)
-            summary += " Consider revising the plan to stay within the Training State guardrails."
+            summary += (
+                " These are advisory: keep the plan if the Planning Principles and the athlete's "
+                "proven level support it, and say why in one sentence."
+            )
         return summary, self._budget.changes[change_start:]
 
     @property

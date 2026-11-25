@@ -6,7 +6,8 @@ import json
 import re
 from datetime import date as date_cls
 
-from .coach import build_training_log, units_section
+from .coach import build_training_log, race_line, units_section
+from .coaching_principles import planning_principles
 from .dates import fmt_day
 from .db.models import PlanRow
 from .modes import MODES
@@ -38,7 +39,7 @@ and no distance or elevation)
       "description"   (string, optional — the purpose/focus of the session)
       "distance"      (number, optional, in {distance_unit})
       "elevation"     (number, optional, elevation gain in {elevation_unit})
-      "duration_min"  (integer, optional)
+      "duration_min"  (integer, required for every workout except Rest — load is counted from it)
       "intensity"     (one of "easy", "moderate", "hard", "rest", optional)
       {structure_contract}
   "summary" — a short (2-4 sentence) explanation of the block's structure and why it fits the \
@@ -46,20 +47,25 @@ athlete right now
 
 Only include days you want to schedule something for — you do not need an entry for every date in \
 the range. Do not schedule on blocked-out days or on top of races. Use the surrounding training \
-context and the Training State section (current load, weekly ramp, guardrails) to keep load \
-progression and taper sensible; do not propose changes outside the requested \
+context, the Training State section (proven level, longest sessions, off weeks, weekly ramp) \
+and the Planning Principles when present; do not propose changes outside the requested \
 date range — that context is read-only.
 
-{indoor_guidance}\
+{indoor_guidance}
+
+{principles}\
 """
 
 
-def plan_generation_system_prompt(units: UnitSystem = DEFAULT_UNIT_SYSTEM) -> str:
+def plan_generation_system_prompt(
+    units: UnitSystem = DEFAULT_UNIT_SYSTEM, mode: str | None = None
+) -> str:
     return _PLAN_GENERATION_SYSTEM_PROMPT_TEMPLATE.format(
         distance_unit=unit_label(Quantity.DISTANCE, units),
         elevation_unit=unit_label(Quantity.ELEVATION, units),
         structure_contract=STRUCTURE_PROMPT,
         indoor_guidance=INDOOR_RIDE_GUIDANCE,
+        principles=planning_principles(mode),
     )
 
 
@@ -161,7 +167,7 @@ def build_plan_generation_prompt(
         lines = []
         if races:
             lines.append("Races:")
-            lines.extend(f"  - {r['date']}: {r.get('name', 'Race')}" for r in races)
+            lines.extend(f"  - {fmt_day(r['date'])}: {race_line(r)}" for r in races)
         if blocked:
             lines.append("Blocked-out days (do not schedule on these):")
             lines.extend(f"  - {d}" for d in blocked)

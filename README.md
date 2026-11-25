@@ -127,7 +127,8 @@ strides_ai/
    │                 + read-only lookups (lookup_tools.py)
    ├── sources/                       Strava, HEVY, route providers
    ├── analysis.py, hevy_analysis.py  per-activity metrics, deep dives
-   ├── training_state.py              load (CTL/ATL), ramp, typical week
+   ├── training_state.py              load (CTL/ATL), ramp, off weeks, capacity
+   ├── coaching_principles.py         how the coach builds a block
    ├── compliance.py, progress.py     plan vs. actual, streak, records
    ├── insights.py, plan_generation.py
    └── db/                            SQLModel + Alembic, SQLite in ~/.strides_ai

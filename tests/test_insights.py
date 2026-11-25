@@ -101,7 +101,7 @@ def test_ramp_is_time_based_and_names_its_baseline():
     digest = build_digest(rows, "running", UnitSystem.METRIC, TODAY)
     ramp = metric(digest, "volume.ramp")
     assert ramp["formatted"].endswith(" h")
-    assert ramp["basis"] in ("4-week average", "8-week median")
+    assert ramp["basis"] == "recent normal weeks"
     assert "ramp_high" not in {f["id"] for f in digest["flags"]}
 
 

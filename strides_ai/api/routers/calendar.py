@@ -37,7 +37,12 @@ from ...schedule import analyze_nutrition
 from ...sources.base import AuthError, ConfigurationError, NoDataError
 from ...sources.ridewithgps import condense_elevation_profile
 from ...sources.routes import fetch_route_detail, fetch_route_summary
-from ...training_state import build_training_state, check_plan_changes, render_for_prompt
+from ...training_state import (
+    block_volume_note,
+    build_training_state,
+    check_plan_changes,
+    render_for_prompt,
+)
 from ...units import UnitSystem
 from ...what_if import (
     WHAT_IF_SYSTEM_PROMPT,
@@ -497,7 +502,7 @@ def _apply_guardrails(
     result, mode_rows, plan_rows, prefs, mode, units, today, start: str, end: str
 ) -> dict:
     """Drop generated workouts on blocked-out/race days (a prompt-only rule the model can break)
-    and report load warnings (ramp, projected ratio) without changing the proposal.
+    and report advisory load notes (ramp, loading weeks, run spikes) without changing the proposal.
 
     Load is checked against the plan as the modal's default (Replace) leaves it: the existing
     workout entries in the range are removed as the generated ones are added, so they are not
@@ -560,13 +565,12 @@ async def generate_plan(
     mode_rows = [a.model_dump() for a in act_crud.get_for_mode(session, mode)]
     all_plan = crud.get_plan_rows(session)
     today = date_cls.today()
-    training_state_text = (
-        render_for_prompt(
-            build_training_state(mode_rows, all_plan, prefs, mode, units, today), units
-        )
+    state = (
+        build_training_state(mode_rows, all_plan, prefs, mode, units, today)
         if mode in VALID_MODES and mode != "lifting"
-        else ""
+        else None
     )
+    training_state_text = render_for_prompt(state, units) if state else ""
 
     prompt = build_plan_generation_prompt(
         mode,
@@ -584,7 +588,7 @@ async def generate_plan(
 
     def _run_llm():
         return backend.stateless_turn(
-            plan_generation_system_prompt(units),
+            plan_generation_system_prompt(units, mode),
             prompt,
             on_token=lambda _: None,
             source="plan_generation",
@@ -597,6 +601,15 @@ async def generate_plan(
         result = _apply_guardrails(
             result, mode_rows, all_plan, prefs, mode, units, today, body.start_date, body.end_date
         )
+        note = (
+            block_volume_note(
+                result["workouts"], state.capacity.get("proven_week"), mode, start, end
+            )
+            if state
+            else None
+        )
+        if note:
+            result.setdefault("warnings", []).append(note)
         for w in result["workouts"]:
             w["structure_text"] = render_text(w["structure"]) if w.get("structure") else None
         return result
