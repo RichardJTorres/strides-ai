@@ -197,6 +197,32 @@ def get_pending_analysis(session: Session, limit: int = 10) -> list[Activity]:
     return session.exec(stmt).all()
 
 
+def mark_for_reanalysis(session: Session) -> int:
+    """Queue every analysed Strava activity for a fresh analysis; return how many were queued.
+
+    Used after an input the metrics depend on changes (max HR sets the HR zones). Activities
+    with no stream data ('skipped') and HEVY sessions are left alone.
+    """
+    result = session.execute(
+        sa.update(Activity)
+        .where(
+            Activity.analysis_status.in_(("done", "error")),
+            sa.or_(Activity.source.is_(None), Activity.source != "hevy"),
+        )
+        .values(analysis_status="pending")
+    )
+    session.commit()
+    return result.rowcount
+
+
+def count_pending_analysis(session: Session) -> int:
+    """How many activities are waiting for analysis (the same rows get_pending_analysis returns)."""
+    stmt = select(sa.func.count()).where(
+        sa.or_(Activity.analysis_status == "pending", Activity.analysis_status.is_(None))
+    )
+    return session.execute(stmt).scalar_one()
+
+
 def renormalize_effort_efficiency(session: Session) -> None:
     """
     Re-score effort_efficiency_score for all rows using inverted min-max normalization.

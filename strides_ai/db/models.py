@@ -174,7 +174,7 @@ class LlmUsage(SQLModel, table=True):
     ts: Optional[str] = Field(
         default=None, sa_column=Column(sa.Text, server_default=sa.text("datetime('now')"))
     )
-    source: str  # chat | deep_dive | insights | memory_review | plan_generation | route_analysis
+    source: str  # chat | deep_dive | insights | memory_review | nutrition | plan_generation | route_analysis
     provider: str
     model: str
     mode: Optional[str] = None

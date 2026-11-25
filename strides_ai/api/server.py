@@ -20,6 +20,10 @@ def main() -> None:
         if not settings.gemini_api_key:
             print("GEMINI_API_KEY must be set when using PROVIDER=gemini")
             sys.exit(1)
+    elif provider == "openai":
+        if not settings.openai_api_key:
+            print("OPENAI_API_KEY must be set when using PROVIDER=openai")
+            sys.exit(1)
     else:
         if not settings.anthropic_api_key:
             print("ANTHROPIC_API_KEY must be set when using PROVIDER=claude (the default)")

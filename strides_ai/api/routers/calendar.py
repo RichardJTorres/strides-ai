@@ -13,7 +13,7 @@ from sqlmodel import Session
 from ... import compliance
 from ... import kinds
 from ...backends.base import MAX_PLAN_OPERATIONS, _plan_ops
-from ...config import VALID_MODES, get_settings
+from ...config import VALID_MODES
 from ...coach import RECENT_ACTIVITIES_IN_SYSTEM
 from ...db import activities as act_crud
 from ...db import calendar as crud
@@ -636,12 +636,9 @@ def analyze_workout_nutrition(
     entry_id: int,
     request: Request,
     session: Session = Depends(get_session),
+    backend=Depends(get_backend),
     units: UnitSystem = Depends(get_units),
 ):
-    api_key = get_settings().anthropic_api_key
-    if not api_key:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not set")
-
     workout = _entry_or_404(session, entry_id)
     if workout["kind"] not in (kinds.KIND_WORKOUT, kinds.KIND_RACE):
         raise HTTPException(
@@ -652,7 +649,12 @@ def analyze_workout_nutrition(
     profile_fields = prof_crud.get_fields(session, mode)
     profile_text = profile_to_text(profile_fields, mode, units)
 
-    nutrition = analyze_nutrition(workout, profile_text, api_key, units)
+    try:
+        nutrition = analyze_nutrition(workout, profile_text, backend, units)
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=502, detail="The model did not return valid nutrition data. Try again."
+        )
     # Rejected (not saved) if the entry changed while the model was working.
     crud.save_workout_nutrition(
         session, entry_id, nutrition, workout.get("inputs_hash") or crud.inputs_hash(workout)
