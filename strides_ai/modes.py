@@ -35,10 +35,30 @@ from .units import (
 LOOKUP_RULE = (
     "The recent activities and weekly summaries in this prompt are not the athlete's whole "
     "history. Before you say you cannot find, compare or recall an activity, week or calendar "
-    "entry, look it up with search_activities, get_weekly_totals or get_calendar. Never call "
+    "entry, look it up with search_activities, get_weekly_totals, get_progression or "
+    "get_calendar. Never call "
     "something the longest, biggest, fastest, first, best or never without querying for it "
     "(search_activities can sort by distance, elevation or duration). If a lookup finds nothing, "
     "say what you searched."
+)
+
+# Long-term comparisons read like fitness verdicts, and the obvious one (speed per heartbeat) is
+# wrong on a bike or on hills: steeper routes make a fitter athlete look slower.
+PROGRESSION_RULE = (
+    "**Progress over months:** when the athlete asks how they have progressed, or compares a "
+    "session with one from months ago, call get_progression first and report what it shows for "
+    "the months in question: capacity (longest and biggest-climb sessions, hours, climb per "
+    "distance) is the clearest evidence of growth. Then find comparable sessions with "
+    "search_activities: similar_to set to the session's date (the same route done before), else "
+    "distance and elevation ranges; say which you used and how many matched. Compare against the "
+    "typical comparable session (the middle of the matches), not the hardest or easiest one, and "
+    "show the ones that cut against your conclusion. Compare effort by average HR, HR zones, "
+    "suffer score and climbing; never by speed alone on a bike or on hilly terrain, and not by "
+    "the EFF score on a ride. Name what differs (pace set by a group or a friend, heat, surface, "
+    "stops, missing HR). Never tie a session to a person or place its name does not mention. One "
+    "pair of sessions is an anecdote, not a trend. How hard something felt is evidence the data "
+    "does not hold (RPE is rarely logged): ask for it, and save a dated benchmark with "
+    "save_memory when the athlete describes one."
 )
 
 RUNNING_SYSTEM_PROMPT = f"""\
@@ -61,6 +81,8 @@ strength sessions, etc.) so you can assess total training load, cross-training, 
 and recovery. Your coaching focus and advice remains on running.
 
 {LOOKUP_RULE}
+
+{PROGRESSION_RULE}
 
 **Memory:** Use the save_memory tool proactively whenever the athlete mentions \
 goals, upcoming races, injuries, preferences, or any key context that should \
@@ -90,6 +112,8 @@ Your coaching focus and advice remains on cycling.
 
 {LOOKUP_RULE}
 
+{PROGRESSION_RULE}
+
 **Memory:** Use the save_memory tool proactively whenever the athlete mentions \
 goals, upcoming events, injuries, preferences, or any key context that should \
 persist across sessions. For stable facts that belong on the athlete's profile \
@@ -113,6 +137,8 @@ preferred snacks in their profile, choose from those; otherwise use sensible \
 defaults based on activity duration and intensity.
 
 {LOOKUP_RULE}
+
+{PROGRESSION_RULE}
 
 **Memory:** Use the save_memory tool proactively whenever the athlete mentions \
 goals, upcoming events, injuries, preferences, or any key context that should \
