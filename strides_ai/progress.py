@@ -309,6 +309,115 @@ def _lift_records(rows: list[dict], units: UnitSystem, today: date) -> list[Reco
     return [r for r in records if r is not None]
 
 
+# ── Monthly progression ─────────────────────────────────────────────────────────
+
+PROGRESSION_SPORTS = {"run": RUN_TYPES, "ride": CYCLE_TYPES}
+DEFAULT_PROGRESSION_MONTHS = 24
+MAX_PROGRESSION_MONTHS = 60
+
+
+class Peak(BaseModel):
+    activity_id: int
+    date: str
+    name: str
+    value: float  # SI: meters
+
+
+class MonthRow(BaseModel):
+    month: str  # "YYYY-MM"
+    activities: int
+    hours: float  # moving time
+    distance_m: float
+    climb_m: float
+    climb_m_per_km: Optional[float]  # None when the month has no distance
+    longest: Optional[Peak]
+    most_climb: Optional[Peak]
+    in_progress: bool
+
+
+class Progression(BaseModel):
+    sport: Literal["run", "ride"]
+    as_of: str
+    first_date: Optional[str]  # the sport's first activity; None when there is none
+    omitted: int  # rows of this sport left out for a missing, invalid or future date
+    months: list[MonthRow]  # newest first
+
+
+def _month_key(day: date) -> int:
+    return day.year * 12 + day.month - 1
+
+
+def monthly_progression(rows: list[dict], sport: str, months: int, today: date) -> Progression:
+    """Per calendar month for one sport: volume, plus its longest and biggest-climb activity.
+
+    Months before the sport's first activity are omitted (no data, not zero); a later month with
+    nothing in it is all zeros. Peaks are single activities, chosen like records (`_best`: ties to
+    the earliest date, then the lowest id), from positive values only. Virtual rides count, the
+    same as records, and are recognisable by name. Duration is deliberately not a peak: a watch
+    left running on a bike-share commute makes "longest time" meaningless. Values are SI.
+    """
+    types = PROGRESSION_SPORTS[sport]
+    months = max(1, min(MAX_PROGRESSION_MONTHS, months))
+    omitted = 0
+    by_month: dict[int, list[tuple[date, dict]]] = defaultdict(list)
+    for row in rows:
+        if row.get("sport_type") not in types:
+            continue
+        when = _parse_date(row)
+        if when is None or when > today:
+            omitted += 1
+            continue
+        by_month[_month_key(when)].append((when, row))
+
+    first = min((d for acts in by_month.values() for d, _ in acts), default=None)
+    out: list[MonthRow] = []
+    current = _month_key(today)
+    for key in range(current, current - months, -1):
+        if first is None or key < _month_key(first):
+            break
+        acts = by_month.get(key, [])
+        distance = sum(_positive(r.get("distance_m")) or 0.0 for _, r in acts)
+        climb = sum(_positive(r.get("elevation_gain_m")) or 0.0 for _, r in acts)
+
+        def peak(field: str) -> Optional[Peak]:
+            entries = [
+                (d, r["id"], v) for d, r in acts if (v := _positive(r.get(field))) is not None
+            ]
+            top = _best(entries)
+            if top is None:
+                return None
+            row = next(r for _, r in acts if r["id"] == top[1])
+            return Peak(
+                activity_id=top[1],
+                date=top[0].isoformat(),
+                name=row.get("name") or "",
+                value=top[2],
+            )
+
+        out.append(
+            MonthRow(
+                month=f"{key // 12:04d}-{key % 12 + 1:02d}",
+                activities=len(acts),
+                hours=round(
+                    sum(_positive(r.get("moving_time_s")) or 0.0 for _, r in acts) / 3600, 2
+                ),
+                distance_m=round(distance, 1),
+                climb_m=round(climb, 1),
+                climb_m_per_km=round(climb / (distance / 1000), 2) if distance > 0 else None,
+                longest=peak("distance_m"),
+                most_climb=peak("elevation_gain_m"),
+                in_progress=key == current,
+            )
+        )
+    return Progression(
+        sport=sport,
+        as_of=today.isoformat(),
+        first_date=first.isoformat() if first else None,
+        omitted=omitted,
+        months=out,
+    )
+
+
 def build_records(rows: list[dict], units: UnitSystem, today: date) -> list[Record]:
     """Records for every sport that has enough history: runs, then rides, then lifts."""
     return (

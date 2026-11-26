@@ -225,37 +225,48 @@ def count_pending_analysis(session: Session) -> int:
 
 def renormalize_effort_efficiency(session: Session) -> None:
     """
-    Re-score effort_efficiency_score for all rows using inverted min-max normalization.
+    Re-score effort_efficiency_score with inverted min-max normalization over VALID rows only.
     Lower raw ratio (faster pace / lower HR) = more efficient = higher score.
     Formula: score = 100 * (max_raw - raw) / (max_raw - min_raw)
+
+    Rows where pace per heartbeat means nothing (rides, hilly courses:
+    decoupling.efficiency_validity) get a NULL score and do not stretch the scale; their raw
+    value stays stored, as decoupling's does.
     """
-    result = session.execute(
-        sa.text(
-            "SELECT MIN(effort_efficiency_raw), MAX(effort_efficiency_raw)"
-            " FROM activities WHERE effort_efficiency_raw IS NOT NULL"
-        )
-    ).one()
-    min_raw, max_raw = result
+    from ..decoupling import efficiency_validity
 
-    if min_raw is None:
-        return
-
-    if min_raw == max_raw:
+    rows = (
         session.execute(
             sa.text(
-                "UPDATE activities SET effort_efficiency_score = 50.0"
-                " WHERE effort_efficiency_raw IS NOT NULL"
+                "SELECT id, sport_type, effort_efficiency_raw, climb_m_per_km,"
+                " elevation_gain_m, distance_m"
+                " FROM activities WHERE effort_efficiency_raw IS NOT NULL"
             )
         )
-    else:
+        .mappings()
+        .all()
+    )
+    valid = [r for r in rows if efficiency_validity(dict(r))[0]]
+    invalid = [{"id": r["id"]} for r in rows if not efficiency_validity(dict(r))[0]]
+    if invalid:
         session.execute(
-            sa.text(
-                "UPDATE activities"
-                " SET effort_efficiency_score = ROUND("
-                "   100.0 * (:max_raw - effort_efficiency_raw) / (:max_raw - :min_raw), 2"
-                " )"
-                " WHERE effort_efficiency_raw IS NOT NULL"
-            ),
-            {"min_raw": min_raw, "max_raw": max_raw},
+            sa.text("UPDATE activities SET effort_efficiency_score = NULL WHERE id = :id"), invalid
+        )
+    if valid:
+        raws = [r["effort_efficiency_raw"] for r in valid]
+        low, high = min(raws), max(raws)
+        session.execute(
+            sa.text("UPDATE activities SET effort_efficiency_score = :score WHERE id = :id"),
+            [
+                {
+                    "id": r["id"],
+                    "score": (
+                        50.0
+                        if high == low
+                        else round(100.0 * (high - r["effort_efficiency_raw"]) / (high - low), 2)
+                    ),
+                }
+                for r in valid
+            ],
         )
     session.commit()

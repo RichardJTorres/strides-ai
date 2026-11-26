@@ -39,3 +39,18 @@ def test_reads_plan_and_activities_from_the_db(tmp_db, sample_activity):
     result = _call(UnitSystem.IMPERIAL)
     assert result.unit_system == "imperial"
     assert (result.streak.weeks, result.streak.best_weeks) == (1, 1)
+
+
+def test_monthly_progression_reads_every_activity_of_the_sport(tmp_db, sample_activity):
+    from strides_ai.api.routers.progress import progress_months
+
+    day = date.today() - timedelta(days=40)
+    db.upsert_activity({**sample_activity, "start_date_local": f"{day.isoformat()}T07:00:00Z"})
+    with Session(get_engine()) as session:
+        runs = progress_months(sport="run", months=24, session=session)
+        rides = progress_months(sport="ride", months=24, session=session)
+    assert runs.months[0].in_progress and runs.first_date == day.isoformat()
+    assert sum(m.activities for m in runs.months) == 1
+    peak = next(m.longest for m in runs.months if m.activities)
+    assert peak.activity_id == sample_activity["id"] and peak.value > 0
+    assert rides.months == [] and rides.first_date is None

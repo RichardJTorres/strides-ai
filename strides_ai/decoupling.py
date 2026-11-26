@@ -13,6 +13,12 @@ Decoupling here is the change in HR per unit of *speed* between the two halves o
 The check reads only stored columns, so it applies to historical rows without refetching streams.
 Where a raw value remains stored, callers show "n/a" with the reason instead. Hilly-course
 values are no longer computed, and migration 020 clears historical hilly values.
+
+Effort efficiency (pace per heartbeat, `analysis._effort_efficiency_raw`) is speed-based for the
+same reason and is gated by `efficiency_validity`: never on a ride (on this athlete's data, rides
+got steeper and slower at the same heart rate while their capacity grew, so the score read as
+decline), never on a hilly course. Duration does not matter for an average. Its 0-100 score is
+min-max scaled over valid activities only (`db.activities.renormalize_effort_efficiency`).
 """
 
 from .activity_types import CYCLE_TYPES
@@ -30,6 +36,22 @@ NA_LABELS = {
 }
 
 
+EFFICIENCY_NA_LABELS = {
+    "cycling": "pace per heartbeat is unreliable for cycling (grade, wind, drafting set speed)",
+    "hilly": "hilly course, so pace reflects terrain rather than fitness",
+}
+
+
+def _climb_m_per_km(row: dict) -> float | None:
+    """The stored climb ratio, or (rows analysed before it was stored) one from the summary."""
+    climb = row.get("climb_m_per_km")
+    if climb is None:
+        gain, metres = row.get("elevation_gain_m"), row.get("distance_m")
+        if gain is not None and metres and metres > 0:
+            climb = gain / (metres / 1000)
+    return climb
+
+
 def decoupling_validity(row: dict) -> tuple[bool, str | None]:
     """(True, None) when no exclusion is detected, else (False, reason).
 
@@ -45,14 +67,39 @@ def decoupling_validity(row: dict) -> tuple[bool, str | None]:
     moving_s = row.get("moving_time_s")
     if moving_s is not None and moving_s < DECOUPLING_MIN_MOVING_S:
         return False, "short"
-    climb = row.get("climb_m_per_km")
-    if climb is None:  # rows analysed before the ratio was stored: derive it from the summary
-        gain, metres = row.get("elevation_gain_m"), row.get("distance_m")
-        if gain is not None and metres and metres > 0:
-            climb = gain / (metres / 1000)
+    climb = _climb_m_per_km(row)
     if climb is not None and climb > HIGH_CLIMB_M_PER_KM:
         return False, "hilly"
     return True, None
+
+
+def efficiency_validity(row: dict) -> tuple[bool, str | None]:
+    """(True, None) when pace per heartbeat can mean anything for `row`, else (False, reason).
+
+    `reason` is a key of `EFFICIENCY_NA_LABELS`. As for decoupling, a missing climb ratio never
+    invalidates on its own.
+    """
+    if (row.get("sport_type") or "") in CYCLE_TYPES:
+        return False, "cycling"
+    climb = _climb_m_per_km(row)
+    if climb is not None and climb > HIGH_CLIMB_M_PER_KM:
+        return False, "hilly"
+    return True, None
+
+
+def gate_efficiency(row: dict) -> dict:
+    """`row` with an invalid efficiency score replaced by None and `efficiency_na_reason` set.
+
+    Only a row that has an efficiency value (raw or score) is gated; others return `row` itself.
+    Never mutates its argument. The stored score is already NULL for invalid rows once
+    `renormalize_effort_efficiency` has run; this also covers rows scored before that.
+    """
+    if row.get("effort_efficiency_score") is None and row.get("effort_efficiency_raw") is None:
+        return row
+    ok, reason = efficiency_validity(row)
+    if ok:
+        return row
+    return {**row, "effort_efficiency_score": None, "efficiency_na_reason": reason}
 
 
 def gate_decoupling(row: dict) -> dict:

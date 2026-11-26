@@ -350,3 +350,90 @@ def test_race_and_rest_entries_never_change_a_weeks_hit_or_miss():
     with_extras = compliance_for_range([run_day, *extras], activities, start, end, today)
     assert _counts(plain) == _counts(with_extras)
     assert _week_hit(plain) is _week_hit(with_extras) is True
+
+
+# ── Monthly progression ─────────────────────────────────────────────────────────
+
+from strides_ai.progress import MAX_PROGRESSION_MONTHS, monthly_progression  # noqa: E402
+
+
+def ride(i, d, km=None, climb=None, hours=1.0, sport="Ride", name=None):
+    return {
+        "id": i,
+        "date": d,
+        "sport_type": sport,
+        "name": name or f"ride {i}",
+        "distance_m": None if km is None else km * 1000,
+        "elevation_gain_m": climb,
+        "moving_time_s": int(hours * 3600),
+    }
+
+
+PROG_TODAY = date(2026, 2, 10)
+
+
+def test_months_cross_the_year_boundary_newest_first_and_stop_at_the_first_activity():
+    rows = [ride(1, "2025-11-03", 20, 100), ride(2, "2026-02-01", 30, 300)]
+    p = monthly_progression(rows, "ride", 24, PROG_TODAY)
+    assert [m.month for m in p.months] == ["2026-02", "2026-01", "2025-12", "2025-11"]
+    assert p.first_date == "2025-11-03"
+    assert [m.in_progress for m in p.months] == [True, False, False, False]
+    empty = p.months[1]
+    assert (empty.activities, empty.hours, empty.distance_m, empty.climb_m) == (0, 0.0, 0.0, 0.0)
+    assert empty.climb_m_per_km is None and empty.longest is None and empty.most_climb is None
+
+
+def test_month_totals_peaks_and_climb_rate():
+    rows = [
+        ride(1, "2026-01-04", 40, 200, hours=2, name="Long flat"),
+        ride(2, "2026-01-18", 20, 900, hours=1.5, name="Hill repeats"),
+        ride(3, "2026-01-20", 10, None, hours=0.5, sport="VirtualRide", name="Zwift"),
+    ]
+    jan = monthly_progression(rows, "ride", 2, PROG_TODAY).months[1]
+    assert (jan.activities, jan.hours) == (3, 4.0)
+    assert (jan.distance_m, jan.climb_m) == (70000.0, 1100.0)
+    assert jan.climb_m_per_km == pytest.approx(1100 / 70, abs=0.01)
+    assert (jan.longest.name, jan.longest.value, jan.longest.activity_id) == (
+        "Long flat",
+        40000.0,
+        1,
+    )
+    assert (jan.most_climb.name, jan.most_climb.date) == ("Hill repeats", "2026-01-18")
+
+
+def test_peak_ties_go_to_the_earliest_then_lowest_id_and_zero_or_missing_never_peak():
+    rows = [
+        ride(5, "2026-01-10", 30, 0),
+        ride(4, "2026-01-10", 30, None),
+        ride(3, "2026-01-02", 30, None),
+        ride(9, "2026-01-02", 30, None),
+    ]
+    jan = monthly_progression(rows, "ride", 2, PROG_TODAY).months[1]
+    assert jan.longest.activity_id == 3
+    assert jan.most_climb is None
+
+
+def test_sports_are_separate_and_lifts_are_ignored():
+    rows = [
+        ride(1, "2026-01-05", 10, sport="Run"),
+        ride(2, "2026-01-06", 50, sport="GravelRide"),
+        ride(3, "2026-01-07", None, sport="WeightTraining"),
+    ]
+    run = monthly_progression(rows, "run", 2, PROG_TODAY).months[1]
+    bike = monthly_progression(rows, "ride", 2, PROG_TODAY).months[1]
+    assert (run.activities, run.longest.activity_id) == (1, 1)
+    assert (bike.activities, bike.longest.activity_id) == (1, 2)
+
+
+def test_months_are_clamped_and_bad_or_future_dates_are_counted_as_omitted():
+    rows = [ride(1, "2015-01-01", 10), ride(2, "garbage", 10), ride(3, "2026-03-01", 10)]
+    rows.append(ride(4, None, 10))
+    p = monthly_progression(rows, "ride", 500, PROG_TODAY)
+    assert len(p.months) == MAX_PROGRESSION_MONTHS
+    assert p.omitted == 3
+    assert len(monthly_progression(rows, "ride", 0, PROG_TODAY).months) == 1
+
+
+def test_no_activities_of_the_sport_gives_no_months():
+    p = monthly_progression([ride(1, "2026-01-05", 10, sport="Run")], "ride", 24, PROG_TODAY)
+    assert p.months == [] and p.first_date is None

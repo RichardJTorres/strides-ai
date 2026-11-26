@@ -45,10 +45,11 @@ RUNNING_CHARTS: list[ChartSpec] = [
     ChartSpec("cardiac_decoupling_trend", cardio.compute_cardiac_decoupling_trend),
 ]
 
+# No aerobic_efficiency: speed per heartbeat is not a fitness signal on a bike (see
+# decoupling.efficiency_validity); without power there is no valid ride equivalent.
 CYCLING_CHARTS: list[ChartSpec] = [
     ChartSpec("atl_ctl", cardio.compute_atl_ctl),
     ChartSpec("weekly_distance", cardio.compute_weekly_distance),
-    ChartSpec("aerobic_efficiency", cardio.compute_aerobic_efficiency),
     ChartSpec("weekly_elevation", cardio.compute_weekly_elevation),
     ChartSpec("climbing_ratio", cardio.compute_weekly_climbing_ratio),
     ChartSpec("hr_zone_trend", cardio.compute_hr_zone_trend),

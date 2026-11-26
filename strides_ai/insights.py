@@ -200,8 +200,12 @@ def _quality_metrics(
     else:
         missing.append(f"efficiency.{prefix}decoupling")
 
-    aerobic = cardio.compute_aerobic_efficiency(acts, unit, today)
-    if aerobic.available:
+    # Speed per heartbeat means nothing on a bike: no metric, and not listed as "missing data".
+    rides_only = bool(acts) and all(a.sport_type in CYCLE_TYPES for a in acts)
+    aerobic = None if rides_only else cardio.compute_aerobic_efficiency(acts, unit, today)
+    if aerobic is None:
+        pass
+    elif aerobic.available:
         pts = [(date.fromisoformat(p.date), p.value) for p in aerobic.scatter]
         r, b = _mean_in_windows(pts, recent, base)
         out.append(
@@ -667,7 +671,7 @@ def _flags(digest: dict) -> list[dict]:
 
 # Bump when the digest's rules or units change (v2: moving-time load and ramp, decoupling gate),
 # so a cached readout written under the old rules is neither shown nor handed to the coach.
-DIGEST_VERSION = 4  # ramp vs recent normal weeks (off weeks set aside); ratio as context
+DIGEST_VERSION = 5  # aerobic efficiency on non-hilly runs only; none for rides
 
 
 def digest_fingerprint(

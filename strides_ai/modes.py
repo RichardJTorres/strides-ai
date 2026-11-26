@@ -17,7 +17,7 @@ from typing import Callable
 
 from .db.models import CYCLE_TYPES, LIFT_TYPES, RUN_TYPES
 from .dates import fmt_day
-from .decoupling import gate_decoupling
+from .decoupling import gate_decoupling, gate_efficiency
 from .units import (
     DEFAULT_UNIT_SYSTEM,
     Quantity,
@@ -35,10 +35,30 @@ from .units import (
 LOOKUP_RULE = (
     "The recent activities and weekly summaries in this prompt are not the athlete's whole "
     "history. Before you say you cannot find, compare or recall an activity, week or calendar "
-    "entry, look it up with search_activities, get_weekly_totals or get_calendar. Never call "
+    "entry, look it up with search_activities, get_weekly_totals, get_progression or "
+    "get_calendar. Never call "
     "something the longest, biggest, fastest, first, best or never without querying for it "
     "(search_activities can sort by distance, elevation or duration). If a lookup finds nothing, "
     "say what you searched."
+)
+
+# Long-term comparisons read like fitness verdicts, and the obvious one (speed per heartbeat) is
+# wrong on a bike or on hills: steeper routes make a fitter athlete look slower.
+PROGRESSION_RULE = (
+    "**Progress over months:** when the athlete asks how they have progressed, or compares a "
+    "session with one from months ago, call get_progression first and report what it shows for "
+    "the months in question: capacity (longest and biggest-climb sessions, hours, climb per "
+    "distance) is the clearest evidence of growth. Then find comparable sessions with "
+    "search_activities: similar_to set to the session's date (the same route done before), else "
+    "distance and elevation ranges; say which you used and how many matched. Compare against the "
+    "typical comparable session (the middle of the matches), not the hardest or easiest one, and "
+    "show the ones that cut against your conclusion. Compare effort by average HR, HR zones, "
+    "suffer score and climbing; never by speed alone on a bike or on hilly terrain, and not by "
+    "the EFF score on a ride. Name what differs (pace set by a group or a friend, heat, surface, "
+    "stops, missing HR). Never tie a session to a person or place its name does not mention. One "
+    "pair of sessions is an anecdote, not a trend. How hard something felt is evidence the data "
+    "does not hold (RPE is rarely logged): ask for it, and save a dated benchmark with "
+    "save_memory when the athlete describes one."
 )
 
 RUNNING_SYSTEM_PROMPT = f"""\
@@ -61,6 +81,8 @@ strength sessions, etc.) so you can assess total training load, cross-training, 
 and recovery. Your coaching focus and advice remains on running.
 
 {LOOKUP_RULE}
+
+{PROGRESSION_RULE}
 
 **Memory:** Use the save_memory tool proactively whenever the athlete mentions \
 goals, upcoming races, injuries, preferences, or any key context that should \
@@ -90,6 +112,8 @@ Your coaching focus and advice remains on cycling.
 
 {LOOKUP_RULE}
 
+{PROGRESSION_RULE}
+
 **Memory:** Use the save_memory tool proactively whenever the athlete mentions \
 goals, upcoming events, injuries, preferences, or any key context that should \
 persist across sessions. For stable facts that belong on the athlete's profile \
@@ -113,6 +137,8 @@ preferred snacks in their profile, choose from those; otherwise use sensible \
 defaults based on activity duration and intensity.
 
 {LOOKUP_RULE}
+
+{PROGRESSION_RULE}
 
 **Memory:** Use the save_memory tool proactively whenever the athlete mentions \
 goals, upcoming events, injuries, preferences, or any key context that should \
@@ -185,22 +211,27 @@ def _analysis_columns(r: dict, units: UnitSystem) -> str:
     """The compact analysis columns of a cardio log row (legend: coach._analysis_guide_section).
 
     Replaces a natural-language summary that was cut to 60 characters, which dropped fade,
-    decoupling and terrain from the table. Decoupling reads "n/a" when the stored value is not a
-    valid drift signal (see decoupling.py) and "—" when there is no value at all.
+    decoupling and terrain from the table. Decoupling and EFF read "n/a" when the stored value is
+    not a valid signal (see decoupling.py) and "—" when there is no value at all.
     """
     r = gate_decoupling(r)
     if r.get("cardiac_decoupling_pct") is not None:
         decoupling = f"{r['cardiac_decoupling_pct']:.1f}"
     else:
         decoupling = "n/a" if r.get("decoupling_na_reason") else "—"
+    r = gate_efficiency(r)
     efficiency = r.get("effort_efficiency_score")
+    if efficiency is not None:
+        efficiency_text = f"{efficiency:.0f}"
+    else:
+        efficiency_text = "n/a" if r.get("efficiency_na_reason") else "—"
     parts = [
         f"{_num(r.get('climb_m_per_km'), Quantity.CLIMB_RATE, units, 0):>5}",
         f"{_signed(r.get('pace_fade_s_per_km'), Quantity.PACE_DELTA, units):>5}",
         f"{decoupling:>6}",
         f"{_pct(r.get('hr_zone_1_pct'), r.get('hr_zone_2_pct')):>5}",
         f"{_pct(r.get('hr_zone_4_pct'), r.get('hr_zone_5_pct')):>5}",
-        f"{'—' if efficiency is None else f'{efficiency:.0f}':>3}",
+        f"{efficiency_text:>3}",
     ]
     if r.get("suffer_score_mismatch_flag"):
         parts.append("HR?")

@@ -3,6 +3,7 @@ import Badge from "../ui/Badge";
 import { formatDate } from "../ui/format";
 import { ErrorState, LoadingState } from "../ui/states";
 import { SPORTS_BY_MODE, WEEK_STATUS_TEXT, useProgress, type ProgressRecord } from "./api";
+import ProgressionCard from "./ProgressionCard";
 
 const SPORT_LABEL = { run: "Running", ride: "Cycling", lift: "Lifting" } as const;
 
@@ -34,8 +35,8 @@ function RecordRow({ record: r }: { record: ProgressRecord }) {
 }
 
 /**
- * The plan streak and personal records for the mode's sports. Lifting has no planned-workout
- * calendar, so it shows records only.
+ * The plan streak, personal records and long-term progression for the mode's sports. Lifting has
+ * no planned-workout calendar and its own 1RM charts, so it shows records only.
  */
 export default function ProgressCard({ mode }: { mode: string }) {
   const { data, loading, error, reload } = useProgress();
@@ -110,6 +111,14 @@ export default function ProgressCard({ mode }: { mode: string }) {
           );
         })}
       </section>
+
+      {mode !== "lifting" && (
+        // Keyed by mode: the card's sport choice belongs to the mode it was made in.
+        <ProgressionCard
+          key={mode}
+          sports={sports.filter((s): s is "run" | "ride" => s !== "lift")}
+        />
+      )}
     </div>
   );
 }
