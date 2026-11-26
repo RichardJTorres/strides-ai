@@ -11,6 +11,7 @@ from collections import defaultdict
 from datetime import date, timedelta
 
 from ..activity_types import CYCLE_TYPES, RUN_TYPES
+from ..decoupling import efficiency_validity
 from .aggregation import (
     monday_of,
     pace_fade_to_unit,
@@ -229,9 +230,24 @@ def compute_atl_ctl(
 def compute_aerobic_efficiency(
     activities: list[CardioAnalyticsActivity], unit: str, today: date
 ) -> ScatterTrendDataset:
+    """Speed per heartbeat over steady-HR activities, where pace can track fitness at all.
+
+    Rides and hilly courses never qualify (decoupling.efficiency_validity): grade, wind and
+    drafting set a ride's speed, and terrain sets a hilly run's pace, so a fitter athlete on
+    steeper routes reads as declining. Cycling mode does not offer this chart at all.
+    """
     ul = _unit_label(unit)
     qualifying = []
     for a in activities:
+        valid, _ = efficiency_validity(
+            {
+                "sport_type": a.sport_type,
+                "elevation_gain_m": a.elevation_gain_m,
+                "distance_m": a.distance_m,
+            }
+        )
+        if not valid:
+            continue
         if not a.avg_hr or not (
             AEROBIC_EFFICIENCY_HR_LOW <= a.avg_hr <= AEROBIC_EFFICIENCY_HR_HIGH
         ):

@@ -49,7 +49,7 @@ def test_hybrid_response_includes_sport_specific_charts(tmp_db):
     result = _call(mode="hybrid")
     ids = [c.id for c in result["charts"]]
     assert "run_aerobic_efficiency" in ids
-    assert "ride_aerobic_efficiency" in ids
+    assert "ride_aerobic_efficiency" not in ids
     assert "training_time_allocation" in ids
     assert "run_climbing_ratio" in ids
     assert "ride_climbing_ratio" in ids

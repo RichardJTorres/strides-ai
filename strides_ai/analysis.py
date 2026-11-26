@@ -6,7 +6,13 @@ import statistics
 import httpx
 
 from . import db
-from .decoupling import HIGH_CLIMB_M_PER_KM, decoupling_validity, gate_decoupling, NA_LABELS
+from .decoupling import (
+    HIGH_CLIMB_M_PER_KM,
+    NA_LABELS,
+    decoupling_validity,
+    gate_decoupling,
+    gate_efficiency,
+)
 from .units import (
     DEFAULT_UNIT_SYSTEM,
     KM_PER_MILE,
@@ -379,7 +385,7 @@ def build_analysis_summary(metrics: dict, units: UnitSystem = DEFAULT_UNIT_SYSTE
     current unit system (see ``render_analysis_summary``).
     """
     parts = []
-    metrics = gate_decoupling(metrics)
+    metrics = gate_efficiency(gate_decoupling(metrics))
 
     # Lead with HR zone distribution — describes the nature of the effort
     z1 = metrics.get("hr_zone_1_pct")

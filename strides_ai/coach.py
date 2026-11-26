@@ -461,9 +461,10 @@ def _analysis_guide_section(cfg, recent: list, units: UnitSystem = DEFAULT_UNIT_
         "not good news: do not draw fitness conclusions from it and do not explain it away.\n"
         "- **Z1-2% / Z4-5%**: share of time in HR zones 1-2 (easy) and 4-5 (hard); zones are fixed "
         "percentages of max HR, so they shift if max HR is wrong.\n"
-        "- **EFF**: effort efficiency 0–100, normalized against this athlete's own history "
-        "(it shifts as history grows); higher = more speed for the heart rate. Weak evidence on "
-        "hilly or mixed-sport days.\n"
+        "- **EFF**: effort efficiency 0–100 for runs, normalized against this athlete's own "
+        "flat-enough runs (it shifts as history grows); higher = more speed for the heart rate. "
+        "n/a on rides (grade, wind and drafting set speed) and hilly courses (terrain sets pace): "
+        "never read fitness from it there.\n"
         "- **HR?**: suffer score and zone time disagree, so HR data may be unreliable that day."
     )
 

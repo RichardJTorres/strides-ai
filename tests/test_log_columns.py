@@ -101,3 +101,22 @@ def test_guide_documents_na_and_the_terrain_caveat():
     assert "n/a" in guide and "not zero" in guide
     assert "Zwift" in guide and "never call it fatigue" in guide
     assert "equally important" not in guide
+
+
+def test_eff_is_na_on_rides_and_hilly_runs_and_a_dash_without_a_value():
+    # A ride scored before migration 021 must not show its number; nor a hilly run.
+    assert cols(row(sport_type="Ride", effort_efficiency_score=87.0))[5] == "n/a"
+    assert (
+        cols(
+            row(sport_type="VirtualRide", effort_efficiency_raw=1.2, effort_efficiency_score=None)
+        )[5]
+        == "n/a"
+    )
+    assert cols(row(climb_m_per_km=40.0))[5] == "n/a"
+    assert cols(row(effort_efficiency_score=None))[5] == "—"
+    assert cols(row(sport_type="Ride", effort_efficiency_score=None))[5] == "—"  # never computed
+
+
+def test_the_guide_says_eff_is_not_read_on_rides():
+    guide = _analysis_guide_section(MODES["hybrid"], [{"analysis_summary": "x"}], M)
+    assert "n/a on rides" in guide and "hilly courses" in guide

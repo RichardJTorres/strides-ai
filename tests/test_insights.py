@@ -260,3 +260,17 @@ def test_changing_the_digest_rules_invalidates_cached_readouts(monkeypatch):
     before = insights.digest_fingerprint(rows, "running", UnitSystem.METRIC, TODAY)
     monkeypatch.setattr(insights, "DIGEST_VERSION", insights.DIGEST_VERSION + 1)
     assert insights.digest_fingerprint(rows, "running", UnitSystem.METRIC, TODAY) != before
+
+
+def test_rides_get_no_aerobic_efficiency_metric_and_it_is_not_called_missing():
+    rides = [{**r, "sport_type": "Ride"} for r in steady_rows()]
+    digest = build_digest(rides, "cycling", UnitSystem.METRIC, TODAY)
+    assert metric(digest, "efficiency.aerobic") is None
+    assert not any("aerobic" in m for m in digest["missing"])
+    hybrid = steady_rows() + [
+        run_row(700 + n, START + timedelta(days=2 * n + 1), sport_type="Ride") for n in range(40)
+    ]
+    digest = build_digest(hybrid, "hybrid", UnitSystem.METRIC, TODAY)
+    assert metric(digest, "efficiency.run_aerobic") is not None
+    assert metric(digest, "efficiency.ride_aerobic") is None
+    assert "efficiency.ride_aerobic" not in digest["missing"]

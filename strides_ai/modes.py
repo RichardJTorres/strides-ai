@@ -17,7 +17,7 @@ from typing import Callable
 
 from .db.models import CYCLE_TYPES, LIFT_TYPES, RUN_TYPES
 from .dates import fmt_day
-from .decoupling import gate_decoupling
+from .decoupling import gate_decoupling, gate_efficiency
 from .units import (
     DEFAULT_UNIT_SYSTEM,
     Quantity,
@@ -211,22 +211,27 @@ def _analysis_columns(r: dict, units: UnitSystem) -> str:
     """The compact analysis columns of a cardio log row (legend: coach._analysis_guide_section).
 
     Replaces a natural-language summary that was cut to 60 characters, which dropped fade,
-    decoupling and terrain from the table. Decoupling reads "n/a" when the stored value is not a
-    valid drift signal (see decoupling.py) and "—" when there is no value at all.
+    decoupling and terrain from the table. Decoupling and EFF read "n/a" when the stored value is
+    not a valid signal (see decoupling.py) and "—" when there is no value at all.
     """
     r = gate_decoupling(r)
     if r.get("cardiac_decoupling_pct") is not None:
         decoupling = f"{r['cardiac_decoupling_pct']:.1f}"
     else:
         decoupling = "n/a" if r.get("decoupling_na_reason") else "—"
+    r = gate_efficiency(r)
     efficiency = r.get("effort_efficiency_score")
+    if efficiency is not None:
+        efficiency_text = f"{efficiency:.0f}"
+    else:
+        efficiency_text = "n/a" if r.get("efficiency_na_reason") else "—"
     parts = [
         f"{_num(r.get('climb_m_per_km'), Quantity.CLIMB_RATE, units, 0):>5}",
         f"{_signed(r.get('pace_fade_s_per_km'), Quantity.PACE_DELTA, units):>5}",
         f"{decoupling:>6}",
         f"{_pct(r.get('hr_zone_1_pct'), r.get('hr_zone_2_pct')):>5}",
         f"{_pct(r.get('hr_zone_4_pct'), r.get('hr_zone_5_pct')):>5}",
-        f"{'—' if efficiency is None else f'{efficiency:.0f}':>3}",
+        f"{efficiency_text:>3}",
     ]
     if r.get("suffer_score_mismatch_flag"):
         parts.append("HR?")

@@ -44,6 +44,8 @@ interface Activity {
   cardiac_decoupling_pct: number | null;
   // Set (with the value nulled) when the stored value is not a valid drift signal; see decoupling.py.
   decoupling_na_reason?: "cycling" | "hilly" | "short" | null;
+  /** Set by the API when pace per heartbeat is not a valid signal (strides_ai/decoupling.py). */
+  efficiency_na_reason?: "cycling" | "hilly" | null;
   effort_efficiency_score: number | null;
   effort_efficiency_raw: number | null;
   hr_zone_1_pct: number | null;
@@ -202,6 +204,11 @@ function EfficiencyBadge({ val }: { val: number | null }) {
 
 /** Single metric tile for the panel grid. */
 // Mirrors decoupling.NA_LABELS (short form for the tile).
+const EFFICIENCY_NA_TEXT = {
+  cycling: "Grade, wind and drafting set a ride's speed",
+  hilly: "Hilly course: pace reflects terrain",
+} as const;
+
 const DECOUPLING_NA_TEXT = {
   cycling: "Speed-based drift is unreliable for cycling",
   hilly: "Hilly course: speed reflects terrain",
@@ -1011,6 +1018,13 @@ export default function Activities({ mode, theme, lastSyncAt, onSynced, routePar
                         value={`${Math.round(selectedActivity.effort_efficiency_score)} / 100`}
                         sub="Normalized vs history"
                         color={effColor(selectedActivity.effort_efficiency_score)}
+                      />
+                    )}
+                    {selectedActivity.effort_efficiency_score === null && selectedActivity.efficiency_na_reason && (
+                      <MetricTile
+                        label="Effort Efficiency"
+                        value="n/a"
+                        sub={EFFICIENCY_NA_TEXT[selectedActivity.efficiency_na_reason]}
                       />
                     )}
                     {selectedActivity.pace_fade_s_per_km !== null && (

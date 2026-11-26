@@ -190,6 +190,17 @@ def test_aerobic_efficiency_formula_higher_is_better():
     assert by_date["2024-01-02"].value > by_date["2024-01-01"].value
 
 
+def test_aerobic_efficiency_leaves_out_rides_and_hilly_runs():
+    flat = [make_activity(date(2024, 1, d), avg_hr=140) for d in range(1, 11)]
+    ride = make_activity(date(2024, 1, 11), sport_type=SportType.RIDE, avg_hr=140)
+    zwift = make_activity(date(2024, 1, 12), sport_type=SportType.VIRTUAL_RIDE, avg_hr=140)
+    # 10 km with 700 m of climbing is 70 m/km, well over the 100 ft/mi (~19 m/km) hilly line.
+    hilly = make_activity(date(2024, 1, 13), elevation_gain_m=700, avg_hr=140)
+    ds = compute_aerobic_efficiency(flat + [ride, zwift, hilly], "km", TODAY)
+    assert ds.qualifying_count == 10
+    assert {p.date for p in ds.scatter} == {f"2024-01-{d:02d}" for d in range(1, 11)}
+
+
 def test_aerobic_efficiency_scatter_sorted_by_date():
     acts = [make_activity(date(2024, 2, 1), avg_hr=140)] + [
         make_activity(date(2024, 1, d), avg_hr=140) for d in range(1, 11)

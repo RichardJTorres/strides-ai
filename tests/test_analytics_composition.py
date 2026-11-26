@@ -42,6 +42,7 @@ def test_running_excludes_elevation_and_allocation():
 
 def test_cycling_excludes_cadence_and_pace_fade():
     keys = [spec.key for spec in CYCLING_CHARTS]
+    assert "aerobic_efficiency" not in keys
     assert "cadence_trend" not in keys
     assert "pace_fade_trend" not in keys
     assert "weekly_elevation" in keys
@@ -54,7 +55,7 @@ def test_hybrid_includes_sport_prefixed_variants_in_order():
     assert keys[1] == "weekly_distance"
     assert keys[-1] == "training_time_allocation"
     assert "run_aerobic_efficiency" in keys
-    assert "ride_aerobic_efficiency" in keys
+    assert "ride_aerobic_efficiency" not in keys  # speed per heartbeat is invalid on a bike
     assert "run_cadence_trend" in keys
     assert "ride_weekly_elevation" in keys
     assert "run_climbing_ratio" in keys
@@ -90,10 +91,11 @@ def test_get_chart_datasets_hybrid_ids_are_unique_and_prefixed():
     assert len(ids) == len(set(ids))  # all unique
 
     run_ae = next(d for d in datasets if d.id == "run_aerobic_efficiency")
-    ride_ae = next(d for d in datasets if d.id == "ride_aerobic_efficiency")
-    assert run_ae.metric_key == ride_ae.metric_key == "aerobic_efficiency"
-    assert run_ae.sport == "run"
-    assert ride_ae.sport == "ride"
+    ride_hr = next(d for d in datasets if d.id == "ride_hr_zone_trend")
+    run_hr = next(d for d in datasets if d.id == "run_hr_zone_trend")
+    assert run_ae.metric_key == "aerobic_efficiency" and run_ae.sport == "run"
+    assert run_hr.metric_key == ride_hr.metric_key == "hr_zone_trend"
+    assert ride_hr.sport == "ride"
 
 
 def test_get_chart_datasets_hybrid_sport_filter_partitions_activities():
